@@ -9,7 +9,7 @@ import { parseRepoConfig, REPO_CONFIG_PATH, type RepoFileConfig } from './repo-c
 import type { WebhookRoute } from './webhooks';
 import { deriveCiGraph, activeForEvent, ciGraphToJson, ciGraphFromJson, type CiGraph, type CiGraphNode } from './required-checks';
 import type { PrSnapshot, StageResult, QueueEntry, CheckRun } from './types';
-import { buildSweepQuery, buildMergedPageQuery, buildDetailQuery, buildQueueQuery, buildOidRollupQuery, buildBlobQuery } from './queries';
+import { buildSweepQuery, buildMergedPageQuery, buildOpenPageQuery, buildDetailQuery, buildQueueQuery, buildOidRollupQuery, buildBlobQuery } from './queries';
 import { mapPrNode, mapQueueEntries, mapRollupContexts } from './map';
 import { computeProgress } from './estimator/progress';
 import { classify, requiredChecks, matchesRequiredPrefix, matchingPrefix, workflowScopeAllows, type DeployInfo } from './estimator/classify';
@@ -128,6 +128,12 @@ const ANCESTRY_THROTTLE_MS = 60_000;
 
 /** Page cap per owner for the startup (7-day window) deep merged sweep. */
 const MAX_MERGED_PAGES = 12;
+
+/** Page cap per owner for the open-PR search, followed on EVERY sweep — open PRs
+ *  are the core dataset and must always be complete (unlike the merged 7-day
+ *  window, which only needs depth at startup). 5 pages = 250 open PRs per owner;
+ *  beyond that the sweep logs a truncation warning. */
+const MAX_OPEN_PAGES = 5;
 
 /** Re-derive required-check prefixes from a deploy repo's ci.yml at most this often. */
 const PREFIX_DERIVE_INTERVAL_MS = 24 * 3600_000;
@@ -309,24 +315,34 @@ export class Poller extends EventEmitter {
         const issueCount: number = (payload as any)?.issueCount ?? 0;
         const pageInfo = (payload as any)?.pageInfo as { hasNextPage?: boolean; endCursor?: string | null } | undefined;
         ownerResultCounts.set(owner, (ownerResultCounts.get(owner) ?? 0) + nodes.length);
-        const willPaginate = deepMergedSweep && alias.startsWith('merged')
+        // Open searches paginate on EVERY sweep (the open set must be complete —
+        // see fetchOpenPages); merged searches only on the startup deep sweep.
+        const willPaginate = (alias.startsWith('open') || (deepMergedSweep && alias.startsWith('merged')))
           && !!pageInfo?.hasNextPage && !!pageInfo.endCursor;
         if (!warnedTruncation && issueCount > nodes.length && !willPaginate) {
           console.warn(`[poller] sweep truncated: ${alias} (owner ${owner}) returned ${nodes.length} of ${issueCount} PRs`);
           warnedTruncation = true;
         }
         for (const node of nodes) this.ingestSweepNode(node, seenOpen);
-        if (willPaginate) await this.fetchMergedPages(client, owner, since, pageInfo!.endCursor!, seenOpen);
+        if (willPaginate && alias.startsWith('open')) {
+          const complete = await this.fetchOpenPages(client, owner, pageInfo!.endCursor!, seenOpen);
+          // a failed follow-up page leaves the open set incomplete — the prune
+          // below must not read the missing pages as "closed without merge"
+          if (!complete) allOwnersAnswered = false;
+        } else if (willPaginate) {
+          await this.fetchMergedPages(client, owner, since, pageInfo!.endCursor!, seenOpen);
+        }
       }
     }
     this.warnInvisibleOwners(ownerResultCounts);
     if (allOwnersAnswered) {
       // prune + window advance only when every covered owner answered — a failed
       // owner's open PRs must not read as "vanished (closed without merge)".
-      // Live queue entries also protect their PR: the open search truncates at one
-      // page (50), so a queued PR can be absent from results while still very much
-      // open and queued — the queue-entries fetch is the source of truth there
-      // (its entries vanish from queueEntries when the PR merges or is ejected).
+      // Live queue entries also protect their PR: the open search paginates but
+      // caps at MAX_OPEN_PAGES (250), so a queued PR can be absent from results
+      // while still very much open and queued — the queue-entries fetch is the
+      // source of truth there (its entries vanish from queueEntries when the PR
+      // merges or is ejected).
       const keep = new Set(seenOpen);
       for (const [repo, entries] of this.queueEntries) {
         for (const e of entries) keep.add(`${repo}#${e.prNumber}`);
@@ -374,6 +390,30 @@ export class Poller extends EventEmitter {
       cursor = pageInfo.endCursor;
     }
     console.warn(`[poller] deep merged sweep for ${owner} stopped at the ${MAX_MERGED_PAGES}-page cap`);
+  }
+
+  /**
+   * Every sweep: follow open-search pagination (pages 2..MAX) for one owner —
+   * a single page drops rows for owners with >50 open PRs (live 2026-06-11:
+   * cairnea had 58, so up to 8 PRs had no row unless a queue entry materialized
+   * a placeholder). Returns false when a follow-up fetch failed (open set
+   * incomplete — caller must skip the prune); true otherwise, including the
+   * cap-truncated case, which keeps the truncation warning for >250 only.
+   */
+  private async fetchOpenPages(client: GithubClient, owner: string,
+    cursor: string, seenOpen: Set<string>): Promise<boolean> {
+    for (let page = 2; page <= MAX_OPEN_PAGES; page++) {
+      const data = await this.guard(() => client.graphql<Record<string, any>>(
+        buildOpenPageQuery(owner, cursor)));
+      if (!data) return false;
+      const payload = (data as any).open;
+      for (const node of payload?.nodes ?? []) this.ingestSweepNode(node, seenOpen);
+      const pageInfo = payload?.pageInfo as { hasNextPage?: boolean; endCursor?: string | null } | undefined;
+      if (!pageInfo?.hasNextPage || !pageInfo.endCursor) return true;
+      cursor = pageInfo.endCursor;
+    }
+    console.warn(`[poller] open sweep for ${owner} truncated at the ${MAX_OPEN_PAGES}-page cap (${MAX_OPEN_PAGES * 50} open PRs) — rows beyond the cap are dropped`);
+    return true;
   }
 
   /** Drop cache entries whose subject is gone — these Maps are otherwise unbounded. */
@@ -547,9 +587,10 @@ export class Poller extends EventEmitter {
       const entries = mapQueueEntries(data.repository?.mergeQueue);
       this.queueEntries.set(repo, entries);
       // The queue-entries fetch is the source of truth for queue membership: an
-      // entry's PR can be missing from this.prs entirely (the open-PR sweep page
-      // truncates at 50 — live incident 2026-06-11: #8878's train car had no
-      // matching row). Materialize a placeholder snapshot so the PR gets a row
+      // entry's PR can be missing from this.prs entirely (the open-PR sweep
+      // paginates but caps at MAX_OPEN_PAGES, and a follow-up page can fail —
+      // live incident 2026-06-11: #8878's train car had no matching row when the
+      // sweep was single-page). Materialize a placeholder snapshot so the PR gets a row
       // and the hot detail cycle (isHot: no stage yet → hot) fills it in.
       for (const e of entries) {
         const key = `${repo}#${e.prNumber}`;

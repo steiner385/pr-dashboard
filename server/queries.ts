@@ -27,7 +27,7 @@ fragment PrCore on PullRequest {
 
 export function buildSweepQuery(owners: string[], mergedSince: string): string {
   const opens = owners.map((o, i) =>
-    `open${i}: search(query: "user:${esc(o)} is:pr is:open archived:false", type: ISSUE, first: 50) { issueCount nodes { ...PrCore } }`);
+    `open${i}: search(query: "user:${esc(o)} is:pr is:open archived:false", type: ISSUE, first: 50) { issueCount pageInfo { hasNextPage endCursor } nodes { ...PrCore } }`);
   const merged = owners.map((o, i) =>
     `merged${i}: search(query: "user:${esc(o)} is:pr is:merged merged:>=${mergedSince} archived:false", type: ISSUE, first: 50) { issueCount pageInfo { hasNextPage endCursor } nodes { ...PrCore } }`);
   return `query {
@@ -44,6 +44,19 @@ export function buildMergedPageQuery(owner: string, mergedSince: string, cursor:
   return `query {
   rateLimit { remaining resetAt }
   merged: search(query: "user:${esc(owner)} is:pr is:merged merged:>=${mergedSince} archived:false", type: ISSUE, first: 50, after: ${q(cursor)}) {
+    issueCount pageInfo { hasNextPage endCursor } nodes { ...PrCore }
+  }
+}
+${PR_CORE_FRAGMENT}`;
+}
+
+/** Follow-up page of an open-PR search (EVERY sweep — open PRs are the core
+ *  dataset, so unlike the merged 7-day window this set must always be complete;
+ *  >50 open PRs per owner happens routinely). */
+export function buildOpenPageQuery(owner: string, cursor: string): string {
+  return `query {
+  rateLimit { remaining resetAt }
+  open: search(query: "user:${esc(owner)} is:pr is:open archived:false", type: ISSUE, first: 50, after: ${q(cursor)}) {
     issueCount pageInfo { hasNextPage endCursor } nodes { ...PrCore }
   }
 }

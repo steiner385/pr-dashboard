@@ -611,6 +611,103 @@ describe('Poller deep merged sweep pagination', () => {
   });
 });
 
+describe('Poller open sweep pagination', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const openNode = (n: number) => ({ number: n, title: `pr ${n}`, url: `u${n}`, isDraft: false,
+    mergedAt: null, repository: { nameWithOwner: 'acme/widgets' }, mergeCommit: null });
+  const openPage = (start: number, count: number, next: string | null, total: number) => ({
+    issueCount: total,
+    pageInfo: { hasNextPage: next != null, endCursor: next },
+    nodes: Array.from({ length: count }, (_, i) => openNode(start + i)),
+  });
+  const emptyAlias = { issueCount: 0, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+
+  /** 58 open PRs for acme over 2 pages (50/8); octo empty. Routes per owner +
+   *  per cursor; a cursor listed in `failCursors` rejects (mid-pagination outage). */
+  const twoPageClient = (failCursors: string[] = []) => ({
+    remaining: 4000, resetAt: null,
+    graphql: vi.fn(async (q: string) => {
+      if (q.includes('open0: search') && q.includes('user:acme')) return {
+        open0: openPage(1, 50, 'O1', 58), merged0: emptyAlias,
+      };
+      if (q.includes('open0: search') && q.includes('user:octo')) return {
+        open0: emptyAlias, merged0: emptyAlias,
+      };
+      if (q.includes('after: "O1"')) {
+        if (failCursors.includes('O1')) throw new Error('boom');
+        return { open: openPage(51, 8, null, 58) };
+      }
+      throw new Error(`unexpected query: ${q.slice(0, 100)}`);
+    }),
+  });
+
+  it('routine sweep follows open pagination: both pages merge into tracked PRs, no truncation warning', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const client = twoPageClient();
+    const p = new Poller({ router: asRouter(client), history, deploy: noDeploy(),
+      config: CONFIG, now: () => NOW });
+    await p.sweepOnce();
+    const internals = p as unknown as { prs: Map<string, unknown> };
+    expect(internals.prs.size).toBe(58);
+    expect(internals.prs.has('acme/widgets#1')).toBe(true);   // page 1
+    expect(internals.prs.has('acme/widgets#58')).toBe(true);  // page 2
+    // 2 owner sweeps + 1 open-page follow-up
+    expect(client.graphql).toHaveBeenCalledTimes(3);
+    expect(warn).not.toHaveBeenCalled();
+    expect(history.getMeta('lastSweep')).toBe(NOW.toISOString()); // sweep counted as complete
+  });
+
+  it('mid-pagination failure leaves the window unadvanced and does not prune later-page PRs', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const p = new Poller({ router: asRouter(twoPageClient()), history, deploy: noDeploy(),
+      config: CONFIG, now: () => NOW });
+    await p.sweepOnce(); // complete 2-page sweep — 58 tracked
+    history.setMeta('lastSweep', 'SENTINEL');
+    const p2internals = p as unknown as { prs: Map<string, unknown> };
+    // swap in a client whose page-2 fetch fails
+    const failing = twoPageClient(['O1']);
+    (p as unknown as { deps: { router: unknown } }).deps.router = asRouter(failing);
+    await p.sweepOnce();
+    // page-2 PRs survive (no prune off an incomplete open set), window not advanced
+    expect(p2internals.prs.has('acme/widgets#58')).toBe(true);
+    expect(p2internals.prs.size).toBe(58);
+    expect(history.getMeta('lastSweep')).toBe('SENTINEL');
+  });
+
+  it('warns when open PRs still exceed the 5-page cap (250)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const client = {
+      remaining: 4000, resetAt: null,
+      graphql: vi.fn(async (q: string) => {
+        if (q.includes('open0: search') && q.includes('user:acme')) return {
+          open0: openPage(1, 50, 'O1', 260), merged0: emptyAlias,
+        };
+        if (q.includes('open0: search') && q.includes('user:octo')) return {
+          open0: emptyAlias, merged0: emptyAlias,
+        };
+        const m = q.match(/after: "O(\d)"/);
+        if (m) {
+          const i = Number(m[1]);
+          // pages 2..5 — page 5 STILL reports hasNextPage (260 > 250)
+          return { open: openPage(i * 50 + 1, 50, `O${i + 1}`, 260) };
+        }
+        throw new Error(`unexpected query: ${q.slice(0, 100)}`);
+      }),
+    };
+    const p = new Poller({ router: asRouter(client), history, deploy: noDeploy(),
+      config: CONFIG, now: () => NOW });
+    await p.sweepOnce();
+    const internals = p as unknown as { prs: Map<string, unknown> };
+    expect(internals.prs.size).toBe(250);
+    // 2 owner sweeps + 4 follow-ups (pages 2..5), then the cap stops pagination
+    expect(client.graphql).toHaveBeenCalledTimes(6);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0])).toMatch(/open sweep.*acme.*5-page cap/);
+  });
+});
+
 describe('Poller state memoization', () => {
   it('cycles memoize state via emitUpdate; getState() returns the memoized object', async () => {
     const p = new Poller({ router: asRouter(fakeClient()), history, deploy: noDeploy(),

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildSweepQuery, buildMergedPageQuery, buildDetailQuery, buildQueueQuery, buildOidRollupQuery, buildBackfillQuery, buildViewerQuery, buildBlobQuery } from '../queries';
+import { buildSweepQuery, buildMergedPageQuery, buildOpenPageQuery, buildDetailQuery, buildQueueQuery, buildOidRollupQuery, buildBackfillQuery, buildViewerQuery, buildBlobQuery } from '../queries';
 
 describe('buildViewerQuery', () => {
   it('asks only for the token owner login', () => {
@@ -33,6 +33,13 @@ describe('buildSweepQuery', () => {
     expect(q.split('merged0: search')[1]).toContain('pageInfo { hasNextPage endCursor }');
   });
 
+  it('open aliases carry pageInfo so every sweep can follow open-PR pagination', () => {
+    const q = buildSweepQuery(['acme'], '2026-06-03T12:00:00Z');
+    expect(q).toContain('open0: search');
+    const openSection = q.split('open0: search')[1]!.split('merged0: search')[0];
+    expect(openSection).toContain('pageInfo { hasNextPage endCursor }');
+  });
+
   it('escapes backslashes and double-quotes inside the owner value (inner-string escaping)', () => {
     // A crafted owner containing " or \ must not break the surrounding GraphQL string.
     const q = buildSweepQuery(['evil"org\\x'], '2026-06-10T12:00:00Z');
@@ -54,6 +61,24 @@ describe('buildMergedPageQuery', () => {
 
   it('escapes double-quotes inside the owner value', () => {
     const q = buildMergedPageQuery('evil"owner', '2026-06-03T12:00:00Z', 'CUR');
+    expect(q).toContain('user:evil\\"owner');
+    const openCount = (q.match(/(?<!\\)"/g) ?? []).length;
+    expect(openCount % 2).toBe(0);
+  });
+});
+
+describe('buildOpenPageQuery', () => {
+  it('targets the open-PR search with an after-cursor, pageInfo, and PrCore', () => {
+    const q = buildOpenPageQuery('acme', 'CUR123');
+    expect(q).toContain('open: search(query: "user:acme is:pr is:open archived:false", type: ISSUE, first: 50, after: "CUR123")');
+    expect(q).toContain('pageInfo { hasNextPage endCursor }');
+    expect(q).toContain('issueCount');
+    expect(q).toContain('rateLimit { remaining resetAt }');
+    expect(q).toContain('fragment PrCore on PullRequest');
+  });
+
+  it('escapes double-quotes inside the owner value', () => {
+    const q = buildOpenPageQuery('evil"owner', 'CUR');
     expect(q).toContain('user:evil\\"owner');
     const openCount = (q.match(/(?<!\\)"/g) ?? []).length;
     expect(openCount % 2).toBe(0);
