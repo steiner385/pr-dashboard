@@ -80,9 +80,20 @@ export interface QueueGroupView {
 export interface RepoQueueView {
   groups: QueueGroupView[];
   waiting: { prNumber: number; position: number }[];
-  /** PR numbers of UNMERGEABLE entries (stale against the queue base, facing
-   *  ejection) — excluded from group coverage and waiting, surfaced separately. */
+  /** PR numbers of GENUINELY conflicting UNMERGEABLE entries (the PR's own
+   *  snapshot is DIRTY against the base — needs a rebase, facing ejection) —
+   *  excluded from group coverage and waiting, surfaced separately. */
   unmergeable: number[];
+  /** PR numbers of cascade-UNMERGEABLE entries: GitHub marks queue entries
+   *  UNMERGEABLE *positionally*, so one genuine conflict poisons the speculative
+   *  merge of every entry behind it. These do NOT conflict with the base
+   *  themselves (snapshot not DIRTY, or no snapshot yet) and revalidate once the
+   *  culprit is ejected — same coverage/waiting exclusion, different advice. */
+  queueBlocked: number[];
+  /** The lowest-position UNMERGEABLE entry whose snapshot is DIRTY (the entry
+   *  poisoning the rest); falls back to the lowest-position UNMERGEABLE entry
+   *  when no DIRTY snapshot identifies it. Null without UNMERGEABLE entries. */
+  unmergeableCulprit: number | null;
   batchSize: number;
 }
 export interface DashboardState {
@@ -311,9 +322,17 @@ export class Poller extends EventEmitter {
     this.warnInvisibleOwners(ownerResultCounts);
     if (allOwnersAnswered) {
       // prune + window advance only when every covered owner answered — a failed
-      // owner's open PRs must not read as "vanished (closed without merge)"
-      for (const key of this.prs.keys()) if (!seenOpen.has(key)) this.prs.delete(key);
-      this.pruneCaches(seenOpen);
+      // owner's open PRs must not read as "vanished (closed without merge)".
+      // Live queue entries also protect their PR: the open search truncates at one
+      // page (50), so a queued PR can be absent from results while still very much
+      // open and queued — the queue-entries fetch is the source of truth there
+      // (its entries vanish from queueEntries when the PR merges or is ejected).
+      const keep = new Set(seenOpen);
+      for (const [repo, entries] of this.queueEntries) {
+        for (const e of entries) keep.add(`${repo}#${e.prNumber}`);
+      }
+      for (const key of this.prs.keys()) if (!keep.has(key)) this.prs.delete(key);
+      this.pruneCaches(keep);
       history.setMeta('lastSweep', sweepStartedAt.toISOString());
     }
     this.emitUpdate();
@@ -527,6 +546,20 @@ export class Poller extends EventEmitter {
       if (!data) continue;
       const entries = mapQueueEntries(data.repository?.mergeQueue);
       this.queueEntries.set(repo, entries);
+      // The queue-entries fetch is the source of truth for queue membership: an
+      // entry's PR can be missing from this.prs entirely (the open-PR sweep page
+      // truncates at 50 — live incident 2026-06-11: #8878's train car had no
+      // matching row). Materialize a placeholder snapshot so the PR gets a row
+      // and the hot detail cycle (isHot: no stage yet → hot) fills it in.
+      for (const e of entries) {
+        const key = `${repo}#${e.prNumber}`;
+        if (this.prs.has(key)) continue;
+        this.prs.set(key, { repo, number: e.prNumber, title: '',
+          url: `https://github.com/${repo}/pull/${e.prNumber}`, headSha: '',
+          isDraft: false, mergeStateStatus: null, mergedAt: null, mergeCommitSha: null,
+          autoMergeArmed: false, queue: { position: e.position, state: e.state,
+            enqueuedAt: e.enqueuedAt, groupHeadOid: e.headCommitOid }, checks: [] });
+      }
       const oids = entries.map((e) => e.headCommitOid).filter((o): o is string => !!o)
         .filter((o) => !this.groupCompleted(o));
       if (oids.length) {
@@ -929,9 +962,10 @@ export class Poller extends EventEmitter {
    *  the previous group.
    *
    *  UNMERGEABLE entries are facing ejection: they are surfaced in `unmergeable`
-   *  and treated as transparent everywhere else — excluded from group coverage,
-   *  prNumbers, and waiting (a group at position N still covers the remaining
-   *  entries in (prevGroupPos, N]).
+   *  (genuine conflicts — snapshot DIRTY) or `queueBlocked` (cascade victims —
+   *  poisoned by a conflicting entry ahead) and treated as transparent everywhere
+   *  else — excluded from group coverage, prNumbers, and waiting (a group at
+   *  position N still covers the remaining entries in (prevGroupPos, N]).
    *
    *  Waiting = entries whose position is beyond the last group's coverage
    *  (i.e. they have no CI group yet), returned ascending by position.
@@ -945,10 +979,21 @@ export class Poller extends EventEmitter {
     const byOid = new Map(groups.map((g) => [g.oid, g]));
 
     // UNMERGEABLE entries are surfaced separately and transparent to coverage.
-    const unmergeable = entries
+    // Split genuine conflicts (own snapshot DIRTY against the base) from cascade
+    // victims (UNMERGEABLE only because a conflicting entry ahead poisons their
+    // speculative merge — snapshot not DIRTY, or no snapshot yet).
+    const unmergeableEntries = entries
       .filter((e) => e.state === 'UNMERGEABLE')
-      .sort((a, b) => a.position - b.position)
-      .map((e) => e.prNumber);
+      .sort((a, b) => a.position - b.position);
+    const isDirty = (prNumber: number) =>
+      this.prs.get(`${repo}#${prNumber}`)?.mergeStateStatus === 'DIRTY';
+    const unmergeable = unmergeableEntries
+      .filter((e) => isDirty(e.prNumber)).map((e) => e.prNumber);
+    const queueBlocked = unmergeableEntries
+      .filter((e) => !isDirty(e.prNumber)).map((e) => e.prNumber);
+    // Culprit = lowest-position genuine conflict; when no snapshot proves DIRTY,
+    // presume the front-most UNMERGEABLE entry (a cascade needs a head).
+    const unmergeableCulprit = unmergeable[0] ?? unmergeableEntries[0]?.prNumber ?? null;
 
     // Sort the remaining entries by position for batch-range calculation.
     const sorted = entries
@@ -998,7 +1043,7 @@ export class Poller extends EventEmitter {
       .filter((e) => e.position > maxBuildingPos)
       .map((e) => ({ prNumber: e.prNumber, position: e.position }));
 
-    return { groups: queueGroups, waiting, unmergeable,
+    return { groups: queueGroups, waiting, unmergeable, queueBlocked, unmergeableCulprit,
       batchSize: this.settingsFor(repo).batchSize };
   }
 

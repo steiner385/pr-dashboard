@@ -40,9 +40,15 @@ export interface QueueGroupView {
 export interface RepoQueueView {
   groups: QueueGroupView[];
   waiting: { prNumber: number; position: number }[];
-  /** PR numbers of UNMERGEABLE entries (stale against the queue base, facing
-   *  ejection) — excluded from group coverage and waiting, surfaced separately. */
+  /** PR numbers of GENUINELY conflicting UNMERGEABLE entries (DIRTY against the
+   *  base — needs a rebase) — excluded from group coverage and waiting. */
   unmergeable: number[];
+  /** Cascade-UNMERGEABLE entries: poisoned by a conflicting entry ahead, not
+   *  conflicting with the base themselves — must not be told to rebase. */
+  queueBlocked: number[];
+  /** Lowest-position genuine conflict (presumed front-most UNMERGEABLE when no
+   *  snapshot proves DIRTY); null without UNMERGEABLE entries. */
+  unmergeableCulprit: number | null;
   batchSize: number;
 }
 export interface DashboardState {

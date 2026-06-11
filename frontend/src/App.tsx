@@ -147,7 +147,8 @@ export function App() {
                 <QueueTrain queue={r.queue} />
                 {visiblePrs.length === 0 && hiddenCount === 0 && <p className="empty">no active PRs</p>}
                 {visiblePrs.map((pr) => (
-                  <PrRow key={pr.number} pr={pr} hasDeploy={r.hasDeploy} accuracy={r.accuracy} />
+                  <PrRow key={pr.number} pr={pr} hasDeploy={r.hasDeploy} accuracy={r.accuracy}
+                    queueCulprit={r.queue?.unmergeableCulprit ?? null} />
                 ))}
               </>
             )}

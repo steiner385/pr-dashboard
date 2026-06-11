@@ -106,7 +106,7 @@ describe('Repo expand/collapse', () => {
         {
           repo: 'acme/widgets', hasDeploy: true, accuracy: {},
           prs: [makepr(1, 'ci')],
-          queue: { groups: [{ oid: 'g1', prNumbers: [1], percent: 50, etaSeconds: null, failed: false }], waiting: [], unmergeable: [], batchSize: 1 },
+          queue: { groups: [{ oid: 'g1', prNumbers: [1], percent: 50, etaSeconds: null, failed: false }], waiting: [], unmergeable: [], queueBlocked: [], unmergeableCulprit: null, batchSize: 1 },
         },
       ],
     };

@@ -99,11 +99,20 @@ export function classify(i: ClassifyInput): StageResult | null {
 
   if (pr.queue) {
     const q = i.queueProgress;
-    // UNMERGEABLE = facing ejection (stale against the queue base). Either signal
-    // suffices: the queue-entries fetch (q.unmergeable) or the PR's own snapshot —
-    // they refresh on different cadences and either can lag the other. No
-    // percent/eta: waiting-line math is meaningless for an entry about to be ejected.
-    if (q?.unmergeable || pr.queue.state === 'UNMERGEABLE') return bare('queue', 'unmergeable');
+    // UNMERGEABLE = facing ejection. Either signal suffices: the queue-entries
+    // fetch (q.unmergeable) or the PR's own snapshot — they refresh on different
+    // cadences and either can lag the other. No percent/eta: waiting-line math is
+    // meaningless for an entry about to be ejected.
+    //
+    // GitHub marks queue entries UNMERGEABLE *positionally*: one genuinely
+    // conflicting entry poisons the speculative merge of every entry behind it.
+    // Split on the PR's OWN mergeStateStatus — only DIRTY (conflicts with the
+    // base) is a genuine "needs rebase"; everything else (CLEAN/BLOCKED/
+    // UNSTABLE/UNKNOWN/null) is a cascade victim that will revalidate once the
+    // conflicting entry ahead is ejected.
+    if (q?.unmergeable || pr.queue.state === 'UNMERGEABLE') {
+      return bare('queue', pr.mergeStateStatus === 'DIRTY' ? 'unmergeable' : 'queue-blocked');
+    }
     const substate = q?.failed ? 'group-failed' : null;
     return { stage: 'queue', substate, percent: q?.percent ?? null,
       etaSeconds: q?.etaSeconds ?? null, etaRangeSeconds: null, overdue: q?.overdue ?? false };

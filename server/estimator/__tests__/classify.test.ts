@@ -284,10 +284,14 @@ describe('classify', () => {
   });
 
   // HEADGREEN: UNMERGEABLE queue entries face ejection — surface them instead of
-  // rendering an innocuous queued row with waiting-line math.
-  it('queueProgress.unmergeable → queue/unmergeable with no percent/eta', () => {
+  // rendering an innocuous queued row with waiting-line math. GitHub marks queue
+  // entries UNMERGEABLE *positionally* (one genuine conflict poisons every
+  // speculative merge behind it), so the substate splits on the PR's OWN
+  // mergeStateStatus: DIRTY = genuine conflict, anything else = cascade victim.
+  it('queueProgress.unmergeable + DIRTY snapshot → queue/unmergeable (genuine) with no percent/eta', () => {
     const r = classify(input({
-      pr: pr({ queue: { position: 1, state: 'UNMERGEABLE', enqueuedAt: null, groupHeadOid: 'staleOid' } }),
+      pr: pr({ mergeStateStatus: 'DIRTY',
+        queue: { position: 1, state: 'UNMERGEABLE', enqueuedAt: null, groupHeadOid: 'staleOid' } }),
       queueProgress: { percent: null, etaSeconds: null, overdue: false, failed: false, unmergeable: true },
     }))!;
     expect(r.stage).toBe('queue');
@@ -296,14 +300,42 @@ describe('classify', () => {
     expect(r.etaSeconds).toBeNull();
   });
 
-  it('snapshot queue state UNMERGEABLE → unmergeable even when queueProgress lags (stale entries)', () => {
+  it('snapshot queue state UNMERGEABLE + DIRTY → unmergeable even when queueProgress lags (stale entries)', () => {
     const r = classify(input({
-      pr: pr({ queue: { position: 1, state: 'UNMERGEABLE', enqueuedAt: null, groupHeadOid: null } }),
+      pr: pr({ mergeStateStatus: 'DIRTY',
+        queue: { position: 1, state: 'UNMERGEABLE', enqueuedAt: null, groupHeadOid: null } }),
       // stale waiting-line math from an older queue fetch must not leak through
       queueProgress: { percent: null, etaSeconds: 1800, overdue: false, failed: false },
     }))!;
     expect(r.stage).toBe('queue');
     expect(r.substate).toBe('unmergeable');
+    expect(r.etaSeconds).toBeNull();
+  });
+
+  // Cascade victims: queue entry UNMERGEABLE but the PR itself does not conflict
+  // with the base — a conflicting entry ahead poisoned its speculative merge.
+  for (const mss of ['CLEAN', 'BLOCKED', 'UNSTABLE', 'UNKNOWN', null]) {
+    it(`queueProgress.unmergeable + ${mss ?? 'null'} snapshot → queue/queue-blocked (cascade), no percent/eta`, () => {
+      const r = classify(input({
+        pr: pr({ mergeStateStatus: mss,
+          queue: { position: 2, state: 'UNMERGEABLE', enqueuedAt: null, groupHeadOid: 'staleOid' } }),
+        queueProgress: { percent: null, etaSeconds: null, overdue: false, failed: false, unmergeable: true },
+      }))!;
+      expect(r.stage).toBe('queue');
+      expect(r.substate).toBe('queue-blocked');
+      expect(r.percent).toBeNull();
+      expect(r.etaSeconds).toBeNull();
+    });
+  }
+
+  it('snapshot queue state UNMERGEABLE + non-DIRTY → queue-blocked when queueProgress lags too', () => {
+    const r = classify(input({
+      pr: pr({ mergeStateStatus: 'CLEAN',
+        queue: { position: 2, state: 'UNMERGEABLE', enqueuedAt: null, groupHeadOid: null } }),
+      queueProgress: { percent: null, etaSeconds: 1800, overdue: false, failed: false },
+    }))!;
+    expect(r.stage).toBe('queue');
+    expect(r.substate).toBe('queue-blocked');
     expect(r.etaSeconds).toBeNull();
   });
 

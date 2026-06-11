@@ -1788,8 +1788,9 @@ describe('Poller queue group coverage + UNMERGEABLE (HEADGREEN)', () => {
   const openNode = (number: number) => ({ number, title: `pr ${number}`, url: `u${number}`,
     isDraft: false, mergedAt: null, repository: { nameWithOwner: 'acme/widgets' }, mergeCommit: null });
 
-  const queuedPrNode = (number: number, entry: Record<string, unknown>) => ({
-    number, title: `pr ${number}`, url: `u${number}`, isDraft: false, mergeStateStatus: 'BLOCKED',
+  const queuedPrNode = (number: number, entry: Record<string, unknown>,
+    mergeStateStatus = 'BLOCKED') => ({
+    number, title: `pr ${number}`, url: `u${number}`, isDraft: false, mergeStateStatus,
     mergedAt: null, headRefOid: `head${number}`, autoMergeRequest: { mergeMethod: 'SQUASH' },
     mergeCommit: null, mergeQueueEntry: entry,
     commits: { nodes: [{ commit: { statusCheckRollup: { state: 'SUCCESS',
@@ -1839,7 +1840,7 @@ describe('Poller queue group coverage + UNMERGEABLE (HEADGREEN)', () => {
     };
     const detail = { r0: { nameWithOwner: 'acme/widgets',
       pr8878: queuedPrNode(8878, { position: 1, state: 'UNMERGEABLE', enqueuedAt: null,
-        headCommit: { oid: 'staleOid8878' } }) } };
+        headCommit: { oid: 'staleOid8878' } }, 'DIRTY') } };
     const rollup = { repository: { o0: mgRunning(OID_A), o1: mgRunning(OID_B) } };
     seedMergeGroupHistory();
     const p = new Poller({ router: asRouter(hgClient(sweep, detail, 'pr8878: pullRequest', queueResponse, rollup)),
@@ -1855,12 +1856,140 @@ describe('Poller queue group coverage + UNMERGEABLE (HEADGREEN)', () => {
     expect(queue.groups[1]!.prNumbers).toEqual([9003]);
     expect(queue.waiting.map((w) => w.prNumber)).toEqual([9004, 9005]);
     expect(queue.unmergeable).toEqual([8878]);
+    expect(queue.queueBlocked).toEqual([]);
+    expect(queue.unmergeableCulprit).toBe(8878);
     // The UNMERGEABLE PR's row: queue/unmergeable, no waiting-line math
     const pr = repo.prs.find((x) => x.number === 8878)!;
     expect(pr.stage.stage).toBe('queue');
     expect(pr.stage.substate).toBe('unmergeable');
     expect(pr.stage.percent).toBeNull();
     expect(pr.stage.etaSeconds).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // Cascade-unmergeable (live incident 2026-06-11 round 2): GitHub marks queue
+  // entries UNMERGEABLE *positionally* — one genuinely-conflicting entry at the
+  // front poisons the speculative merge of every entry behind it. Only the entry
+  // whose OWN snapshot is DIRTY genuinely conflicts with the base; the rest are
+  // cascade victims and must not be told to rebase.
+  // -------------------------------------------------------------------------
+
+  /** The literal live scenario: positions 1–4 UNMERGEABLE (#8878 DIRTY, three
+   *  cascade victims behind it), position 5 building, position 6 queued. */
+  function cascadeFixture(mss8878: string, mssVictims: string) {
+    const queueResponse = { repository: { mergeQueue: { entries: { nodes: [
+      { position: 1, state: 'UNMERGEABLE', enqueuedAt: null,
+        headCommit: { oid: 'stale8878' }, pullRequest: { number: 8878 } },
+      { position: 2, state: 'UNMERGEABLE', enqueuedAt: null,
+        headCommit: { oid: 'stale9335' }, pullRequest: { number: 9335 } },
+      { position: 3, state: 'UNMERGEABLE', enqueuedAt: null,
+        headCommit: { oid: 'stale9323' }, pullRequest: { number: 9323 } },
+      { position: 4, state: 'UNMERGEABLE', enqueuedAt: null,
+        headCommit: { oid: 'stale9337' }, pullRequest: { number: 9337 } },
+      { position: 5, state: 'AWAITING_CHECKS', enqueuedAt: null,
+        headCommit: { oid: OID_A }, pullRequest: { number: 9338 } },
+      { position: 6, state: 'QUEUED', enqueuedAt: null,
+        headCommit: null, pullRequest: { number: 9342 } },
+    ] } } } };
+    const sweep = {
+      open0: { issueCount: 4,
+        nodes: [openNode(8878), openNode(9335), openNode(9323), openNode(9337)] },
+      open1: { issueCount: 0, nodes: [] },
+      merged0: { issueCount: 0, nodes: [] }, merged1: { issueCount: 0, nodes: [] },
+    };
+    const entry = (pos: number, oid: string) =>
+      ({ position: pos, state: 'UNMERGEABLE', enqueuedAt: null, headCommit: { oid } });
+    const detail = { r0: { nameWithOwner: 'acme/widgets',
+      pr8878: queuedPrNode(8878, entry(1, 'stale8878'), mss8878),
+      pr9335: queuedPrNode(9335, entry(2, 'stale9335'), mssVictims),
+      pr9323: queuedPrNode(9323, entry(3, 'stale9323'), mssVictims),
+      pr9337: queuedPrNode(9337, entry(4, 'stale9337'), mssVictims),
+    } };
+    const rollup = { repository: { o0: mgRunning(OID_A) } };
+    return hgClient(sweep, detail, 'pr8878: pullRequest', queueResponse, rollup);
+  }
+
+  it('live cascade scenario: 1 DIRTY culprit + 3 non-DIRTY victims → genuine vs queue-blocked split with culprit threaded', async () => {
+    seedMergeGroupHistory();
+    const p = new Poller({ router: asRouter(cascadeFixture('DIRTY', 'BLOCKED')),
+      history, deploy: noDeploy(), config: CONFIG, now: () => NOW });
+    await p.sweepOnce();
+    await p.detailOnce();
+    await p.queueOnce();
+    const repo = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!;
+    const queue = repo.queue!;
+    expect(queue.unmergeable).toEqual([8878]);                 // genuine: DIRTY only
+    expect(queue.queueBlocked).toEqual([9335, 9323, 9337]);    // cascade, position order
+    expect(queue.unmergeableCulprit).toBe(8878);
+    // none of them leak into groups/waiting
+    expect(queue.groups.map((g) => g.oid)).toEqual([OID_A]);
+    expect(queue.groups[0]!.prNumbers).toEqual([9338]);
+    expect(queue.waiting.map((w) => w.prNumber)).toEqual([9342]);
+    // rows match the cars: culprit genuine, victims queue-blocked
+    expect(repo.prs.find((x) => x.number === 8878)!.stage.substate).toBe('unmergeable');
+    for (const n of [9335, 9323, 9337]) {
+      const pr = repo.prs.find((x) => x.number === n)!;
+      expect(pr.stage.stage).toBe('queue');
+      expect(pr.stage.substate).toBe('queue-blocked');
+      expect(pr.stage.percent).toBeNull();
+      expect(pr.stage.etaSeconds).toBeNull();
+    }
+  });
+
+  it('culprit fallback: no DIRTY snapshot anywhere → all queue-blocked, lowest-position entry is the presumed culprit', async () => {
+    seedMergeGroupHistory();
+    const p = new Poller({ router: asRouter(cascadeFixture('UNKNOWN', 'UNKNOWN')),
+      history, deploy: noDeploy(), config: CONFIG, now: () => NOW });
+    await p.sweepOnce();
+    await p.detailOnce();
+    await p.queueOnce();
+    const queue = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!.queue!;
+    expect(queue.unmergeable).toEqual([]);
+    expect(queue.queueBlocked).toEqual([8878, 9335, 9323, 9337]);
+    expect(queue.unmergeableCulprit).toBe(8878);
+  });
+
+  // Asymmetry regression (live 2026-06-11): the open-PR sweep page truncates at
+  // 50, so a queue-entry PR can have NO snapshot at all — the train car listed
+  // #8878 but no row existed. The queue-entries fetch is the source of truth
+  // for queue membership: it must materialize a placeholder row, and the sweep
+  // prune must not delete a PR that is still a live queue entry.
+  it('queue entry with no PR snapshot (sweep truncation) still gets a row, and survives the next sweep prune', async () => {
+    const queueResponse = { repository: { mergeQueue: { entries: { nodes: [
+      { position: 1, state: 'UNMERGEABLE', enqueuedAt: null,
+        headCommit: { oid: 'stale8878' }, pullRequest: { number: 8878 } },
+      { position: 2, state: 'AWAITING_CHECKS', enqueuedAt: null,
+        headCommit: { oid: OID_A }, pullRequest: { number: 9002 } },
+    ] } } } };
+    // sweep + detail know ONLY 9002 — 8878 fell off the truncated open page
+    const sweep = {
+      open0: { issueCount: 55, nodes: [openNode(9002)] },
+      open1: { issueCount: 0, nodes: [] },
+      merged0: { issueCount: 0, nodes: [] }, merged1: { issueCount: 0, nodes: [] },
+    };
+    const detail = { r0: { nameWithOwner: 'acme/widgets',
+      pr9002: queuedPrNode(9002, { position: 2, state: 'AWAITING_CHECKS', enqueuedAt: null,
+        headCommit: { oid: OID_A } }) } };
+    const rollup = { repository: { o0: mgRunning(OID_A) } };
+    seedMergeGroupHistory();
+    const p = new Poller({ router: asRouter(hgClient(sweep, detail, 'pr9002: pullRequest', queueResponse, rollup)),
+      history, deploy: noDeploy(), config: CONFIG, now: () => NOW });
+    await p.sweepOnce();
+    await p.detailOnce();
+    await p.queueOnce();
+    const state1 = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!;
+    expect(state1.queue!.queueBlocked).toEqual([8878]); // no snapshot → not provably DIRTY
+    expect(state1.queue!.unmergeableCulprit).toBe(8878);
+    const row1 = state1.prs.find((x) => x.number === 8878)!;
+    expect(row1).toBeDefined();
+    expect(row1.stage.stage).toBe('queue');
+    expect(row1.stage.substate).toBe('queue-blocked');
+    // the next sweep (8878 still absent from the open page) must NOT prune the row
+    await p.sweepOnce();
+    const state2 = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!;
+    const row2 = state2.prs.find((x) => x.number === 8878);
+    expect(row2).toBeDefined();
+    expect(row2!.stage.substate).toBe('queue-blocked');
   });
 
   it('covered members (QUEUED under a building group) inherit the group percent/eta and groupChecks', async () => {

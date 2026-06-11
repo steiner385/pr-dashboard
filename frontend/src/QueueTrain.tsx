@@ -80,8 +80,9 @@ function WaitingCars({ waiting, batchSize }: { waiting: { prNumber: number; posi
   );
 }
 
-/** UNMERGEABLE entries (stale against the queue base, facing ejection) get a
- *  distinct car — never folded into a group's car or the waiting line. */
+/** GENUINELY conflicting UNMERGEABLE entries (DIRTY against the base, facing
+ *  ejection) get a distinct red car — never folded into a group's car or the
+ *  waiting line. Cascade victims render in the amber QueueBlockedCar instead. */
 function UnmergeableCar({ numbers }: { numbers: number[] }) {
   if (numbers.length === 0) return null;
   return (
@@ -92,10 +93,28 @@ function UnmergeableCar({ numbers }: { numbers: number[] }) {
   );
 }
 
+/** Cascade-UNMERGEABLE entries: GitHub marks queue entries UNMERGEABLE
+ *  positionally, so one genuine conflict poisons every entry behind it. These
+ *  don't conflict with the base themselves — amber, not red, and no rebase
+ *  advice; they revalidate once the culprit is ejected. */
+function QueueBlockedCar({ numbers, culprit }: { numbers: number[]; culprit: number | null }) {
+  if (numbers.length === 0) return null;
+  const blockedOn = culprit != null ? ` — blocked behind ${prLabel(culprit)}` : '';
+  return (
+    <div className="car queue-blocked" title={`${numbers.map(prLabel).join(' ')}${blockedOn}`}>
+      <div className="car-header">⊘ blocked behind conflict</div>
+      <PrLinks numbers={numbers} className="car-numbers" />
+    </div>
+  );
+}
+
 export function QueueTrain({ queue }: { queue: RepoQueueView | null }) {
   if (!queue) return null;
-  const unmergeable = queue.unmergeable ?? []; // tolerate a pre-upgrade server payload
-  if (queue.groups.length === 0 && queue.waiting.length === 0 && unmergeable.length === 0) return null;
+  // tolerate a pre-upgrade server payload
+  const unmergeable = queue.unmergeable ?? [];
+  const queueBlocked = queue.queueBlocked ?? [];
+  if (queue.groups.length === 0 && queue.waiting.length === 0
+    && unmergeable.length === 0 && queueBlocked.length === 0) return null;
 
   return (
     <div className="queue-train">
@@ -104,6 +123,7 @@ export function QueueTrain({ queue }: { queue: RepoQueueView | null }) {
       ))}
       <WaitingCars waiting={queue.waiting} batchSize={queue.batchSize} />
       <UnmergeableCar numbers={unmergeable} />
+      <QueueBlockedCar numbers={queueBlocked} culprit={queue.unmergeableCulprit ?? null} />
     </div>
   );
 }
