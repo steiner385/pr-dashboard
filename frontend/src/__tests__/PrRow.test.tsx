@@ -144,6 +144,31 @@ describe('PrRow', () => {
     expect(screen.queryByText(/behind/)).not.toBeInTheDocument();
   });
 
+  // Cascade victims: UNMERGEABLE only because a conflicting entry ahead poisons
+  // their speculative merge — "needs rebase" would be wrong advice.
+  const queueBlocked = (number = 8962) => pr({
+    number,
+    stage: { stage: 'queue', substate: 'queue-blocked', percent: null, etaSeconds: null, etaRangeSeconds: null, overdue: false },
+    queueAheadCount: 0,
+  });
+
+  it('queue/queue-blocked names the culprit in the sub line and never says rebase', () => {
+    render(<PrRow pr={queueBlocked()} hasDeploy queueCulprit={8878} />);
+    expect(screen.getByText('queue blocked — conflict ahead (#8878)')).toBeInTheDocument();
+    expect(screen.queryByText(/rebase/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/behind \d/)).not.toBeInTheDocument();
+  });
+
+  it('queue/queue-blocked without a known culprit drops the PR-number suffix', () => {
+    render(<PrRow pr={queueBlocked()} hasDeploy />);
+    expect(screen.getByText('queue blocked — conflict ahead')).toBeInTheDocument();
+  });
+
+  it('queue/queue-blocked culprit equal to the PR itself drops the suffix (fallback culprit at the front)', () => {
+    render(<PrRow pr={queueBlocked(8878)} hasDeploy queueCulprit={8878} />);
+    expect(screen.getByText('queue blocked — conflict ahead')).toBeInTheDocument();
+  });
+
   it('shows a muted ETA-accuracy line for the current stage in the expanded panel', () => {
     render(<PrRow pr={pr({})} hasDeploy
       accuracy={{ ci: { medianAbsErrSecs: 120, n: 14 } }} />);

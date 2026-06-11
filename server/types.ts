@@ -43,7 +43,7 @@ export type StageId = 'ci' | 'parked' | 'ready' | 'queue' | 'qa-deploy' | 'await
 
 export interface StageResult {
   stage: StageId;
-  substate: string | null; // ci-failed|conflicting|draft|armed|idle|propagating|unknown|retrying|group-failed|unmergeable
+  substate: string | null; // ci-failed|conflicting|draft|armed|idle|propagating|unknown|retrying|group-failed|unmergeable|queue-blocked
   percent: number | null;
   etaSeconds: number | null;
   etaRangeSeconds: [number, number] | null;

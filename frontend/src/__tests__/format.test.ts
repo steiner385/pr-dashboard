@@ -28,6 +28,9 @@ describe('stageLabel', () => {
   it('labels queue/unmergeable distinctly', () => {
     expect(stageLabel('queue', 'unmergeable')).toBe('Queue — unmergeable');
   });
+  it('labels queue/queue-blocked as blocked behind a conflict (cascade victim)', () => {
+    expect(stageLabel('queue', 'queue-blocked')).toBe('Queue — blocked behind conflict');
+  });
   it('keeps the plain queue label without substate', () => {
     expect(stageLabel('queue', null)).toBe('Merge queue');
   });

@@ -79,6 +79,15 @@ describe('trackState', () => {
       .toEqual(['CI', 'Queue', 'Merged']);
   });
 
+  it('queue/queue-blocked (cascade victim) → parked (amber !) at the Queue node, label kept', () => {
+    expect(statuses(stage({ stage: 'queue', substate: 'queue-blocked' }), true))
+      .toEqual(['done', 'parked', 'pending', 'pending', 'pending']);
+    expect(statuses(stage({ stage: 'queue', substate: 'queue-blocked' }), false))
+      .toEqual(['done', 'parked', 'pending']);
+    expect(labels(stage({ stage: 'queue', substate: 'queue-blocked' }), false))
+      .toEqual(['CI', 'Queue', 'Merged']);
+  });
+
   it('merged → all three lifecycle nodes done (terminal on simple repos)', () => {
     expect(statuses(stage({ stage: 'merged' }), false)).toEqual(['done', 'done', 'done']);
     // defensive on deploy repos (classify normally maps merged PRs to qa-deploy/awaiting-prod)

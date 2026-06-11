@@ -5,13 +5,24 @@ import { MetroTrack } from './MetroTrack';
 import { CheckGantt } from './CheckGantt';
 
 /** Muted one-line status under the track: percent + active-check for ci,
- *  substate reason for parked, group/position info for queue. */
-function subLine(pr: PrView): string | null {
+ *  substate reason for parked, group/position info for queue.
+ *  @param queueCulprit lowest-position genuinely-conflicting queue entry (from
+ *  RepoQueueView.unmergeableCulprit) — named in the queue-blocked sub line. */
+function subLine(pr: PrView, queueCulprit: number | null): string | null {
   const s = pr.stage;
   if (s.stage === 'parked') return stageLabel(s.stage, s.substate);
   if (s.stage === 'queue') {
-    // facing ejection — no group progress or waiting-line math applies
+    // genuinely conflicting with the base — facing ejection, rebase required
     if (s.substate === 'unmergeable') return 'unmergeable — needs rebase before it can merge';
+    // cascade victim: a conflicting entry ahead poisons its speculative merge —
+    // rebasing would NOT help; it revalidates once the culprit is ejected.
+    // (Suffix dropped when the culprit is this PR itself — the presumed-culprit
+    // fallback when no snapshot proves DIRTY.)
+    if (s.substate === 'queue-blocked') {
+      const suffix = queueCulprit != null && queueCulprit !== pr.number
+        ? ` (#${queueCulprit})` : '';
+      return `queue blocked — conflict ahead${suffix}`;
+    }
     const parts: string[] = [];
     if (s.substate === 'group-failed') parts.push('Queue group failed');
     // queue percent always tracks the merge-group build, never head-commit checks —
@@ -53,14 +64,16 @@ function subLine(pr: PrView): string | null {
   return stageLabel(s.stage, s.substate);
 }
 
-export function PrRow({ pr, hasDeploy, accuracy }: {
+export function PrRow({ pr, hasDeploy, accuracy, queueCulprit = null }: {
   pr: PrView; hasDeploy: boolean; accuracy?: Record<string, StageAccuracy>;
+  /** Repo-level RepoQueueView.unmergeableCulprit (queue-blocked sub line). */
+  queueCulprit?: number | null;
 }) {
   const [open, setOpen] = useState(false);
   const s = pr.stage;
   const parked = s.stage === 'parked';
   const eta = formatEta(s.etaSeconds, s.etaRangeSeconds, s.overdue);
-  const sub = subLine(pr);
+  const sub = subLine(pr, queueCulprit);
   return (
     <div id={`pr-${pr.number}`} className={`pr-row ${parked ? `parked ${s.substate ?? ''}` : ''}`}>
       <div className="pr-main" onClick={() => setOpen(!open)}>

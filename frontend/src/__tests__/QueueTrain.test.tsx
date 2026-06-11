@@ -19,7 +19,7 @@ describe('QueueTrain', () => {
   });
 
   it('renders nothing when queue has no groups and no waiting entries', () => {
-    const queue: RepoQueueView = { groups: [], waiting: [], unmergeable: [], batchSize: 6 };
+    const queue: RepoQueueView = { groups: [], waiting: [], unmergeable: [], queueBlocked: [], unmergeableCulprit: null, batchSize: 6 };
     const { container } = render(<QueueTrain queue={queue} />);
     expect(container.firstChild).toBeNull();
   });
@@ -31,7 +31,7 @@ describe('QueueTrain', () => {
         group({ oid: 'def456', prNumbers: [8905, 8902], percent: 30, etaSeconds: 600 }),
       ],
       waiting: [],
-      unmergeable: [],
+      unmergeable: [], queueBlocked: [], unmergeableCulprit: null,
       batchSize: 6,
     };
     const { container } = render(<QueueTrain queue={queue} />);
@@ -49,7 +49,7 @@ describe('QueueTrain', () => {
     const queue: RepoQueueView = {
       groups: [group({ prNumbers: [8943, 8941] })],
       waiting: [],
-      unmergeable: [],
+      unmergeable: [], queueBlocked: [], unmergeableCulprit: null,
       batchSize: 6,
     };
     const { container } = render(<QueueTrain queue={queue} />);
@@ -65,7 +65,7 @@ describe('QueueTrain', () => {
     const queue: RepoQueueView = {
       groups: [group({ failed: true, percent: 89, etaSeconds: null })],
       waiting: [],
-      unmergeable: [],
+      unmergeable: [], queueBlocked: [], unmergeableCulprit: null,
       batchSize: 6,
     };
     const { container } = render(<QueueTrain queue={queue} />);
@@ -78,7 +78,7 @@ describe('QueueTrain', () => {
     const queue: RepoQueueView = {
       groups: [group({ percent: null, etaSeconds: null })],
       waiting: [],
-      unmergeable: [],
+      unmergeable: [], queueBlocked: [], unmergeableCulprit: null,
       batchSize: 6,
     };
     const { container } = render(<QueueTrain queue={queue} />);
@@ -89,7 +89,7 @@ describe('QueueTrain', () => {
 
   it('waiting: 7 entries with batchSize 6 → next-batch car (6 numbers) + then car (1)', () => {
     const waiting = Array.from({ length: 7 }, (_, i) => ({ prNumber: 8960 - i, position: i + 1 }));
-    const queue: RepoQueueView = { groups: [], waiting, unmergeable: [], batchSize: 6 };
+    const queue: RepoQueueView = { groups: [], waiting, unmergeable: [], queueBlocked: [], unmergeableCulprit: null, batchSize: 6 };
     const { container } = render(<QueueTrain queue={queue} />);
     const dashed = container.querySelectorAll('.car.queued');
     expect(dashed).toHaveLength(2);
@@ -104,7 +104,7 @@ describe('QueueTrain', () => {
   it('next-batch car shows up to batchSize numbers then +N overflow', () => {
     // 10 waiting, batchSize 4 → first car shows 4, rest in "then" (6)
     const waiting = Array.from({ length: 10 }, (_, i) => ({ prNumber: 8900 + i, position: i + 1 }));
-    const queue: RepoQueueView = { groups: [], waiting, unmergeable: [], batchSize: 4 };
+    const queue: RepoQueueView = { groups: [], waiting, unmergeable: [], queueBlocked: [], unmergeableCulprit: null, batchSize: 4 };
     const { container } = render(<QueueTrain queue={queue} />);
     const dashed = container.querySelectorAll('.car.queued');
     expect(dashed).toHaveLength(2);
@@ -119,7 +119,7 @@ describe('QueueTrain', () => {
     // batchSize=8, 10 waiting → next-batch car slices 8 entries but PrLinks only shows 6 + "+2"
     // "then" car shows 2 more (10 - 8 = 2 remaining)
     const waiting = Array.from({ length: 10 }, (_, i) => ({ prNumber: 9000 + i, position: i + 1 }));
-    const queue: RepoQueueView = { groups: [], waiting, unmergeable: [], batchSize: 8 };
+    const queue: RepoQueueView = { groups: [], waiting, unmergeable: [], queueBlocked: [], unmergeableCulprit: null, batchSize: 8 };
     const { container } = render(<QueueTrain queue={queue} />);
     const dashed = container.querySelectorAll('.car.queued');
     expect(dashed).toHaveLength(2);
@@ -135,7 +135,7 @@ describe('QueueTrain', () => {
     const queue: RepoQueueView = {
       groups: [],
       waiting: [{ prNumber: 8960, position: 1 }],
-      unmergeable: [],
+      unmergeable: [], queueBlocked: [], unmergeableCulprit: null,
       batchSize: 6,
     };
     const { container } = render(<QueueTrain queue={queue} />);
@@ -148,7 +148,7 @@ describe('QueueTrain', () => {
     const queue: RepoQueueView = {
       groups: [group({ prNumbers: [8943, 8941, 8939] })],
       waiting: [],
-      unmergeable: [],
+      unmergeable: [], queueBlocked: [], unmergeableCulprit: null,
       batchSize: 6,
     };
     const { container } = render(<QueueTrain queue={queue} />);
@@ -163,7 +163,7 @@ describe('QueueTrain', () => {
     const queue: RepoQueueView = {
       groups: [group({ prNumbers: [100, 101, 102, 103, 104, 105, 106, 107] })],
       waiting: [],
-      unmergeable: [],
+      unmergeable: [], queueBlocked: [], unmergeableCulprit: null,
       batchSize: 6,
     };
     const { container } = render(<QueueTrain queue={queue} />);
@@ -184,7 +184,7 @@ describe('QueueTrain', () => {
     const queue: RepoQueueView = {
       groups: [group({ prNumbers: [8943] })],
       waiting: [],
-      unmergeable: [],
+      unmergeable: [], queueBlocked: [], unmergeableCulprit: null,
       batchSize: 6,
     };
     render(<QueueTrain queue={queue} />);
@@ -201,7 +201,7 @@ describe('QueueTrain', () => {
     const queue: RepoQueueView = {
       groups: [group({})],
       waiting: [],
-      unmergeable: [],
+      unmergeable: [], queueBlocked: [], unmergeableCulprit: null,
       batchSize: 6,
     };
     const { container } = render(<QueueTrain queue={queue} />);
@@ -216,7 +216,7 @@ describe('QueueTrain', () => {
         { prNumber: 8960, position: 1 },
         { prNumber: 8958, position: 2 },
       ],
-      unmergeable: [],
+      unmergeable: [], queueBlocked: [], unmergeableCulprit: null,
       batchSize: 6,
     };
     const { container } = render(<QueueTrain queue={queue} />);
@@ -230,7 +230,7 @@ describe('QueueTrain', () => {
     const queue: RepoQueueView = {
       groups: [group({ prNumbers: [8943] })],
       waiting: [],
-      unmergeable: [8878],
+      unmergeable: [8878], queueBlocked: [], unmergeableCulprit: 8878,
       batchSize: 6,
     };
     const { container } = render(<QueueTrain queue={queue} />);
@@ -249,6 +249,7 @@ describe('QueueTrain', () => {
       groups: [],
       waiting: [],
       unmergeable: [9000, 9001, 9002, 9003, 9004, 9005, 9006, 9007],
+      queueBlocked: [], unmergeableCulprit: 9000,
       batchSize: 6,
     };
     const { container } = render(<QueueTrain queue={queue} />);
@@ -262,7 +263,7 @@ describe('QueueTrain', () => {
     const queue: RepoQueueView = {
       groups: [],
       waiting: [],
-      unmergeable: [8878],
+      unmergeable: [8878], queueBlocked: [], unmergeableCulprit: 8878,
       batchSize: 6,
     };
     const { container } = render(<QueueTrain queue={queue} />);
@@ -274,10 +275,74 @@ describe('QueueTrain', () => {
     const queue: RepoQueueView = {
       groups: [group({})],
       waiting: [],
-      unmergeable: [],
+      unmergeable: [], queueBlocked: [], unmergeableCulprit: null,
       batchSize: 6,
     };
     const { container } = render(<QueueTrain queue={queue} />);
     expect(container.querySelector('.car.unmergeable')).toBeNull();
+  });
+
+  // Cascade-unmergeable split: genuine conflicts (DIRTY) ride the red ✗ car;
+  // cascade victims (UNMERGEABLE only because of a conflict ahead) get their own
+  // amber ⊘ car so they are never told to rebase.
+  it('live cascade scenario: red ✗ car for the genuine conflict, amber ⊘ car for the blocked entries', () => {
+    const queue: RepoQueueView = {
+      groups: [group({ prNumbers: [9338] })],
+      waiting: [{ prNumber: 9342, position: 6 }],
+      unmergeable: [8878],
+      queueBlocked: [9335, 9323, 9337],
+      unmergeableCulprit: 8878,
+      batchSize: 6,
+    };
+    const { container } = render(<QueueTrain queue={queue} />);
+    const genuine = container.querySelector('.car.unmergeable')!;
+    expect(genuine.textContent).toContain('✗ unmergeable');
+    expect(genuine.textContent).toContain('#8878');
+    const blocked = container.querySelector('.car.queue-blocked')!;
+    expect(blocked).not.toBeNull();
+    expect(blocked.textContent).toContain('⊘ blocked behind conflict');
+    for (const n of [9335, 9323, 9337]) expect(blocked.textContent).toContain(`#${n}`);
+    // cascade victims never appear in the red car, and vice versa
+    expect(genuine.textContent).not.toContain('#9335');
+    expect(blocked.textContent).not.toContain('#8878');
+  });
+
+  it('queue-blocked car links anchor to rows and the tooltip names the culprit', () => {
+    const queue: RepoQueueView = {
+      groups: [],
+      waiting: [],
+      unmergeable: [8878],
+      queueBlocked: [9335],
+      unmergeableCulprit: 8878,
+      batchSize: 6,
+    };
+    const { container } = render(<QueueTrain queue={queue} />);
+    const blocked = container.querySelector('.car.queue-blocked')!;
+    const link = blocked.querySelector('a') as HTMLAnchorElement;
+    expect(link.href).toContain('#pr-9335');
+    expect(blocked.getAttribute('title')).toContain('#8878');
+  });
+
+  it('no queue-blocked car when the list is empty', () => {
+    const queue: RepoQueueView = {
+      groups: [group({})],
+      waiting: [],
+      unmergeable: [8878], queueBlocked: [], unmergeableCulprit: 8878,
+      batchSize: 6,
+    };
+    const { container } = render(<QueueTrain queue={queue} />);
+    expect(container.querySelector('.car.queue-blocked')).toBeNull();
+  });
+
+  it('tolerates a pre-upgrade payload without queueBlocked/unmergeableCulprit', () => {
+    const queue = {
+      groups: [group({})],
+      waiting: [],
+      unmergeable: [8878],
+      batchSize: 6,
+    } as unknown as RepoQueueView;
+    const { container } = render(<QueueTrain queue={queue} />);
+    expect(container.querySelector('.car.unmergeable')).not.toBeNull();
+    expect(container.querySelector('.car.queue-blocked')).toBeNull();
   });
 });
