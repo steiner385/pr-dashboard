@@ -2751,3 +2751,165 @@ describe('Poller persisted last-known-good (restart during an outage)', () => {
     expect(history.getMeta('repoConfig:acme/widgets')).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Incident 2026-06-11 (App-mode dogfood): an installation token that cannot
+// see a watched repo makes the blob query return `repository: null` alongside
+// a partial-response error. The old code treated that exactly like
+// file-deleted and CLEARED the persisted last-known-good config.
+// repository-inaccessible must be a FETCH FAILURE (keep + backoff), and a
+// fully invisible owner should get one diagnosability log line.
+// ---------------------------------------------------------------------------
+
+describe('Poller inaccessible repository ≠ removed file (App-mode incident 2026-06-11)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const FILE_YAML =
+    'batchSize: 12\ndeploy:\n  environments:\n    - name: qa\n      healthUrl: https://qa.file.dev/health\n';
+  const NO_DEPLOY_CONFIG: AppConfig = { ...DEFAULTS, owners: ['acme', 'octo'] };
+  const EMPTY_SWEEP = {
+    open0: { issueCount: 0, nodes: [] }, open1: { issueCount: 0, nodes: [] },
+    merged0: { issueCount: 0, nodes: [] }, merged1: { issueCount: 0, nodes: [] },
+  };
+
+  /** Blob responses: 'file' (present), 'absent' (repo ok, object null),
+   *  'norepo' (repository itself null — the partial-errors shape). */
+  function incidentClient(box: { blob: 'file' | 'absent' | 'norepo'; sweep?: Record<string, unknown> }) {
+    return {
+      remaining: 4000, resetAt: null,
+      graphql: vi.fn(async (q: string) => {
+        if (q.includes('open0: search')) return box.sweep ?? SWEEP_RESPONSE;
+        if (q.includes('.pr-dashboard.yml')) {
+          if (box.blob === 'norepo') return { repository: null };
+          return { repository: { defaultBranchRef: { name: 'main' },
+            object: box.blob === 'absent' ? null : { text: FILE_YAML } } };
+        }
+        if (q.includes('pr8962: pullRequest')) return DETAIL_RESPONSE;
+        throw new Error(`unexpected query: ${q.slice(0, 80)}`);
+      }),
+    };
+  }
+  const blobCalls = (client: { graphql: ReturnType<typeof vi.fn> }) =>
+    client.graphql.mock.calls.filter(([q]) => (q as string).includes('.pr-dashboard.yml')).length;
+
+  it('repository-null keeps the loaded + persisted config and retries with backoff (not 24h)', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let t = NOW.getTime();
+    const box = { blob: 'file' as 'file' | 'absent' | 'norepo' };
+    const client = incidentClient(box);
+    const p = new Poller({ client: client as never, history, deploy: noDeploy(),
+      config: NO_DEPLOY_CONFIG, now: () => new Date(t) });
+    await p.sweepOnce();
+    await p.refreshRepoConfigs();                  // healthy: loaded + persisted
+    expect(p.settingsFor('acme/widgets').batchSize).toBe(12);
+    box.blob = 'norepo';                           // token loses sight of the repo
+    t += 25 * 3600_000;
+    await p.refreshRepoConfigs();
+    // keep last-known-good: loaded config, persisted copy, NO "removed" log
+    expect(p.settingsFor('acme/widgets').batchSize).toBe(12);
+    expect(JSON.parse(history.getMeta('repoConfig:acme/widgets')!)).toMatchObject({ batchSize: 12 });
+    expect(String(warn.mock.calls.at(-1)))
+      .toContain('[repo-config] acme/widgets: repository inaccessible (token cannot see it?) — keeping last-known-good');
+    // failure arms the backoff, not the 24h success interval
+    expect(blobCalls(client)).toBe(2);
+    t += 30_000;
+    await p.refreshRepoConfigs();                  // 30s < 1m backoff — throttled
+    expect(blobCalls(client)).toBe(2);
+    t += 30_000;
+    await p.refreshRepoConfigs();                  // 1m after failure — retried
+    expect(blobCalls(client)).toBe(3);
+  });
+
+  it('object-null (repo visible, file genuinely absent) still clears the persisted copy', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    let t = NOW.getTime();
+    const box = { blob: 'file' as 'file' | 'absent' | 'norepo' };
+    const p = new Poller({ client: incidentClient(box) as never, history, deploy: noDeploy(),
+      config: NO_DEPLOY_CONFIG, now: () => new Date(t) });
+    await p.sweepOnce();
+    await p.refreshRepoConfigs();
+    box.blob = 'absent';
+    t += 25 * 3600_000;
+    await p.refreshRepoConfigs();
+    expect(p.settingsFor('acme/widgets').batchSize).toBe(DEFAULTS.batchSize);
+    expect(history.getMeta('repoConfig:acme/widgets')).toBeNull();
+    expect(String(log.mock.calls.at(-1))).toContain('removed');
+  });
+
+  it('the literal incident sequence: persisted deploy config survives a repository-null fetch — state still hasDeploy', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let t = NOW.getTime();
+    const box = { blob: 'file' as 'file' | 'absent' | 'norepo' };
+    const p = new Poller({ client: incidentClient(box) as never, history, deploy: noDeploy(),
+      config: NO_DEPLOY_CONFIG, now: () => new Date(t) });
+    await p.sweepOnce();                           // merged PR 8951 lands in history
+    await p.refreshRepoConfigs();                  // good config persisted (incl. deploy block)
+    expect(p.effectiveDeploy()['acme/widgets']).toBeDefined();
+    box.blob = 'norepo';                           // App installation can't see the repo
+    t += 25 * 3600_000;
+    await p.refreshRepoConfigs();
+    expect(p.effectiveDeploy()['acme/widgets']!.environments[0]!.healthUrl)
+      .toBe('https://qa.file.dev/health');
+    expect(JSON.parse(history.getMeta('repoConfig:acme/widgets')!)).toMatchObject({ batchSize: 12 });
+    const repo = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!;
+    expect(repo.hasDeploy).toBe(true);             // /api/state still renders the deploy lane
+  });
+
+  it("warns once when an owner's sweep is empty AND its repos were seen inaccessible (blob layer)", async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const box = { blob: 'norepo' as const, sweep: EMPTY_SWEEP };
+    // acme/widgets is watched via instance config even with no PRs visible
+    const config: AppConfig = { ...NO_DEPLOY_CONFIG, repos: { 'acme/widgets': { batchSize: 4 } } };
+    const p = new Poller({ client: incidentClient(box) as never, history, deploy: noDeploy(),
+      config, now: () => NOW });
+    await p.sweepOnce();                           // no inaccessible evidence yet → no warning
+    const ownerWarns = () => warn.mock.calls
+      .filter((c) => String(c).includes("owner 'acme' appears inaccessible")).length;
+    expect(ownerWarns()).toBe(0);
+    await p.refreshRepoConfigs();                  // blob layer sees repository:null for acme/widgets
+    await p.sweepOnce();                           // empty sweep + evidence → warn
+    expect(ownerWarns()).toBe(1);
+    expect(String(warn.mock.calls.find((c) => String(c).includes('appears inaccessible'))))
+      .toContain("[poller] owner 'acme' appears inaccessible to the current token (App installation missing?)");
+    await p.sweepOnce();                           // log once per process lifetime
+    expect(ownerWarns()).toBe(1);
+    // octo never had inaccessible evidence — never warned about
+    expect(warn.mock.calls.some((c) => String(c).includes("owner 'octo'"))).toBe(false);
+  });
+
+  it('a null repository alias in the detail fetch also marks the owner inaccessible', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const box: { blob: 'file'; sweep: Record<string, unknown> } = { blob: 'file', sweep: SWEEP_RESPONSE };
+    const client = {
+      remaining: 4000, resetAt: null,
+      graphql: vi.fn(async (q: string) => {
+        if (q.includes('open0: search')) return box.sweep;
+        if (q.includes('pr8962: pullRequest')) return { r0: null }; // repo inaccessible mid-flight
+        throw new Error(`unexpected query: ${q.slice(0, 80)}`);
+      }),
+    };
+    const p = new Poller({ client: client as never, history, deploy: noDeploy(),
+      config: NO_DEPLOY_CONFIG, now: () => NOW });
+    await p.sweepOnce();                           // PR 8962 discovered
+    await p.detailOnce();                          // detail alias resolves to null
+    box.sweep = EMPTY_SWEEP;                       // next sweep: owner fully invisible
+    await p.sweepOnce();
+    expect(warn.mock.calls.filter((c) => String(c).includes("owner 'acme' appears inaccessible")).length).toBe(1);
+  });
+
+  it('no owner warning when the sweep has results for that owner', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const box = { blob: 'norepo' as const };
+    const p = new Poller({ client: incidentClient(box) as never, history, deploy: noDeploy(),
+      config: NO_DEPLOY_CONFIG, now: () => NOW });
+    await p.sweepOnce();
+    await p.refreshRepoConfigs();                  // evidence for acme…
+    await p.sweepOnce();                           // …but the sweep still sees acme PRs
+    expect(warn.mock.calls.some((c) => String(c).includes('appears inaccessible'))).toBe(false);
+  });
+});

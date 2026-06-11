@@ -342,6 +342,20 @@ installation access token, cached and refreshed before expiry, built on
 `installationId` is auto-discovered; with multiple installations, startup fails
 with a list of ids to pin via `app.installationId`.
 
+### Limitations
+
+**One installation per instance.** An installation token only sees the repos
+of the account it is installed on — repos under any other owner in your
+`owners` list are invisible to it: their sweep searches return nothing and
+detail/blob fetches resolve to `repository: null` (the server keeps
+last-known-good config for such repos and logs
+`owner '<owner>' appears inaccessible to the current token` when an owner is
+fully invisible). If you watch repos across multiple accounts, run **one
+instance per account** — distinct `PRDASH_CONFIG` / `PRDASH_DATA_DIR` / port,
+with the App installed on (and `app.installationId` pinned to) that account —
+until multi-installation support lands
+([#10](https://github.com/steiner385/pr-dashboard/issues/10)).
+
 ---
 
 ## Webhooks (optional)

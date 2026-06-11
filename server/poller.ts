@@ -200,6 +200,8 @@ export class Poller extends EventEmitter {
   private propagating = new Set<string>();                // merged PR keys whose sha is 'missing'
   private seenNotLive = new Set<string>();                // "repo#number/env" observed not-live here
   private ancestryCheckedAt = new Map<string, number>();  // "sha:deployedSha" → last check (ms)
+  private inaccessibleOwners = new Set<string>();        // owners with repository-inaccessible evidence (process lifetime)
+  private warnedInaccessibleOwners = new Set<string>();   // owner-invisible diagnosability log fired (log once)
   private staleSince: string | null = null;
   private pauseUntil = 0;                                 // rate-limit pause (epoch ms)
   private inFlight = new Set<string>();                   // re-entrancy latches per cycle
@@ -267,6 +269,7 @@ export class Poller extends EventEmitter {
     const data = await this.guard(() => client.graphql<Record<string, any>>(buildSweepQuery(config.owners, since)));
     if (!data) return;
     const seenOpen = new Set<string>();
+    const ownerResultCounts = new Map<string, number>();
     let warnedTruncation = false;
     for (const [alias, payload] of Object.entries(data)) {
       if (!alias.startsWith('open') && !alias.startsWith('merged')) continue;
@@ -274,6 +277,7 @@ export class Poller extends EventEmitter {
       const issueCount: number = (payload as any)?.issueCount ?? 0;
       const pageInfo = (payload as any)?.pageInfo as { hasNextPage?: boolean; endCursor?: string | null } | undefined;
       const owner = config.owners[Number(alias.replace(/^\D+/, ''))] ?? '?';
+      ownerResultCounts.set(owner, (ownerResultCounts.get(owner) ?? 0) + nodes.length);
       const willPaginate = deepMergedSweep && alias.startsWith('merged')
         && !!pageInfo?.hasNextPage && !!pageInfo.endCursor;
       if (!warnedTruncation && issueCount > nodes.length && !willPaginate) {
@@ -283,6 +287,7 @@ export class Poller extends EventEmitter {
       for (const node of nodes) this.ingestSweepNode(node, seenOpen);
       if (willPaginate) await this.fetchMergedPages(owner, since, pageInfo!.endCursor!, seenOpen);
     }
+    this.warnInvisibleOwners(ownerResultCounts);
     // drop open PRs that vanished (closed without merge)
     for (const key of this.prs.keys()) if (!seenOpen.has(key)) this.prs.delete(key);
     this.pruneCaches(seenOpen);
@@ -363,6 +368,28 @@ export class Poller extends EventEmitter {
     }
   }
 
+  /** Record repository-inaccessible evidence (blob/detail layer) for the repo's owner. */
+  private noteInaccessibleRepo(repo: string): void {
+    const owner = repo.split('/')[0];
+    if (owner) this.inaccessibleOwners.add(owner);
+  }
+
+  /**
+   * Diagnosability for an owner the token cannot see at all (App-mode: the
+   * installation doesn't cover that account — search just returns nothing, so
+   * the owner's data silently rots). When a sweep returns 0 results for an
+   * owner AND the detail/blob layer has seen repository-inaccessible errors
+   * for that owner's repos this process lifetime, log once. No UI change.
+   */
+  private warnInvisibleOwners(ownerResultCounts: Map<string, number>): void {
+    for (const owner of this.deps.config.owners) {
+      if ((ownerResultCounts.get(owner) ?? 0) > 0) continue;
+      if (!this.inaccessibleOwners.has(owner) || this.warnedInaccessibleOwners.has(owner)) continue;
+      this.warnedInaccessibleOwners.add(owner);
+      console.warn(`[poller] owner '${owner}' appears inaccessible to the current token (App installation missing?)`);
+    }
+  }
+
   /** @param onlyKey webhook nudges: restrict the fetch to one tracked PR (`repo#number`). */
   async detailOnce(onlyHot = false, onlyKey?: string): Promise<void> {
     return this.withLatch('detail', () => this.detailImpl(onlyHot, onlyKey));
@@ -381,8 +408,23 @@ export class Poller extends EventEmitter {
       }),
     )));
     if (!data) return;
-    for (const repoPayload of Object.values(data)) {
-      if (!repoPayload || typeof repoPayload !== 'object' || !(repoPayload as any).nameWithOwner) continue;
+    // Alias rN → repo, matching buildDetailQuery's grouping (first-seen target
+    // order) — a null alias carries no nameWithOwner, so the inaccessible repo
+    // must be recovered positionally.
+    const aliasRepos: string[] = [];
+    for (const t of targets) {
+      if (!aliasRepos.includes(t.repo)) aliasRepos.push(t.repo);
+    }
+    for (const [alias, repoPayload] of Object.entries(data)) {
+      if (!/^r\d+$/.test(alias)) continue;
+      if (repoPayload == null) {
+        // Repository alias resolved to null (partial-errors path): the token
+        // cannot see the repo. Keep last snapshots; note it for diagnosability.
+        const repo = aliasRepos[Number(alias.slice(1))];
+        if (repo) this.noteInaccessibleRepo(repo);
+        continue;
+      }
+      if (typeof repoPayload !== 'object' || !(repoPayload as any).nameWithOwner) continue;
       const repo = (repoPayload as any).nameWithOwner as string;
       for (const [alias, node] of Object.entries(repoPayload as Record<string, any>)) {
         if (!alias.startsWith('pr')) continue;
@@ -580,7 +622,9 @@ export class Poller extends EventEmitter {
    * fetch arms a capped exponential backoff (1m..10m) so subsequent deploy cycles
    * retry until a success re-arms the long throttle. Best-effort like derivation:
    * a failed fetch keeps the prior parsed config; an unparseable file keeps it
-   * too; an absent file clears it (including the persisted last-known-good copy).
+   * too; an INACCESSIBLE repository (alias resolved to null — token can't see
+   * it) keeps it as well; only a genuinely absent file (repo resolved, object
+   * null) clears it (including the persisted last-known-good copy).
    */
   async refreshRepoConfigs(): Promise<void> {
     const { client, history, config } = this.deps;
@@ -597,8 +641,22 @@ export class Poller extends EventEmitter {
         console.warn(`[repo-config] ${repo}: ${REPO_CONFIG_PATH} fetch failed — will retry with backoff: ${describeError(e)}`);
         continue; // best-effort: prior layers keep working
       }
+      const repoNode = data?.repository;
+      if (repoNode == null) {
+        // The HTTP request succeeded but the repository alias itself is null —
+        // the partial-errors shape ("Could not resolve to a Repository…"): the
+        // token cannot see the repo (App installation missing, rename, SSO).
+        // NOT the same as file-deleted (repo resolved, object null below):
+        // keep the loaded AND persisted last-known-good config, retry with
+        // backoff. Incident 2026-06-11: treating this as "removed" cleared the
+        // persisted config the resilience layer exists to protect.
+        this.repoConfigThrottle.failure(repo, this.now().getTime());
+        this.noteInaccessibleRepo(repo);
+        console.warn(`[repo-config] ${repo}: repository inaccessible (token cannot see it?) — keeping last-known-good`);
+        continue;
+      }
       this.repoConfigThrottle.success(repo, this.now().getTime());
-      const text = data?.repository?.object?.text;
+      const text = repoNode.object?.text;
       if (typeof text !== 'string') {
         history.deleteMeta(`repoConfig:${repo}`);
         if (this.repoFileConfigs.delete(repo)) {
@@ -705,7 +763,13 @@ export class Poller extends EventEmitter {
 
   /** Deploy-cycle re-derivation: refresh the clone and re-read ci.yml at most
    *  once per 24h — armed ONLY when the read succeeds. A failed fetch/read arms
-   *  a capped exponential backoff (1m..10m) so later deploy cycles retry. */
+   *  a capped exponential backoff (1m..10m) so later deploy cycles retry.
+   *
+   *  Inaccessible-repo ≠ removed-file holds here by construction (audited with
+   *  the 2026-06-11 blob-path incident): an inaccessible repo makes the git
+   *  fetch THROW (failure path → keep prior graph + backoff), while a missing
+   *  ci.yml reads as null (keep prior graph) — nothing ever deletes the
+   *  persisted `ciGraph:<repo>` copy. */
   private async maybeRederivePrefixes(repo: string, branch: string): Promise<void> {
     if (!this.deriveThrottle.due(repo, this.now().getTime())) return;
     try {
