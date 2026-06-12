@@ -8,7 +8,6 @@ import { ClientRouter } from './client-router';
 import { HistoryStore } from './history';
 import { DeployWatcher } from './deploy-watcher';
 import { Poller, describeError } from './poller';
-import { deriveCiGraph } from './required-checks';
 import { backfillRepo } from './backfill';
 import { computeMetrics } from './metrics';
 import { createApp } from './api';
@@ -103,29 +102,20 @@ async function main() {
 
   const deploy = new DeployWatcher(clonesDir);
   const poller = new Poller({ router, history, deploy, config });
+  console.log(config.ancestrySource === 'api'
+    ? '[deploy] ancestrySource: api — compare-API ancestry, no clones created (pre-existing clones serve as fallback only)'
+    : `[deploy] ancestrySource: clone — bare clones in ${clonesDir}`);
 
   // In-repo `.pr-dashboard.yml` for every configured repo (GraphQL blob read) —
   // must land before derivation so in-repo workflowPath/rollupJobId apply.
   await poller.refreshRepoConfigs();
 
-  // Derive required-check prefixes from each deploy repo's workflow needs-graph.
-  // Best-effort: on failure the poller falls back to configured prefixes (if any),
-  // and the deploy cycle re-derives every 24h.
-  for (const [repo, dc] of Object.entries(poller.effectiveDeploy())) {
-    try {
-      const settings = poller.settingsFor(repo);
-      await deploy.ensureClone(repo, dc.cloneUrl);
-      const ciYaml = await deploy.readFileAtHead(repo, settings.workflowPath, dc.defaultBranch);
-      const graph = ciYaml != null ? deriveCiGraph(ciYaml, settings.rollupJobId) : null;
-      if (graph) {
-        poller.adoptDerivedGraph(repo, graph); // cache + persist last-known-good + arm 24h
-      } else console.warn(`[index] ${repo}: ${settings.workflowPath} ${ciYaml == null ? 'not readable' : 'unparseable'} — using configured prefixes only`);
-    } catch (e) {
-      // No throttle armed: the first deploy cycle retries with backoff, and any
-      // persisted last-known-good graph (restored at construction) keeps working.
-      console.warn(`[index] prefix derivation failed for ${repo}: ${describeError(e)}`);
-    }
-  }
+  // Derive required-check prefixes from each derivation-eligible repo's workflow
+  // needs-graph (api mode: GraphQL blob read; clone mode: the bare clone).
+  // Best-effort: on failure the poller falls back to configured prefixes (if
+  // any) / the persisted last-known-good graph, and the deploy cycle retries
+  // (capped backoff, then every 24h).
+  await poller.refreshDerivedGraphs();
 
   if (!history.getMeta('backfilled')) {
     // On a fresh DB, set lastSweep 7 days back so the startup merged-window covers 7 days.

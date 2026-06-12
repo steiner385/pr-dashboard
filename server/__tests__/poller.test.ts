@@ -9,9 +9,13 @@ import type { DeployWatcher } from '../deploy-watcher';
 const NOW = new Date('2026-06-10T12:00:00Z');
 
 // DEFAULTS are de-personalized (no owners, no deploy) — tests run against a
-// neutral two-owner config with one deploy-watched repo.
+// neutral two-owner config with one deploy-watched repo. ancestrySource is
+// pinned to 'clone' here: this block (and everything spreading it) is the
+// clone-mode suite; api-mode (the runtime default) coverage lives in the
+// "ancestrySource 'api'" describe below.
 const CONFIG: AppConfig = {
   ...DEFAULTS,
+  ancestrySource: 'clone',
   owners: ['acme', 'octo'],
   deploy: {
     'acme/widgets': {
@@ -2351,7 +2355,8 @@ describe('Poller in-repo .pr-dashboard.yml (Z1)', () => {
     client.graphql.mock.calls.filter(([q]) => (q as string).includes('.pr-dashboard.yml')).length;
 
   const FILE_YAML = 'rollupJobId: rollup\nbatchSize: 12\n';
-  const NO_DEPLOY_CONFIG: AppConfig = { ...DEFAULTS, owners: ['acme', 'octo'] };
+  // clone-pinned like CONFIG: clone-mode coverage (api mode has its own describe)
+  const NO_DEPLOY_CONFIG: AppConfig = { ...DEFAULTS, ancestrySource: 'clone', owners: ['acme', 'octo'] };
 
   it('loads the file and applies in-repo settings over defaults, logging the source fields once', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -2922,7 +2927,8 @@ describe('Poller failure-aware refresh throttles (incident 2026-06-11)', () => {
   afterEach(() => vi.restoreAllMocks());
 
   const FILE_YAML = 'rollupJobId: rollup\nbatchSize: 12\n';
-  const NO_DEPLOY_CONFIG: AppConfig = { ...DEFAULTS, owners: ['acme', 'octo'] };
+  // clone-pinned like CONFIG: clone-mode coverage (api mode has its own describe)
+  const NO_DEPLOY_CONFIG: AppConfig = { ...DEFAULTS, ancestrySource: 'clone', owners: ['acme', 'octo'] };
 
   function repoCfgClient(textBox: { current: string | null; fail?: boolean }) {
     return {
@@ -3030,7 +3036,8 @@ describe('Poller persisted last-known-good (restart during an outage)', () => {
   const FILE_YAML =
     'batchSize: 12\ndeploy:\n  environments:\n    - name: qa\n      healthUrl: https://qa.file.dev/health\n';
   const CI_YAML = 'name: CI\njobs:\n  lint: {}\n  build:\n    needs: [lint]\n  ci:\n    needs: [build]\n';
-  const NO_DEPLOY_CONFIG: AppConfig = { ...DEFAULTS, owners: ['acme', 'octo'] };
+  // clone-pinned like CONFIG: clone-mode coverage (api mode has its own describe)
+  const NO_DEPLOY_CONFIG: AppConfig = { ...DEFAULTS, ancestrySource: 'clone', owners: ['acme', 'octo'] };
 
   const healthyClient = (fileText: string) => ({
     remaining: 4000, resetAt: null,
@@ -3146,7 +3153,8 @@ describe('Poller inaccessible repository ≠ removed file (App-mode incident 202
 
   const FILE_YAML =
     'batchSize: 12\ndeploy:\n  environments:\n    - name: qa\n      healthUrl: https://qa.file.dev/health\n';
-  const NO_DEPLOY_CONFIG: AppConfig = { ...DEFAULTS, owners: ['acme', 'octo'] };
+  // clone-pinned like CONFIG: clone-mode coverage (api mode has its own describe)
+  const NO_DEPLOY_CONFIG: AppConfig = { ...DEFAULTS, ancestrySource: 'clone', owners: ['acme', 'octo'] };
   const EMPTY_SWEEP = {
     open0: { issueCount: 0, nodes: [] }, open1: { issueCount: 0, nodes: [] },
     merged0: { issueCount: 0, nodes: [] }, merged1: { issueCount: 0, nodes: [] },
@@ -3466,5 +3474,204 @@ describe('state sampling (metrics trends)', () => {
     expect(acme).toHaveLength(2);
     // detail classified 8962 as ci (one check still IN_PROGRESS)
     expect(acme[1]).toMatchObject({ open: 1, ci: 1, queue: 0, failed: 0 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #18: ancestrySource 'api' — compare-API ancestry, clone-free derivation
+// ---------------------------------------------------------------------------
+
+describe("Poller ancestrySource 'api' (issue #18)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const API_CONFIG: AppConfig = { ...CONFIG, ancestrySource: 'api' };
+
+  /** fakeClient + restGet (compare API) + blob handling for both in-repo
+   *  config and workflow derivation reads. */
+  function apiClient(opts: {
+    compare?: (path: string) => unknown;
+    workflowYaml?: string | null;
+  } = {}) {
+    return {
+      remaining: 4000, resetAt: null,
+      graphql: vi.fn(async (q: string) => {
+        if (q.includes('open0: search')) return SWEEP_RESPONSE;
+        if (q.includes('.pr-dashboard.yml')) {
+          return { repository: { defaultBranchRef: { name: 'main' }, object: null } };
+        }
+        if (q.includes('.github/workflows/ci.yml')) {
+          return { repository: { defaultBranchRef: { name: 'main' },
+            object: opts.workflowYaml == null ? null : { text: opts.workflowYaml } } };
+        }
+        if (q.includes('pr8962: pullRequest')) return DETAIL_RESPONSE;
+        throw new Error(`unexpected query: ${q.slice(0, 80)}`);
+      }),
+      restGet: vi.fn(async (path: string) => {
+        if (!opts.compare) throw new Error(`unexpected restGet ${path}`);
+        return opts.compare(path);
+      }),
+    };
+  }
+
+  /** Deploy fake whose clone-side methods must stay untouched in api mode. */
+  function apiDeploy(shaByUrl: Record<string, string | null>, hasClone = false) {
+    return {
+      health: vi.fn(async (url: string) => shaByUrl[url] ?? null),
+      hasClone: vi.fn(() => hasClone),
+      ensureClone: vi.fn(async () => {}),
+      fetchClone: vi.fn(async () => {}),
+      isAncestor: vi.fn(async () => 'yes' as const),
+      readFileAtHead: vi.fn(async () => null),
+    } as unknown as DeployWatcher;
+  }
+
+  it('answers ancestry via the compare API and never touches the clone layer', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const client = apiClient({ compare: () => ({ status: 'ahead' }) });
+    const deploy = apiDeploy({ 'https://qa.widgets.example.com/health': 'deployedSha-qa' });
+    const p = new Poller({ router: asRouter(client), history, deploy,
+      config: API_CONFIG, now: () => NOW });
+    await p.sweepOnce();
+    await p.deployOnce();
+    expect(client.restGet).toHaveBeenCalledWith(
+      '/repos/acme/widgets/compare/squash8951...deployedSha-qa?per_page=1');
+    expect(history.listTrackedMerged(7, NOW).find((r) => r.number === 8951)!.qaLiveAt)
+      .toBe(NOW.toISOString());
+    // no clone is ever created, fetched, or consulted
+    expect(vi.mocked(deploy.ensureClone)).not.toHaveBeenCalled();
+    expect(vi.mocked(deploy.fetchClone)).not.toHaveBeenCalled();
+    expect(vi.mocked(deploy.isAncestor)).not.toHaveBeenCalled();
+    expect(vi.mocked(deploy.readFileAtHead)).not.toHaveBeenCalled();
+  });
+
+  it("compare status 'behind' reads as not-live (env stays pending)", async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const client = apiClient({ compare: () => ({ status: 'behind' }) });
+    const p = new Poller({ router: asRouter(client), history,
+      deploy: apiDeploy({ 'https://qa.widgets.example.com/health': 'oldSha-qa' }),
+      config: API_CONFIG, now: () => NOW });
+    await p.sweepOnce();
+    await p.deployOnce();
+    expect(history.listTrackedMerged(7, NOW).find((r) => r.number === 8951)!.qaLiveAt).toBeNull();
+  });
+
+  it('the per-(sha, deployedSha) 60s ancestry throttle is transport-agnostic', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    let t = NOW.getTime();
+    const client = apiClient({ compare: () => ({ status: 'behind' }) });
+    const p = new Poller({ router: asRouter(client), history,
+      deploy: apiDeploy({ 'https://qa.widgets.example.com/health': 'oldSha-qa' }),
+      config: API_CONFIG, now: () => new Date(t) });
+    await p.sweepOnce();
+    await p.deployOnce();
+    await p.deployOnce(); // same clock → within 60s of the first check
+    expect(client.restGet).toHaveBeenCalledTimes(1);
+    t += 61_000; // step past the throttle window
+    await p.deployOnce();
+    expect(client.restGet).toHaveBeenCalledTimes(2);
+  });
+
+  it('a transport error falls back to a PRE-EXISTING clone for the evaluation, warning once', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let t = NOW.getTime();
+    const client = apiClient(); // restGet always throws (network boom)
+    const deploy = apiDeploy({ 'https://qa.widgets.example.com/health': 'deployedSha-qa' }, true);
+    const p = new Poller({ router: asRouter(client), history, deploy,
+      config: API_CONFIG, now: () => new Date(t) });
+    await p.sweepOnce();
+    await p.deployOnce();
+    // clone answered 'yes' → env marked live
+    expect(vi.mocked(deploy.isAncestor))
+      .toHaveBeenCalledWith('acme/widgets', 'squash8951', 'deployedSha-qa');
+    expect(history.listTrackedMerged(7, new Date(t)).find((r) => r.number === 8951)!.qaLiveAt)
+      .toBe(new Date(t).toISOString());
+    const fallbackWarns = warn.mock.calls.filter((c) => String(c).includes('falling back'));
+    expect(fallbackWarns).toHaveLength(1);
+    expect(String(fallbackWarns[0])).toContain('acme/widgets');
+  });
+
+  it('a transport error without a local clone propagates (existing failure handling)', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const client = apiClient(); // restGet always throws
+    const deploy = apiDeploy({ 'https://qa.widgets.example.com/health': 'deployedSha-qa' }, false);
+    const p = new Poller({ router: asRouter(client), history, deploy,
+      config: API_CONFIG, now: () => NOW });
+    await p.sweepOnce();
+    await expect(p.deployOnce()).rejects.toThrow(/unexpected restGet/);
+    expect(vi.mocked(deploy.isAncestor)).not.toHaveBeenCalled();
+  });
+
+  it('ci.yml derivation reads the workflow via blob query (no clone), honoring defaultBranch', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const ciYaml = 'name: CI\njobs:\n  static-checks: {}\n  ci:\n    needs: [static-checks]\n';
+    const client = apiClient({ compare: () => ({ status: 'ahead' }), workflowYaml: ciYaml });
+    const deploy = apiDeploy({});
+    const p = new Poller({ router: asRouter(client), history, deploy,
+      config: API_CONFIG, now: () => NOW });
+    await p.sweepOnce();
+    await p.deployOnce();
+    const blobQueries = client.graphql.mock.calls
+      .map(([q]) => q as string).filter((q) => q.includes('.github/workflows/ci.yml'));
+    expect(blobQueries).toHaveLength(1);
+    expect(blobQueries[0]).toContain('main:.github/workflows/ci.yml'); // deploy defaultBranch
+    expect(vi.mocked(deploy.fetchClone)).not.toHaveBeenCalled();
+    expect(vi.mocked(deploy.readFileAtHead)).not.toHaveBeenCalled();
+    expect(String(log.mock.calls.find((c) => String(c).includes('derived'))))
+      .toMatch(/ci, static-checks/);
+    await p.deployOnce(); // within 24h — throttled, no re-read
+    expect(client.graphql.mock.calls
+      .map(([q]) => q as string).filter((q) => q.includes('.github/workflows/ci.yml'))).toHaveLength(1);
+  });
+
+  it('a NON-deploy repo with a repos.* entry derives prefixes for the first time (blob read)', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const ciYaml = 'jobs:\n  lint: {}\n  gate:\n    needs: [lint]\n';
+    const client = apiClient({ workflowYaml: ciYaml });
+    const config: AppConfig = { ...DEFAULTS, ancestrySource: 'api', owners: ['acme'],
+      repos: { 'acme/tools': { rollupJobId: 'gate' } } }; // no deploy block anywhere
+    const p = new Poller({ router: asRouter(client), history, deploy: apiDeploy({}),
+      config, now: () => NOW });
+    await p.deployOnce();
+    const blobQueries = client.graphql.mock.calls
+      .map(([q]) => q as string).filter((q) => q.includes('.github/workflows/ci.yml'));
+    expect(blobQueries).toHaveLength(1);
+    expect(blobQueries[0]).toContain('acme'); // routed to the repo owner
+    expect(blobQueries[0]).toContain('HEAD:.github/workflows/ci.yml'); // no deploy → default branch via HEAD
+    expect(String(log.mock.calls.find((c) => String(c).includes('derived'))))
+      .toMatch(/gate, lint/);
+  });
+
+  it('an inaccessible repo (null repository) keeps the prior derived graph and retries with backoff', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let t = NOW.getTime();
+    const client = {
+      remaining: 4000, resetAt: null,
+      graphql: vi.fn(async (q: string) => {
+        if (q.includes('open0: search')) return SWEEP_RESPONSE;
+        if (q.includes('.pr-dashboard.yml')) {
+          return { repository: { defaultBranchRef: { name: 'main' }, object: null } };
+        }
+        if (q.includes('.github/workflows/ci.yml')) return { repository: null };
+        throw new Error(`unexpected query: ${q.slice(0, 80)}`);
+      }),
+      restGet: vi.fn(async () => ({ status: 'behind' })),
+    };
+    const p = new Poller({ router: asRouter(client), history, deploy: apiDeploy({}),
+      config: API_CONFIG, now: () => new Date(t) });
+    p.setDerivedPrefixes('acme/widgets', ['prior']);
+    await p.deployOnce();
+    expect(String(warn.mock.calls.find((c) => String(c).includes('derivation failed'))))
+      .toContain('inaccessible');
+    const derivationReads = () => client.graphql.mock.calls
+      .map(([q]) => q as string).filter((q) => q.includes('.github/workflows/ci.yml')).length;
+    expect(derivationReads()).toBe(1);
+    await p.deployOnce();        // backoff window — no immediate retry
+    expect(derivationReads()).toBe(1);
+    t += 61_000;                 // past the first 60s backoff step
+    await p.deployOnce();
+    expect(derivationReads()).toBe(2);
   });
 });

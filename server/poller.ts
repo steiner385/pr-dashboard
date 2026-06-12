@@ -4,6 +4,7 @@ import { RateLimitError } from './github';
 import type { ClientRouter } from './client-router';
 import type { HistoryStore, MergedPrRecord } from './history';
 import type { DeployWatcher } from './deploy-watcher';
+import { ApiAncestry, type AncestryAnswer } from './ancestry';
 import { effectiveRepoSettings, effectiveDeployMap, type AppConfig, type DeployConfig, type RepoSettings } from './config';
 import { parseRepoConfig, REPO_CONFIG_PATH, type RepoFileConfig } from './repo-config';
 import type { WebhookRoute } from './webhooks';
@@ -225,6 +226,9 @@ export class Poller extends EventEmitter {
   private seenNotLive = new Set<string>();                // "repo#number/env" observed not-live here
   private ancestryCheckedAt = new Map<string, number>();  // "sha:deployedSha" → last check (ms)
   private inaccessibleOwners = new Set<string>();        // owners with repository-inaccessible evidence (process lifetime)
+  private warnedAncestryFallback = new Set<string>();    // repos whose api→clone ancestry fallback was logged (log once)
+  private ancestryViaApiLogged = new Set<string>();      // repos whose first compare-API ancestry answer was logged (log once)
+  private readonly apiAncestry: ApiAncestry;              // ancestrySource 'api' (the default)
   private warnedInaccessibleOwners = new Set<string>();   // owner-invisible diagnosability log fired (log once)
   private warnedUnknownOwners = new Set<string>();        // no-installation skip logged (once per owner per process)
   private staleSince: string | null = null;
@@ -241,6 +245,7 @@ export class Poller extends EventEmitter {
   constructor(private deps: PollerDeps) {
     super();
     this.now = deps.now ?? (() => new Date());
+    this.apiAncestry = new ApiAncestry(deps.router);
     this.restorePersisted();
   }
 
@@ -633,14 +638,16 @@ export class Poller extends EventEmitter {
     // In-repo config refresh shares this cycle (24h per-repo throttle inside) —
     // a repo that BECOMES a deploy repo via its file activates in the same pass.
     await this.refreshRepoConfigs();
+    // ci.yml re-derivation shares this cycle too (24h per-repo throttle inside).
+    await this.refreshDerivedGraphs();
     const now = this.now();
     // expire old throttle entries so the map stays bounded
     for (const [k, at] of this.ancestryCheckedAt) {
       if (now.getTime() - at > 10 * ANCESTRY_THROTTLE_MS) this.ancestryCheckedAt.delete(k);
     }
     for (const [repo, dc] of Object.entries(this.effectiveDeploy())) {
-      await deploy.ensureClone(repo, dc.cloneUrl).catch(() => {});
-      await this.maybeRederivePrefixes(repo, dc.defaultBranch);
+      // clones exist only in clone mode — api mode never creates one (issue #18)
+      if (config.ancestrySource === 'clone') await deploy.ensureClone(repo, dc.cloneUrl).catch(() => {});
       for (const env of dc.environments) {
         const sha = await deploy.health(env.healthUrl, env.shaKey);
         this.envShas.set(`${repo}/${env.name}`, sha);
@@ -649,13 +656,15 @@ export class Poller extends EventEmitter {
           if (rec.repo !== repo || !rec.mergeCommitSha) continue;
           const liveAt = env.name === 'qa' ? rec.qaLiveAt : rec.prodLiveAt;
           if (liveAt) continue;
-          // throttle per (sha, deployedSha): 'missing' answers trigger a git fetch
-          // inside isAncestor — re-asking every cycle would be a fetch storm
+          // Throttle per (sha, deployedSha), transport-agnostic: clone-mode
+          // 'missing' answers trigger a git fetch inside isAncestor (fetch
+          // storm without the throttle), api-mode answers each cost a REST
+          // request — re-asking every cycle would burn rate-limit budget.
           const throttleKey = `${rec.mergeCommitSha}:${sha}`;
           const lastChecked = this.ancestryCheckedAt.get(throttleKey);
           if (lastChecked != null && now.getTime() - lastChecked < ANCESTRY_THROTTLE_MS) continue;
           this.ancestryCheckedAt.set(throttleKey, now.getTime());
-          const anc = await deploy.isAncestor(repo, rec.mergeCommitSha, sha);
+          const anc = await this.checkAncestry(repo, rec.mergeCommitSha, sha);
           const key = `${repo}#${rec.number}`;
           const envKey = `${key}/${env.name}`;
           if (anc === 'missing') this.propagating.add(key);
@@ -676,6 +685,34 @@ export class Poller extends EventEmitter {
       }
     }
     this.emitUpdate();
+  }
+
+  /**
+   * Ancestry dispatch (issue #18): 'clone' mode goes straight to the local bare
+   * clone; 'api' mode (the default) asks the compare API, falling back to a
+   * PRE-EXISTING clone for this evaluation when the API call fails
+   * transport-wise (once-logged per repo). Without a clone the error propagates
+   * to the caller's existing failure handling (runCycle containment).
+   */
+  private async checkAncestry(repo: string, sha: string, deployedSha: string): Promise<AncestryAnswer> {
+    const { deploy, config } = this.deps;
+    if (config.ancestrySource === 'clone') return deploy.isAncestor(repo, sha, deployedSha);
+    try {
+      const answer = await this.apiAncestry.isAncestor(repo, sha, deployedSha);
+      if (!this.ancestryViaApiLogged.has(repo)) {
+        this.ancestryViaApiLogged.add(repo);
+        console.log(`[deploy] ${repo}: ancestry via compare API (no local clone needed)`);
+      }
+      return answer;
+    } catch (e) {
+      if (e instanceof RateLimitError) throw e; // budget exhausted — pause, don't hammer git either
+      if (!deploy.hasClone(repo)) throw e;
+      if (!this.warnedAncestryFallback.has(repo)) {
+        this.warnedAncestryFallback.add(repo);
+        console.warn(`[deploy] ${repo}: compare-API ancestry failed — falling back to the local clone: ${describeError(e)}`);
+      }
+      return deploy.isAncestor(repo, sha, deployedSha);
+    }
   }
 
   // ---- in-repo .pr-dashboard.yml --------------------------------------------
@@ -902,32 +939,91 @@ export class Poller extends EventEmitter {
     return this.derivedPrefixes.get(repo);
   }
 
-  /** Deploy-cycle re-derivation: refresh the clone and re-read ci.yml at most
-   *  once per 24h — armed ONLY when the read succeeds. A failed fetch/read arms
-   *  a capped exponential backoff (1m..10m) so later deploy cycles retry.
+  /** Repos whose ci.yml graph is worth deriving. Clone mode: deploy repos only
+   *  (derivation reads the bare clone). Api mode (blob read — issue #18):
+   *  additionally every repo with an instance `repos.*` entry or an in-repo
+   *  `.pr-dashboard.yml` — explicit configuration opts a non-deploy repo in
+   *  (deriving for EVERY watched repo would guess a 'ci' rollup that may not
+   *  exist and pollute classification for unconfigured repos). */
+  private derivationRepos(): Set<string> {
+    const repos = new Set<string>(Object.keys(this.effectiveDeploy()));
+    if (this.deps.config.ancestrySource === 'clone') return repos;
+    for (const repo of Object.keys(this.deps.config.repos ?? {})) repos.add(repo);
+    for (const repo of this.repoFileConfigs.keys()) repos.add(repo);
+    return repos;
+  }
+
+  /** Derive/refresh the ci.yml graph for every derivation-eligible repo, at most
+   *  once per repo per 24h (failure → capped backoff). Runs at startup
+   *  (index.ts) and on every deploy cycle. */
+  async refreshDerivedGraphs(): Promise<void> {
+    const deployMap = this.effectiveDeploy();
+    for (const repo of [...this.derivationRepos()].sort()) {
+      if (this.deps.config.exclude.includes(repo)) continue;
+      await this.maybeRederivePrefixes(repo, deployMap[repo]?.defaultBranch);
+    }
+  }
+
+  /** Re-read + re-derive a repo's ci.yml at most once per 24h — armed ONLY when
+   *  the read succeeds. A failed fetch/read arms a capped exponential backoff
+   *  (1m..10m) so later deploy cycles retry.
    *
-   *  Inaccessible-repo ≠ removed-file holds here by construction (audited with
-   *  the 2026-06-11 blob-path incident): an inaccessible repo makes the git
-   *  fetch THROW (failure path → keep prior graph + backoff), while a missing
-   *  ci.yml reads as null (keep prior graph) — nothing ever deletes the
-   *  persisted `ciGraph:<repo>` copy. */
-  private async maybeRederivePrefixes(repo: string, branch: string): Promise<void> {
+   *  Clone mode reads the bare clone (ensure + fetch + show); api mode reads a
+   *  GraphQL blob — no clone involved (issue #18).
+   *
+   *  Inaccessible-repo ≠ removed-file holds in both transports (audited with
+   *  the 2026-06-11 blob-path incident): an inaccessible repo THROWS (clone
+   *  mode: the git fetch fails; api mode: the null-repository partial-errors
+   *  shape is re-thrown below) → failure path keeps the prior graph + backoff,
+   *  while a missing ci.yml reads as null (keep prior graph) — nothing ever
+   *  deletes the persisted `ciGraph:<repo>` copy. */
+  private async maybeRederivePrefixes(repo: string, branch?: string): Promise<void> {
     if (!this.deriveThrottle.due(repo, this.now().getTime())) return;
+    const settings = this.settingsFor(repo);
     try {
-      const settings = this.settingsFor(repo);
-      await this.deps.deploy.fetchClone(repo);
-      const text = await this.deps.deploy.readFileAtHead(repo, settings.workflowPath, branch);
+      const text = this.deps.config.ancestrySource === 'clone'
+        ? await this.readWorkflowViaClone(repo, settings.workflowPath, branch ?? 'main')
+        : await this.readWorkflowViaBlob(repo, settings.workflowPath, branch);
+      if (text === undefined) return; // owner has no installation — config mismatch, no backoff (mirrors refreshRepoConfigs)
       this.deriveThrottle.success(repo, this.now().getTime());
       const graph = text != null ? deriveCiGraph(text, settings.rollupJobId) : null;
       // null = unreadable/unparseable: keep prior prefixes/graph (and the persisted
       // copy) — but never silently: this path arms the 24h throttle.
       if (graph) this.adoptDerivedGraph(repo, graph);
-      else console.warn(`[poller] ${repo}: ${settings.workflowPath} ${text == null ? `not readable at ${branch}` : 'unparseable'} — keeping prior derived graph (next attempt in 24h)`);
+      else console.warn(`[poller] ${repo}: ${settings.workflowPath} ${text == null ? `not readable at ${branch ?? 'HEAD'}` : 'unparseable'} — keeping prior derived graph (next attempt in 24h)`);
     } catch (e) {
       // best-effort: config/derived-so-far prefixes keep working
       this.deriveThrottle.failure(repo, this.now().getTime());
       console.warn(`[poller] ${repo}: ci.yml derivation failed — will retry with backoff: ${describeError(e)}`);
     }
+  }
+
+  /** Clone-mode workflow read: ensure the bare clone exists (deploy repos
+   *  carry a cloneUrl), refresh it, and read the file at the branch tip. */
+  private async readWorkflowViaClone(repo: string, path: string, branch: string): Promise<string | null> {
+    const dc = this.effectiveDeploy()[repo];
+    if (dc) await this.deps.deploy.ensureClone(repo, dc.cloneUrl);
+    await this.deps.deploy.fetchClone(repo);
+    return this.deps.deploy.readFileAtHead(repo, path, branch);
+  }
+
+  /** Api-mode workflow read: GraphQL blob query (the `.pr-dashboard.yml`
+   *  mechanism — no clone needed; works for non-deploy repos too).
+   *  `undefined` = no client covers the owner (caller skips, no throttle);
+   *  `null` = repo resolved but the file is absent at the branch. */
+  private async readWorkflowViaBlob(repo: string, path: string, branch?: string): Promise<string | null | undefined> {
+    const [owner, name] = repo.split('/');
+    const client = this.routedClient(owner ?? '');
+    if (!client) return undefined;
+    const data = await client.graphql<{ repository?: { object?: { text?: unknown } | null } | null }>(
+      buildBlobQuery(owner ?? '', name ?? '', `${branch ?? 'HEAD'}:${path}`));
+    if (data?.repository == null) {
+      // partial-errors shape: the token cannot see the repo — NOT file-removed
+      this.noteInaccessibleRepo(repo);
+      throw new Error('repository inaccessible (token cannot see it?)');
+    }
+    const text = data.repository.object?.text;
+    return typeof text === 'string' ? text : null;
   }
 
   // ---- state assembly -----------------------------------------------------
