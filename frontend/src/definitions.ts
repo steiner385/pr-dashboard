@@ -106,6 +106,16 @@ export const METRIC_DEFINITIONS = {
   lintTimeout: { label: 'timeout',
     text: 'the job’s configured timeout-minutes; unset means GitHub’s 6h default' },
 
+  // ---- CI cost panel ----
+  costTotalMinutes: { label: 'runner-minutes',
+    text: 'total runner occupancy over the window — every job’s start→end span, all conclusions (a failed or cancelled job burned its runner too), attributed to the job’s runs-on pool' },
+  costPerMergedPr: { label: 'minutes / merged PR',
+    text: 'total runner-minutes ÷ PRs merged in the window — what one merge costs in CI runner time' },
+  costRetryBurden: { label: 'retry burden',
+    text: 'runner-minutes burned on run_attempt > 1 samples — re-runs after flakes, spot reclaims, or manual retries; pure waste relative to a clean first attempt' },
+  costPoolShare: { label: 'pool share',
+    text: 'this pool’s runner-minutes (and $, when costPerMinute is configured) over the window; an ‘a|b’ pool is a runs-on ternary — the chosen branch isn’t knowable' },
+
   // ---- merge velocity panel ----
   velocityMerged: { label: 'merged',
     text: 'PRs merged in the window (vs the previous equal-length window)' },

@@ -87,6 +87,12 @@ export interface AppConfig {
    *  separately). Unset → no filtering. Instance-config deploy entries are
    *  exempt (the operator wrote them). File-only — never PUT-writable. */
   deployUrlAllowlist?: string[];
+  /** CI cost attribution (issue #43): runner-pool label → $ per runner-minute.
+   *  Composite labels ('a|b' runs-on ternaries) and 'unknown' may be listed
+   *  explicitly; the 'default' key prices everything unlisted. Absent → the
+   *  CI cost panel reports minutes only. File-only — never PUT-writable
+   *  (money figures must come from the operator's file, not the browser). */
+  costPerMinute?: Record<string, number>;
   deploy: Record<string, DeployConfig>;
   repos?: Record<string, RepoConfig>;
   intervals: { sweepMs: number; hotMs: number; deployMs: number };
@@ -301,7 +307,7 @@ export type SafeConfigKey = (typeof SAFE_CONFIG_KEYS)[number];
 /** Instance-config keys surfaced read-only in the UI (file-only for security).
  *  `notifications` is not listed: its `enabled` flag is PUT-writable (see the
  *  SAFE_CONFIG_KEYS carve-out); the rest of the block remains file-only. */
-export const READ_ONLY_CONFIG_KEYS = ['tokenSource', 'apiUrl', 'port', 'app', 'ancestrySource'] as const;
+export const READ_ONLY_CONFIG_KEYS = ['tokenSource', 'apiUrl', 'port', 'app', 'ancestrySource', 'costPerMinute'] as const;
 
 const INTERVAL_KEYS = ['sweepMs', 'hotMs', 'deployMs'] as const;
 
@@ -563,6 +569,21 @@ export function loadConfig(path?: string): AppConfig {
         + '(exact or "*.suffix" wildcard)');
     }
     merged.deployUrlAllowlist = list.map((h: string) => h.trim().toLowerCase());
+  }
+  if (merged.costPerMinute !== undefined) {
+    const cpm: unknown = merged.costPerMinute;
+    if (!cpm || typeof cpm !== 'object' || Array.isArray(cpm)) {
+      throw new Error('config: costPerMinute must be an object mapping pool labels to $/minute '
+        + `(got ${JSON.stringify(cpm)})`);
+    }
+    for (const [pool, rate] of Object.entries(cpm)) {
+      // zero is a legitimate statement (a free/self-owned pool); negatives and
+      // non-finites are not money
+      if (typeof rate !== 'number' || !Number.isFinite(rate) || rate < 0) {
+        throw new Error(`config: costPerMinute["${pool}"] must be a finite number ≥ 0 `
+          + `(got ${JSON.stringify(rate)})`);
+      }
+    }
   }
   merged.deploy = Object.fromEntries(
     Object.entries(merged.deploy).map(([repo, dc]) => [repo, normalizeDeployConfig(repo, dc)]),

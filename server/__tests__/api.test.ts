@@ -152,7 +152,7 @@ describe('GET /api/config', () => {
     expect(res.status).toBe(200);
     expect(res.body.resolved.owners).toEqual(['acme']);
     expect(res.body.resolved.tokenSource).toBe('gh'); // the MODE string, never a token value
-    expect(res.body.readOnlyKeys).toEqual(['tokenSource', 'apiUrl', 'port', 'app', 'ancestrySource']);
+    expect(res.body.readOnlyKeys).toEqual(['tokenSource', 'apiUrl', 'port', 'app', 'ancestrySource', 'costPerMinute']);
     expect(res.body.sources).toEqual({
       configPath: '/srv/prdash/config.json',
       perField: { owners: 'file', retentionDays: 'default' },
@@ -491,7 +491,7 @@ const EMPTY_METRICS = (w: MetricsWindow, b: MetricsBucket): MetricsPayload =>
   ({ window: w, bucket: b, runnerWaits: [], queue: [], slowestJobs: [], velocity: [],
     leadTime: [], trends: [], calibration: [], flakiness: [], trainKillers: [],
     criticalPath: [], lint: [], regressions: [],
-    runnerPools: [], reclaims: [], concurrency: [] });
+    runnerPools: [], reclaims: [], concurrency: [], cost: [] });
 
 describe('GET /api/metrics', () => {
   function metricsApp() {

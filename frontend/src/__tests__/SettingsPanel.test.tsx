@@ -109,6 +109,24 @@ describe('SettingsPanel', () => {
     expect(screen.getByText(/file-only for security/i)).toBeInTheDocument();
   });
 
+  it('instance section: costPerMinute absent → labelled not configured (issue #43)', async () => {
+    render(<SettingsPanel open={true} onClose={() => {}} />);
+    expect(await screen.findByText(/not configured — CI cost reports minutes only/))
+      .toBeInTheDocument();
+  });
+
+  it('instance section: costPerMinute map renders read-only as pool → $/min (issue #43)', async () => {
+    const withCpm = { ...CONFIG, resolved: { ...CONFIG.resolved,
+      costPerMinute: { 'kindash-runner': 0.008, default: 0.01 } } };
+    fetchSpy.mockImplementation(async (url: unknown) =>
+      String(url) === '/api/repos'
+        ? mockFetchOk({ repos: [] })
+        : mockFetchOk(withCpm));
+    render(<SettingsPanel open={true} onClose={() => {}} />);
+    expect(await screen.findByText('kindash-runner: $0.008/min · default: $0.01/min'))
+      .toBeInTheDocument();
+  });
+
   it('renders per-repo read-only section with source tags', async () => {
     render(<SettingsPanel open={true} onClose={() => {}} />);
     expect((await screen.findAllByText('acme/widgets')).length).toBeGreaterThan(0);

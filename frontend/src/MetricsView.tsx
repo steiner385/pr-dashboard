@@ -64,6 +64,13 @@ function deltaText(stat: HeadlineStat): string | null {
 const fmtHours = (h: number): string => formatDur(h * 3600);
 const fmtCount = (v: number): string => String(Math.round(v));
 const fmtPct = (v: number): string => `${Math.round(v)}%`;
+/** Runner-minutes (issue #43): whole minutes ≥ 10, one decimal below. */
+const fmtMinutes = (m: number): string =>
+  m >= 10 ? `${Math.round(m)}m` : `${Math.round(m * 10) / 10}m`;
+const fmtDollars = (d: number): string => `$${d.toFixed(2)}`;
+
+/** Line colors for the per-pool cost series (cycled when pools outnumber them). */
+const POOL_COLORS = ['var(--accent)', 'var(--amber)', 'var(--purple)', 'var(--fail)', 'var(--done)'];
 
 /**
  * Calibration headline: signed median error → plain English. POSITIVE error
@@ -301,6 +308,7 @@ export function MetricsView({ now }: {
     if (!c.buckets.length) continue;
     concByRepo.set(c.repo, [...(concByRepo.get(c.repo) ?? []), c]);
   }
+  const costRepos = (payload.cost ?? []).filter((c) => c.pools.length > 0);
 
   return (
     <div className="metrics">
@@ -452,6 +460,59 @@ export function MetricsView({ now }: {
             </p>
           </div>
         ))}
+      </Panel>
+
+      <Panel title="CI cost" empty={costRepos.length === 0}
+        emptyText="no runner-minutes in window yet">
+        {costRepos.map((c) => {
+          const maxPoolMinutes = Math.max(...c.pools.map((pl) => pl.minutes));
+          const series: LineSeries[] = c.pools.map((pl, i) => ({
+            name: pl.pool, color: POOL_COLORS[i % POOL_COLORS.length]!,
+            points: align(axis, pl.buckets, (b) => b.minutes),
+          }));
+          return (
+            <div key={c.repo} className="metric-repo">
+              <h3>{c.repo}</h3>
+              <div className="metric-row">
+                <MetricStat label="runner-minutes" def={DEFS.costTotalMinutes}
+                  value={fmtMinutes(c.totalMinutes)}
+                  delta={c.totalDollars != null ? fmtDollars(c.totalDollars) : null} />
+                <MetricStat label="minutes / merged PR" def={DEFS.costPerMergedPr}
+                  value={c.minutesPerMergedPr != null ? fmtMinutes(c.minutesPerMergedPr) : '–'}
+                  delta={`${c.mergesInWindow} merge${c.mergesInWindow === 1 ? '' : 's'} in window`} />
+                <MetricStat label="retry burden" def={DEFS.costRetryBurden}
+                  value={fmtMinutes(c.retryMinutes)}
+                  delta={c.retryDollars != null ? fmtDollars(c.retryDollars) : null} />
+              </div>
+              <ul className="cost-pools">
+                {c.pools.map((pl) => (
+                  <li key={pl.pool} className="cost-pool" title={defTitle(DEFS.costPoolShare)}
+                    data-testid={`cost-pool-${c.repo}-${pl.pool}`}>
+                    <span className="metric-job-name">{pl.pool}</span>
+                    <span className="cost-pool-track" aria-hidden="true">
+                      <i className="cost-pool-bar"
+                        style={{ width: `${maxPoolMinutes > 0 ? (pl.minutes / maxPoolMinutes) * 100 : 0}%` }} />
+                    </span>
+                    <span className="cost-pool-value">
+                      {fmtMinutes(pl.minutes)}{pl.dollars != null ? ` (${fmtDollars(pl.dollars)})` : ''}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <ChartBlock label={`runner-minutes per ${noun} by pool`}>
+                <MultiLine series={series} kind={kind} format={fmtMinutes}
+                  label={`${c.repo} runner-minutes per ${noun} by pool`} />
+              </ChartBlock>
+              <p className="metric-note">
+                {c.totalDollars != null
+                  ? 'dollars = minutes × costPerMinute (file-only config; pool → $/min, ‘default’ fallback) — unpriced pools stay out of the $ totals. '
+                  : 'minutes only — set costPerMinute in config.json (pool → $/min, ‘default’ fallback) to see $. '}
+                retry burden = minutes on run_attempt &gt; 1 (re-runs after flakes,
+                spot reclaims, manual retries)
+              </p>
+            </div>
+          );
+        })}
       </Panel>
 
       <Panel title="Queue throughput" empty={queueRepos.length === 0}>

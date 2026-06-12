@@ -158,6 +158,8 @@ export class HistoryStore {
   // Fleet telemetry (issues #45/#47): pool-keyed waits + job intervals
   private readonly stmtSelectPoolWaitsSince: Database.Statement;
   private readonly stmtSelectIntervalsSince: Database.Statement;
+  // CI cost attribution (issue #43): runner-minute rows
+  private readonly stmtSelectCostRows: Database.Statement;
 
   constructor(path: string) {
     this.db = new Database(path);
@@ -434,6 +436,13 @@ export class HistoryStore {
     // FAILED job occupied a runner for its whole span just the same.
     this.stmtSelectIntervalsSince = this.db.prepare(
       `SELECT repo, check_name, event, started_at, completed_at, duration_secs
+       FROM check_durations WHERE completed_at >= ?
+       ORDER BY repo, completed_at`
+    );
+    // Cost attribution (issue #43): every conclusion counts — a failed or
+    // cancelled job occupied its runner for the whole span just the same.
+    this.stmtSelectCostRows = this.db.prepare(
+      `SELECT repo, check_name, started_at, completed_at, duration_secs, run_attempt
        FROM check_durations WHERE completed_at >= ?
        ORDER BY repo, completed_at`
     );
@@ -871,6 +880,24 @@ export class HistoryStore {
     }
     for (const events of out.values()) events.sort((a, b) => a.at.localeCompare(b.at));
     return out;
+  }
+
+  /** Runner-minute rows for cost attribution (issue #43): every conclusion at/
+   *  after `since` (completed_at filter), with the job's start time, duration
+   *  and workflow-run attempt. Pre-#47 rows (NULL started_at) derive
+   *  started = completed − duration, exactly like checkIntervalsSince. */
+  costRowsSince(since: string):
+    { repo: string; name: string; startedAt: string; durationSecs: number;
+      runAttempt: number | null }[] {
+    const rows = this.stmtSelectCostRows.all(since) as Record<string, unknown>[];
+    return rows.map((r) => {
+      const completedAt = r.completed_at as string;
+      const durationSecs = r.duration_secs as number;
+      const startedAt = (r.started_at as string | null)
+        ?? new Date(Date.parse(completedAt) - durationSecs * 1000).toISOString();
+      return { repo: r.repo as string, name: r.check_name as string,
+        startedAt, durationSecs, runAttempt: (r.run_attempt as number | null) ?? null };
+    });
   }
 
   /** SUCCESS check durations at/after `since` with full timestamps (bucketing happens in metrics). */

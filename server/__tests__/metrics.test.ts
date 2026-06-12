@@ -296,7 +296,7 @@ describe('computeMetrics: empty history', () => {
       window: '3d', bucket: 'hour',
       runnerWaits: [], queue: [], slowestJobs: [], velocity: [], leadTime: [], trends: [],
       calibration: [], flakiness: [], trainKillers: [], criticalPath: [], lint: [],
-      regressions: [], runnerPools: [], reclaims: [], concurrency: [],
+      regressions: [], runnerPools: [], reclaims: [], concurrency: [], cost: [],
     });
   });
 });
@@ -1114,5 +1114,13 @@ describe('computeMetrics: CI cost attribution (issue #43)', () => {
     expect(costMetrics(null, [], '3d')[0]!.totalMinutes).toBeCloseTo(20);
     // no rows at all → section empty
     expect(computeMetrics(new HistoryStore(':memory:'), '24h', 'hour', NOW).cost).toEqual([]);
+  });
+
+  it('excludes live foreign names — their spans are CI-lifecycle wall-clock, not runner time', () => {
+    job('unit-tests', '2026-06-11T10:00:00Z', 300);
+    job('ci-gate', '2026-06-11T10:00:00Z', 9000); // foreign rollup mirror (issue #61)
+    const m = computeMetrics(h, '24h', 'hour', NOW, [], () => 1, new Map(),
+      new Map([[REPO, new Set(['ci-gate'])]]), [], poolsFor, [], null);
+    expect(m.cost[0]!.totalMinutes).toBeCloseTo(5);
   });
 });

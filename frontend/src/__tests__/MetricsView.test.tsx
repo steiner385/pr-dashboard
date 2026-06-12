@@ -7,7 +7,7 @@ const EMPTY: MetricsPayload = {
   window: '3d', bucket: 'hour',
   runnerWaits: [], queue: [], slowestJobs: [], velocity: [], leadTime: [], trends: [],
   calibration: [], flakiness: [], trainKillers: [], criticalPath: [], lint: [],
-  regressions: [], runnerPools: [], reclaims: [], concurrency: [],
+  regressions: [], runnerPools: [], reclaims: [], concurrency: [], cost: [],
 };
 
 const H = (h: number): string => `2026-06-11T${String(h).padStart(2, '0')}`;
@@ -181,6 +181,20 @@ const PAYLOAD: MetricsPayload = {
     { repo: 'acme/widgets', pool: 'unknown', peak: 2, buckets: [
       { bucket: H(10), peak: 2 },
     ] },
+  ],
+  cost: [
+    { repo: 'acme/widgets', totalMinutes: 1234, totalDollars: 18.51,
+      retryMinutes: 96, retryDollars: 1.44,
+      mergesInWindow: 8, minutesPerMergedPr: 154.25,
+      pools: [
+        { pool: 'kindash-runner', minutes: 1000, dollars: 8, buckets: [
+          { bucket: H(8), minutes: 400 }, { bucket: H(9), minutes: 350 },
+          { bucket: H(10), minutes: 250 }] },
+        { pool: 'kindash-runner|kindash-ondemand', minutes: 200, dollars: 10, buckets: [
+          { bucket: H(10), minutes: 200 }] },
+        { pool: 'unknown', minutes: 34, dollars: null, buckets: [
+          { bucket: H(9), minutes: 34 }] },
+      ] },
   ],
 };
 
@@ -585,6 +599,65 @@ describe('MetricsView — workflow lint panel (issue #48 rule 1)', () => {
     const heading = await screen.findByRole('heading', { name: 'Workflow lint' });
     const panel = heading.closest('section')! as HTMLElement;
     expect(within(panel).getByText('no findings')).toBeInTheDocument();
+  });
+});
+
+describe('MetricsView — CI cost panel (issue #43)', () => {
+  const costPanel = async () => {
+    const heading = await screen.findByRole('heading', { name: 'CI cost' });
+    return heading.closest('section')! as HTMLElement;
+  };
+
+  it('renders the headline tiles with $ when costPerMinute is configured', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    const panel = await costPanel();
+    expect(within(panel).getByText('1234m')).toBeInTheDocument();
+    expect(within(panel).getByText('runner-minutes')).toBeInTheDocument();
+    expect(within(panel).getByText('$18.51')).toBeInTheDocument();
+    expect(within(panel).getByText('154m')).toBeInTheDocument(); // 154.25 minutes/PR
+    expect(within(panel).getByText('minutes / merged PR')).toBeInTheDocument();
+    expect(within(panel).getByText('8 merges in window')).toBeInTheDocument();
+    expect(within(panel).getByText('96m')).toBeInTheDocument(); // retry burden
+    expect(within(panel).getByText('$1.44')).toBeInTheDocument();
+  });
+
+  it('lists pool share bars: composite and unknown pools, $ only when priced', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    const panel = await costPanel();
+    const runner = within(panel).getByTestId('cost-pool-acme/widgets-kindash-runner');
+    expect(within(runner).getByText('1000m ($8.00)')).toBeInTheDocument();
+    const composite = within(panel)
+      .getByTestId('cost-pool-acme/widgets-kindash-runner|kindash-ondemand');
+    expect(within(composite).getByText('200m ($10.00)')).toBeInTheDocument();
+    // the unknown pool carries no rate → minutes only, no $
+    const unknown = within(panel).getByTestId('cost-pool-acme/widgets-unknown');
+    expect(within(unknown).getByText('34m')).toBeInTheDocument();
+    expect(within(unknown).queryByText(/\$/)).not.toBeInTheDocument();
+  });
+
+  it('minutes-only mode: without costPerMinute every $ disappears and the note says how to enable it', async () => {
+    const minutesOnly: MetricsPayload = {
+      ...PAYLOAD,
+      cost: PAYLOAD.cost!.map((c) => ({
+        ...c, totalDollars: null, retryDollars: null,
+        pools: c.pools.map((pl) => ({ ...pl, dollars: null })),
+      })),
+    };
+    mockFetchOk(minutesOnly);
+    render(<MetricsView now={NOW} />);
+    const panel = await costPanel();
+    expect(within(panel).getByText('1234m')).toBeInTheDocument();
+    expect(within(panel).queryByText(/\$\d/)).not.toBeInTheDocument();
+    expect(within(panel).getByText(/set costPerMinute in config\.json/)).toBeInTheDocument();
+  });
+
+  it("empty state reads 'no runner-minutes in window yet'", async () => {
+    mockFetchOk(EMPTY);
+    render(<MetricsView now={NOW} />);
+    const panel = await costPanel();
+    expect(within(panel).getByText('no runner-minutes in window yet')).toBeInTheDocument();
   });
 });
 

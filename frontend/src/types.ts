@@ -186,6 +186,9 @@ export interface AppConfig {
   port: number;
   ancestrySource: 'api' | 'clone';
   notifications: NotificationsConfig;
+  /** CI cost attribution (issue #43): pool label → $ per runner-minute
+   *  ('default' prices unlisted pools). File-only; absent = minutes only. */
+  costPerMinute?: Record<string, number>;
 }
 
 /** Which config layer a per-repo setting value came from. */
@@ -349,4 +352,16 @@ export interface MetricsPayload {
    *  in v1 — the fleet cap isn't known to the dashboard. */
   concurrency: { repo: string; pool: string; peak: number;
     buckets: { bucket: string; peak: number }[] }[];
+  /** CI cost attribution (issue #43): runner-minutes per repo by runs-on pool
+   *  ('a|b' = composite ternary label; 'unknown' = unmappable). Every
+   *  conclusion counts; rows attribute to the bucket they STARTED in. Dollar
+   *  figures are null unless the operator configured the file-only
+   *  costPerMinute map (pool → $/min, 'default' fallback); a pool without a
+   *  rate carries null dollars and stays out of the $ totals. retry* = the
+   *  run_attempt > 1 subset. Optional to tolerate pre-upgrade payloads. */
+  cost?: { repo: string; totalMinutes: number; totalDollars: number | null;
+    retryMinutes: number; retryDollars: number | null;
+    mergesInWindow: number; minutesPerMergedPr: number | null;
+    pools: { pool: string; minutes: number; dollars: number | null;
+      buckets: { bucket: string; minutes: number }[] }[] }[];
 }

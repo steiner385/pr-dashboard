@@ -483,6 +483,15 @@ export function SettingsPanel({ open, onClose, returnFocusRef, connected }: Sett
                 <dd><code>{config.resolved.port}</code></dd>
                 <dt>ancestrySource</dt>
                 <dd><code>{config.resolved.ancestrySource}</code></dd>
+                <dt>costPerMinute</dt>
+                <dd>
+                  <code title="pool label → $ per runner-minute ('default' prices unlisted pools) — drives the CI cost panel's $ figures; file-only">
+                    {config.resolved.costPerMinute
+                      ? Object.entries(config.resolved.costPerMinute)
+                        .map(([pool, rate]) => `${pool}: $${rate}/min`).join(' · ')
+                      : '(not configured — CI cost reports minutes only)'}
+                  </code>
+                </dd>
                 <dt>config file</dt>
                 <dd><code>{config.sources.configPath}</code></dd>
               </dl>

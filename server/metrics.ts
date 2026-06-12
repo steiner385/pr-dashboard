@@ -152,6 +152,22 @@ export interface MetricsPayload {
    *  draw the cap line. `peak` is the window-wide maximum. */
   concurrency: { repo: string; pool: string; peak: number;
     buckets: { bucket: string; peak: number }[] }[];
+  /** CI cost attribution (issue #43): runner-minutes per repo, split by the
+   *  job's runs-on pool (composite 'a|b' = a runs-on ternary attributed to the
+   *  composite label; 'unknown' = unmappable). Every conclusion counts — a
+   *  failed/cancelled job burned its runner just the same; a row is in-window
+   *  when it STARTED in-window (buckets key on start time). Dollars come from
+   *  the file-only `costPerMinute` config (pool label → $/min, 'default'
+   *  fallback): a pool without a rate carries null dollars and stays out of
+   *  the $ totals (a documented undercount); every $ figure is null when the
+   *  map is absent. retry* = the subset on run_attempt > 1 samples (the retry
+   *  burden). minutesPerMergedPr = totalMinutes ÷ PRs merged in the window
+   *  (null at zero merges). Repos with no rows in-window are omitted. */
+  cost: { repo: string; totalMinutes: number; totalDollars: number | null;
+    retryMinutes: number; retryDollars: number | null;
+    mergesInWindow: number; minutesPerMergedPr: number | null;
+    pools: { pool: string; minutes: number; dollars: number | null;
+      buckets: { bucket: string; minutes: number }[] }[] }[];
 }
 
 /** Lead-time segment ids, in pipeline order (issue #44). */
@@ -330,7 +346,8 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
   foreignNames: Map<string, Set<string>> = new Map(),
   activeRegressions: { repo: string; checks: DurationRegressionView[] }[] = [],
   poolsFor: (repo: string, name: string) => string[] | null = () => null,
-  poolHealth: { repo: string; pools: PoolHealthView[] }[] = []): MetricsPayload {
+  poolHealth: { repo: string; pools: PoolHealthView[] }[] = [],
+  costPerMinute: Record<string, number> | null = null): MetricsPayload {
   const dropped = new Set(exclude);
   const keep = <T extends { repo: string }>(rows: T[]): T[] =>
     dropped.size ? rows.filter((r) => !dropped.has(r.repo)) : rows;
@@ -715,7 +732,54 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
       return [{ repo, pool, peak: Math.max(...buckets.map((b) => b.peak)), buckets }];
     });
 
+  // 15. CI cost attribution (issue #43): runner-minutes by pool over rows
+  // that STARTED in-window (numeric compare — derived startedAt carries
+  // milliseconds, so string compare against `since` would mis-order). Foreign
+  // names are excluded like in the lint/critical-path joins (issue #61): their
+  // durations are CI-lifecycle wall-clock spans, not runner occupancy.
+  const minutesOf = (rows: { durationSecs: number }[]): number =>
+    rows.reduce((s, r) => s + r.durationSecs, 0) / 60;
+  const rateFor = (pool: string): number | null =>
+    costPerMinute == null ? null : costPerMinute[pool] ?? costPerMinute['default'] ?? null;
+  const costRows = keep(history.costRowsSince(since)).filter((r) =>
+    Date.parse(r.startedAt) >= sinceMs && !foreignNames.get(r.repo)?.has(r.name));
+  const cost = [...groupBy(costRows, (r) => r.repo)]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([repo, rows]) => {
+      const byPool = groupBy(rows, (r) => poolKeyOf(repo, r.name));
+      const pools = [...byPool]
+        .map(([pool, rs]) => {
+          const minutes = minutesOf(rs);
+          const rate = rateFor(pool);
+          return {
+            pool, minutes,
+            dollars: rate != null ? minutes * rate : null,
+            buckets: [...groupBy(rs, (r) => key(r.startedAt))]
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([b, brs]) => ({ bucket: b, minutes: minutesOf(brs) })),
+          };
+        })
+        .sort((a, b) => b.minutes - a.minutes || a.pool.localeCompare(b.pool));
+      const totalMinutes = pools.reduce((s, pl) => s + pl.minutes, 0);
+      // priced pools only — null dollars contribute nothing, never fabricate
+      const totalDollars = costPerMinute == null ? null
+        : pools.reduce((s, pl) => s + (pl.dollars ?? 0), 0);
+      const retryRows = rows.filter((r) => r.runAttempt != null && r.runAttempt > 1);
+      const retryMinutes = minutesOf(retryRows);
+      const retryDollars = costPerMinute == null ? null
+        : [...groupBy(retryRows, (r) => poolKeyOf(repo, r.name))].reduce((s, [pool, rs]) => {
+          const rate = rateFor(pool);
+          return rate != null ? s + minutesOf(rs) * rate : s;
+        }, 0);
+      const mergesInWindow = (mergedByRepo.get(repo) ?? []).length;
+      return {
+        repo, totalMinutes, totalDollars, retryMinutes, retryDollars, mergesInWindow,
+        minutesPerMergedPr: mergesInWindow > 0 ? totalMinutes / mergesInWindow : null,
+        pools,
+      };
+    });
+
   return { window, bucket, runnerWaits, queue, slowestJobs, velocity, leadTime, trends,
     calibration, flakiness, trainKillers, criticalPath, lint, regressions,
-    runnerPools, reclaims, concurrency };
+    runnerPools, reclaims, concurrency, cost };
 }
