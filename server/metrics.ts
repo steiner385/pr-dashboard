@@ -1,5 +1,5 @@
 import { FLAKE_MIN_RUNS, type HistoryStore } from './history';
-import type { DurationRegressionView } from './poller';
+import type { DurationRegressionView, PoolHealthView } from './poller';
 import { percentile } from './math';
 import { activeForEvent, type CiGraphNode } from './required-checks';
 import { matchingPrefix } from './estimator/classify';
@@ -123,6 +123,35 @@ export interface MetricsPayload {
    *  (GitHub's 360m default). Window-independent, like criticalPath. Repos
    *  with zero findings are omitted (the UI's empty state reads 'no findings'). */
   lint: { repo: string; findings: LintFinding[] }[];
+  /** Per-pool runner telemetry (issue #45): like runnerWaits but keyed by the
+   *  job's runs-on POOL instead of the trigger event (the event-keyed section
+   *  stays — they answer different questions). Pool keys come from ingestion:
+   *  a runs-on ternary's candidates are stored JOINED ('a|b' is ONE composite
+   *  pool — the chosen branch is unknowable from the rollup); only rows
+   *  ingested after #45 carry a pool. The three health fields are the live
+   *  starvation snapshot from the server's hourly scan (null until the first
+   *  scan evaluates the pool) — window-independent, like regressions. */
+  runnerPools: { repo: string; pool: string; p50: HeadlineStat;
+    buckets: { bucket: string; p50: number; p90: number; n: number }[];
+    lastHourP90Secs: number | null; baselineP90Secs: number | null;
+    starving: boolean }[];
+  /** Spot-reclaim ledger (issue #46): infra-kill events per repo — a CANCELLED
+   *  check at attempt N whose sha later carries a SUCCESS of the same check at
+   *  a higher attempt (deliberately disjoint from flakes, which are
+   *  FAILING-class). `byPool` joins each event's check onto its runs-on pool
+   *  via the derived graph ('unknown' when unmappable). Repos with zero
+   *  events in the window are omitted. */
+  reclaims: { repo: string; total: number;
+    perBucket: { bucket: string; count: number }[];
+    byPool: { pool: string; count: number }[] }[];
+  /** Concurrency demand curve (issue #47): per repo×pool, the PEAK number of
+   *  simultaneously-running jobs within each bucket — a sweep-line over the
+   *  stored job intervals (started_at..completed_at; pre-#47 rows derive
+   *  started = completed − duration). No fleet-cap overlay in v1: the cap is
+   *  not knowable by the dashboard — follow-up is a per-pool config knob to
+   *  draw the cap line. `peak` is the window-wide maximum. */
+  concurrency: { repo: string; pool: string; peak: number;
+    buckets: { bucket: string; peak: number }[] }[];
 }
 
 /** Lead-time segment ids, in pipeline order (issue #44). */
@@ -244,6 +273,51 @@ const OFF_PATH_CAP = 10;
 export const LINT_MIN_RUNS = 5;
 
 /**
+ * Sweep-line bucket peaks (issue #47): given job occupancy intervals, the
+ * PEAK number of simultaneously-running jobs within each bucket of the
+ * [sinceMs, nowMs) window. Intervals are clipped to the window; an interval
+ * spanning a bucket with no start/end events inside it still raises that
+ * bucket's level (the carried level is applied to every bucket the constant
+ * span overlaps). Boundary rule: an interval ending exactly when another
+ * starts does NOT count as concurrent (ends sort before starts).
+ * Buckets with peak 0 are omitted (sparse, like every other series).
+ */
+export function sweepBucketPeaks(intervals: { startMs: number; endMs: number }[],
+  sinceMs: number, nowMs: number, bucket: MetricsBucket): { bucket: string; peak: number }[] {
+  const stepMs = bucket === 'hour' ? 3600_000 : 86400_000;
+  const keyOf = (ms: number): string =>
+    new Date(ms).toISOString().slice(0, bucket === 'hour' ? 13 : 10);
+  const events: { t: number; delta: number }[] = [];
+  for (const iv of intervals) {
+    const start = Math.max(iv.startMs, sinceMs);
+    const end = Math.min(iv.endMs, nowMs);
+    if (!(end > start)) continue; // empty/inverted after clipping (or NaN)
+    events.push({ t: start, delta: +1 }, { t: end, delta: -1 });
+  }
+  // ends before starts at the same instant — back-to-back ≠ concurrent
+  events.sort((a, b) => a.t - b.t || a.delta - b.delta);
+  const peaks = new Map<string, number>();
+  let cur = 0;
+  let prevT = sinceMs;
+  const mark = (from: number, to: number, level: number): void => {
+    if (level <= 0 || !(to > from)) return;
+    // every bucket the constant-level span [from, to) overlaps
+    for (let b = Math.floor(from / stepMs) * stepMs; b < to; b += stepMs) {
+      const k = keyOf(b);
+      if ((peaks.get(k) ?? 0) < level) peaks.set(k, level);
+    }
+  };
+  for (const e of events) {
+    mark(prevT, e.t, cur);
+    cur += e.delta;
+    prevT = e.t;
+  }
+  mark(prevT, nowMs, cur); // cur is 0 here (every interval was closed), but keep the shape honest
+  return [...peaks].sort(([a], [b]) => a.localeCompare(b))
+    .map(([b, peak]) => ({ bucket: b, peak }));
+}
+
+/**
  * Compute the full metrics payload for one (window, bucket) pair — a single
  * pass over the local SQLite history per section, computed on request (no
  * caching). Sections with headline deltas read 2× the window and split at the
@@ -254,7 +328,9 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
   batchSizeFor: (repo: string) => number = () => 1,
   ciGraphs: Map<string, Map<string, CiGraphNode>> = new Map(),
   foreignNames: Map<string, Set<string>> = new Map(),
-  activeRegressions: { repo: string; checks: DurationRegressionView[] }[] = []): MetricsPayload {
+  activeRegressions: { repo: string; checks: DurationRegressionView[] }[] = [],
+  poolsFor: (repo: string, name: string) => string[] | null = () => null,
+  poolHealth: { repo: string; pools: PoolHealthView[] }[] = []): MetricsPayload {
   const dropped = new Set(exclude);
   const keep = <T extends { repo: string }>(rows: T[]): T[] =>
     dropped.size ? rows.filter((r) => !dropped.has(r.repo)) : rows;
@@ -577,6 +653,69 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
   const regressions = activeRegressions
     .filter((r) => !dropped.has(r.repo) && r.checks.length > 0);
 
+  // 12. Per-pool runner telemetry (issue #45): runnerWaits' shape, pool-keyed.
+  // Only ingestion-labeled rows participate (the pool column is NULL on
+  // pre-#45 history). The live health snapshot from the poller's hourly scan
+  // joins on (repo, pool); pools the scan hasn't evaluated yet carry nulls.
+  const healthByKey = new Map<string, PoolHealthView>();
+  for (const ph of poolHealth) {
+    for (const p2 of ph.pools) healthByKey.set(`${ph.repo}${SEP}${p2.pool}`, p2);
+  }
+  const pw = splitWindow(keep(history.runnerPoolWaitsSince(prevSince)), (r) => r.at, since);
+  const pwPrevByKey = groupBy(pw.prev, (r) => `${r.repo}${SEP}${r.pool}`);
+  const runnerPools = [...groupBy(pw.cur, (r) => `${r.repo}${SEP}${r.pool}`)]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, rows]) => {
+      const [repo, pool] = k.split(SEP) as [string, string];
+      const prevRows = pwPrevByKey.get(k) ?? [];
+      const health = healthByKey.get(k);
+      return {
+        repo, pool,
+        p50: p50Stat(rows.map((r) => r.waitSecs), prevRows.map((r) => r.waitSecs)),
+        buckets: bucketPercentiles(rows.map((r) => ({ at: r.at, value: r.waitSecs })), key),
+        lastHourP90Secs: health?.lastHourP90Secs ?? null,
+        baselineP90Secs: health?.baselineP90Secs ?? null,
+        starving: health?.starving ?? false,
+      };
+    });
+
+  // 13. Spot-reclaim ledger (issue #46): events from the sha+attempt data,
+  // bucketed for the trend chart and joined onto pools via the derived graph.
+  const poolKeyOf = (repo: string, name: string): string => {
+    const pools = poolsFor(repo, name);
+    return pools?.length ? pools.join('|') : 'unknown';
+  };
+  const reclaims = [...history.reclaimEventsByRepo(since)]
+    .filter(([repo]) => !dropped.has(repo))
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([repo, events]) => ({
+      repo,
+      total: events.length,
+      perBucket: bucketCounts(events.map((e) => e.at), key),
+      byPool: [...groupBy(events, (e) => poolKeyOf(repo, e.name))]
+        .map(([pool, evs]) => ({ pool, count: evs.length }))
+        .sort((a, b) => b.count - a.count || a.pool.localeCompare(b.pool)),
+    }))
+    .filter((r) => r.total > 0);
+
+  // 14. Concurrency demand curve (issue #47): sweep-line peaks over the job
+  // intervals completing in-window, per repo×pool. Cancelled/failed jobs
+  // count — they occupied a runner for their whole span.
+  const nowMs = now.getTime();
+  const sinceMs = nowMs - windowMs;
+  const concurrency = [...groupBy(keep(history.checkIntervalsSince(since)),
+    (r) => `${r.repo}${SEP}${poolKeyOf(r.repo, r.name)}`)]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .flatMap(([k, rows]) => {
+      const [repo, pool] = k.split(SEP) as [string, string];
+      const buckets = sweepBucketPeaks(rows.map((r) => ({
+        startMs: Date.parse(r.startedAt), endMs: Date.parse(r.completedAt) })),
+      sinceMs, nowMs, bucket);
+      if (!buckets.length) return [];
+      return [{ repo, pool, peak: Math.max(...buckets.map((b) => b.peak)), buckets }];
+    });
+
   return { window, bucket, runnerWaits, queue, slowestJobs, velocity, leadTime, trends,
-    calibration, flakiness, trainKillers, criticalPath, lint, regressions };
+    calibration, flakiness, trainKillers, criticalPath, lint, regressions,
+    runnerPools, reclaims, concurrency };
 }

@@ -289,6 +289,18 @@ export function MetricsView({ now }: {
   // ?? []: tolerate a pre-upgrade server payload while the SPA is newer
   const leadTimeRepos = payload.leadTime ?? [];
   const regressionRepos = (payload.regressions ?? []).filter((r) => r.checks.length);
+  // Fleet telemetry (issues #45/#46/#47) — same pre-upgrade tolerance
+  const poolsByRepo = new Map<string, typeof payload.runnerPools>();
+  for (const rp of payload.runnerPools ?? []) {
+    if (!rp.buckets.length && !rp.starving) continue;
+    poolsByRepo.set(rp.repo, [...(poolsByRepo.get(rp.repo) ?? []), rp]);
+  }
+  const reclaimRepos = (payload.reclaims ?? []).filter((r) => r.total > 0);
+  const concByRepo = new Map<string, typeof payload.concurrency>();
+  for (const c of payload.concurrency ?? []) {
+    if (!c.buckets.length) continue;
+    concByRepo.set(c.repo, [...(concByRepo.get(c.repo) ?? []), c]);
+  }
 
   return (
     <div className="metrics">
@@ -367,6 +379,72 @@ export function MetricsView({ now }: {
                   label={`${repo} ${tier.event} runner wait p50/p90 per ${noun}`} />
               </ChartBlock>
             ))}
+          </div>
+        ))}
+      </Panel>
+
+      <Panel title="Runner pools" empty={poolsByRepo.size === 0}
+        emptyText="no pool-labeled waits yet — samples label from new runs onward">
+        {[...poolsByRepo.entries()].map(([repo, pools]) => (
+          <div key={repo} className="metric-repo">
+            <h3>{repo}</h3>
+            <div className="metric-row">
+              {pools.map((rp) => (
+                <MetricStat key={rp.pool} label={`${rp.pool} p50 wait`}
+                  value={rp.p50.value != null ? formatDur(rp.p50.value) : '–'}
+                  delta={deltaText(rp.p50)} />
+              ))}
+            </div>
+            {pools.map((rp) => (
+              <div key={rp.pool}>
+                <ChartBlock label={`${rp.pool} wait per ${noun}`}>
+                  <BandSeries points={alignBand(axis, rp.buckets)} kind={kind}
+                    format={formatDur}
+                    label={`${repo} ${rp.pool} runner wait p50/p90 per ${noun}`} />
+                </ChartBlock>
+                {(rp.lastHourP90Secs != null || rp.baselineP90Secs != null) && (
+                  <p className={rp.starving ? 'metric-note pool-starving' : 'metric-note'}
+                    data-testid={`pool-health-${repo}-${rp.pool}`}>
+                    {rp.starving && <strong>⚠ STARVING — </strong>}
+                    last-hour p90 {rp.lastHourP90Secs != null ? formatDur(rp.lastHourP90Secs) : '–'}
+                    {' '}vs 7d baseline p90 {rp.baselineP90Secs != null ? formatDur(rp.baselineP90Secs) : '–'}
+                  </p>
+                )}
+              </div>
+            ))}
+            <p className="metric-note">
+              pickup waits keyed by the job&rsquo;s runs-on pool (an &lsquo;a|b&rsquo;
+              pool is a runs-on ternary — the chosen branch isn&rsquo;t knowable).
+              The starvation alert enters at p90 &gt; max(5min, 4× the 7d
+              baseline) with ≥5 samples/hour and clears below 2×
+            </p>
+          </div>
+        ))}
+      </Panel>
+
+      <Panel title="Concurrency demand" empty={concByRepo.size === 0}
+        emptyText="no job intervals in window yet">
+        {[...concByRepo.entries()].map(([repo, pools]) => (
+          <div key={repo} className="metric-repo">
+            <h3>{repo}</h3>
+            <div className="metric-row">
+              {pools.map((c) => (
+                <MetricStat key={c.pool} label={`${c.pool} window peak`}
+                  value={String(c.peak)} />
+              ))}
+            </div>
+            {pools.map((c) => (
+              <ChartBlock key={c.pool} label={`${c.pool} peak concurrent jobs per ${noun}`}>
+                <AreaSeries points={align(axis, c.buckets, (b) => b.peak)} kind={kind}
+                  format={fmtCount}
+                  label={`${repo} ${c.pool} peak concurrent jobs per ${noun}`} />
+              </ChartBlock>
+            ))}
+            <p className="metric-note">
+              peak simultaneous jobs per {noun}, swept from observed check
+              intervals — no fleet-cap overlay yet (the cap isn&rsquo;t known to
+              the dashboard; follow-up: a per-pool cap config knob)
+            </p>
           </div>
         ))}
       </Panel>
@@ -471,6 +549,40 @@ export function MetricsView({ now }: {
             <p className="metric-note">
               flake = failed then passed on the same commit (re-run, no new push) —
               min 5 runs per job
+            </p>
+          </div>
+        ))}
+      </Panel>
+
+      <Panel title="Spot reclaims" empty={reclaimRepos.length === 0}
+        emptyText="no reclaim events in window">
+        {reclaimRepos.map((r) => (
+          <div key={r.repo} className="metric-repo">
+            <h3>{r.repo}</h3>
+            <div className="metric-row">
+              <MetricStat label="reclaim events" value={String(r.total)} />
+            </div>
+            <ChartBlock label={`reclaims per ${noun}`}>
+              <AreaSeries points={alignCounts(axis, r.perBucket)} kind={kind}
+                format={fmtCount} populated={r.perBucket.length}
+                label={`${r.repo} spot-reclaim events per ${noun}`} />
+            </ChartBlock>
+            <table className="metric-table">
+              <thead><tr><th>pool</th><th>events</th></tr></thead>
+              <tbody>
+                {r.byPool.map((bp) => (
+                  <tr key={bp.pool}>
+                    <td className="metric-job-name">{bp.pool}</td>
+                    <td>{bp.count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="metric-note">
+              reclaim = a CANCELLED check whose commit passed the same check at
+              a later attempt — an infra kill (spot reclaim), not a verdict.
+              The Gantt marks live ones &lsquo;↻ re-run in progress — do
+              nothing&rsquo;
             </p>
           </div>
         ))}

@@ -149,7 +149,8 @@ async function main() {
       }
       await backfillRepo(repoClient, history, repo, 5, (n) => poller.needsFor(repo, n),
         (p, e) => poller.needActiveFor(repo, p, e), poller.graphKeysFor(repo),
-        poller.rollupWorkflowFor(repo), (n) => poller.timeoutMinutesFor(repo, n))
+        poller.rollupWorkflowFor(repo), (n) => poller.timeoutMinutesFor(repo, n),
+        (n) => poller.poolsFor(repo, n))
         .catch((e) => console.warn(`backfill ${repo}: ${e}`));
     }
     history.setMeta('backfilled', new Date().toISOString());
@@ -177,7 +178,8 @@ async function main() {
     },
     metrics: (window, bucket) => computeMetrics(history, window, bucket, new Date(),
       poller.currentExclude(), (repo) => poller.settingsFor(repo).batchSize,
-      poller.allDerivedGraphs(), poller.liveForeignNames(), poller.activeRegressions()),
+      poller.allDerivedGraphs(), poller.liveForeignNames(), poller.activeRegressions(),
+      (repo, name) => poller.poolsFor(repo, name), poller.poolHealth()),
     repos: () => poller.repoToggleList(),
     webhooks: webhookSecret != null ? {
       path: config.webhooks.path,

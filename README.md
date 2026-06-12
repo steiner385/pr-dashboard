@@ -229,12 +229,14 @@ The poller already detects every alert-worthy transition; the notifier layer
 | `prod-live` | a merged PR's commit becomes prod ancestry ("shipped") | on |
 | `queue-stalled` | a repo's merge queue enters dispatch-stall (repo-level) | on |
 | `duration-regression` | a check's recent p50 steps up persistently — recent 10-run median ≥ 1.5× the prior 20-run median AND +60s (repo-level; hourly scan, issue #41) | on |
+| `runner-starvation` | a runner pool's last-hour pickup-wait p90 exceeds max(5min, 4× its 7-day baseline p90) with ≥5 samples (repo-level; hourly scan, issue #45) | on |
 
 **Debounce:** one notification per (PR, event type) while the condition holds;
 if the condition clears (e.g. the failing check is retried green) and later
 re-enters, it fires again. `prod-live` fires once per PR per process lifetime.
 Repo-level types debounce per repo (`queue-stalled`) or per (repo, check,
-event) (`duration-regression` — clears when the ratio drops below 1.2).
+event) (`duration-regression` — clears when the ratio drops below 1.2) or per
+(repo, pool) (`runner-starvation` — hysteresis clears below 2× baseline).
 
 ### Sink A — host command (`notifications` in config.json, file-only)
 
@@ -244,7 +246,8 @@ event) (`duration-regression` — clears when the ratio drops below 1.2).
   "command": ["notify-send", "{title}", "{body}"],
   "events": { "ci-failed": true, "group-failed": true, "queue-blocked": true,
               "ready": false, "overdue": false, "prod-live": true,
-              "queue-stalled": true, "duration-regression": true }
+              "queue-stalled": true, "duration-regression": true,
+              "runner-starvation": true }
 }
 ```
 

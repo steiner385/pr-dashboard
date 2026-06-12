@@ -41,6 +41,11 @@ function timeText(c: CheckView, kind: RowKind): string {
     case 'done': return elapsed ? `${elapsed} ✓` : '✓';
     case 'failed': {
       const base = elapsed ? `${elapsed} ✗` : '✗';
+      // spot-reclaim marker (issue #46): a CANCELLED check whose sha already
+      // has a newer attempt running/queued — codifies "never manually retrigger"
+      if (c.conclusion === 'CANCELLED' && c.rerunInProgress) {
+        return `${base} · ↻ re-run in progress — likely spot reclaim, do nothing`;
+      }
       return c.likelyFlake ? base + flakeText(c) : base;
     }
     case 'skipped': return '–';

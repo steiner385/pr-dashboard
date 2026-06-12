@@ -22,6 +22,7 @@ import { classifyQueueHealth, type GroupBuildTelemetry, type QueueHealthState } 
 import { classifyWait, extractRunnerWaits, type NeedActivePredicate } from './estimator/waits';
 import { measureDurationStep, flagsRegression, holdsRegression, regressionDetail,
   REGRESSION_MIN_SAMPLES } from './estimator/regression';
+import { evaluateStarvation, nextStarving, starvationDetail } from './estimator/starvation';
 import { countMergeTrains } from './trains';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -46,6 +47,11 @@ export interface CheckView {
   regressed: boolean;
   /** The step's numbers when `regressed` (badge tooltip); null otherwise. */
   regression: DurationRegressionInfo | null;
+  /** Spot-reclaim ledger (issue #46): true for a CANCELLED check whose sha has
+   *  a NEWER attempt of the same check running/queued in the same rollup — the
+   *  Gantt's '↻ re-run in progress — likely spot reclaim, do nothing' marker
+   *  (codifies the never-manually-retrigger rule). */
+  rerunInProgress: boolean;
 }
 
 /** The measured step behind an active duration regression (issue #41). */
@@ -99,6 +105,12 @@ export function maxPlausibleSuccessSecs(timeoutMinutes: number | null): number {
  * Shared check-set ingestion (detail fetch, group-rollup fetch, backfill):
  * records completed-check durations AND runner-pickup wait samples derived from
  * the needs graph (wait = startedAt − max(needed completedAt), no extra API calls).
+ *
+ * `poolFor` (issue #45): the job's runner-pool label candidates (poolsFor
+ * semantics). Each wait sample stores the candidates JOINED with '|' — a
+ * runs-on ternary's actually-chosen branch is unknowable from the rollup, so
+ * the composite string IS the pool key ('kindash-runner|kindash-ondemand' is
+ * one pool dimension, not two). Null/empty → pool NULL (unknown).
  */
 export function ingestCheckSet(history: HistoryStore, repo: string, checks: CheckRun[],
   needsFor: (canonicalName: string) => string[] | null,
@@ -106,7 +118,8 @@ export function ingestCheckSet(history: HistoryStore, repo: string, checks: Chec
   graphKeys: readonly string[] | null = null,
   rollupWorkflowName: string | null = null,
   headSha: string | null = null,
-  timeoutMinutesFor: (canonicalName: string) => number | null = () => null): void {
+  timeoutMinutesFor: (canonicalName: string) => number | null = () => null,
+  poolFor: (canonicalName: string) => string[] | null = () => null): void {
   for (const c of checks) {
     if (c.status === 'COMPLETED') {
       // Plausibility guard (issue #61): a SUCCESS span exceeding the job's own
@@ -133,7 +146,9 @@ export function ingestCheckSet(history: HistoryStore, repo: string, checks: Chec
     }
   }
   for (const s of extractRunnerWaits(checks, needsFor, activeFor, graphKeys, rollupWorkflowName)) {
-    history.recordRunnerWait(repo, s.name, s.event, s.waitSecs, s.startedAt);
+    const pools = poolFor(s.name);
+    history.recordRunnerWait(repo, s.name, s.event, s.waitSecs, s.startedAt,
+      pools?.length ? pools.join('|') : null);
   }
 }
 
@@ -177,6 +192,43 @@ export function ingestGroupFailures(history: HistoryStore, repo: string,
     history.recordGroupFailure(repo, c.name, groupSha, c.completedAt);
   }
 }
+/**
+ * Spot-reclaim live marker (issue #46): a CANCELLED check whose SHA already
+ * has a newer-attempt check running/queued in the same rollup —
+ * `re-run-on-spot-cancel` (or a human) already re-triggered, so the right
+ * action is NOTHING. Detection is sha-level (any same-event check at a higher
+ * run_attempt), not same-name: dedupeChecks collapses a re-created same-name
+ * check into its family, so the surviving evidence of an in-flight re-run is
+ * usually a SIBLING check at attempt N+1. Null attempts never match (no
+ * false "do nothing" advice on old data).
+ */
+export function rerunInProgressFor(c: CheckRun, all: CheckRun[]): boolean {
+  if (c.status !== 'COMPLETED' || c.conclusion !== 'CANCELLED' || c.runAttempt == null) return false;
+  return all.some((d) => d !== c && d.event === c.event
+    && d.status !== 'COMPLETED'
+    && d.runAttempt != null && d.runAttempt > c.runAttempt!);
+}
+
+/** Pool-starvation scan cadence (issue #45) shares the hourly trigger with the
+ *  duration-regression scan — see maybeRunHourlyScans. */
+const STARVATION_BASELINE_MS = 7 * 86400_000;
+const STARVATION_LAST_HOUR_MS = 3600_000;
+
+/** One evaluated (repo, pool)'s live starvation state — metrics `runnerPools`
+ *  joins this onto the window-bucketed series ("current p90 vs baseline"). */
+export interface PoolHealthView {
+  pool: string;
+  /** p90 pickup wait over the last hour's samples; null with none. */
+  lastHourP90Secs: number | null;
+  /** p90 over the prior 7 days (excluding the last hour); null with none. */
+  baselineP90Secs: number | null;
+  /** Last-hour sample count. */
+  n: number;
+  /** Starvation alert currently active (entered at 4× baseline / 5min floor,
+   *  clears below 2× — see estimator/starvation.ts). */
+  starving: boolean;
+}
+
 /** Which config layer a per-repo setting value came from (GET /api/config). */
 export type SettingSource = 'override' | 'in-repo' | 'derived' | 'default';
 export interface RepoSettingsReport {
@@ -374,7 +426,8 @@ export class Poller extends EventEmitter {
   private inaccessibleOwners = new Set<string>();        // owners with repository-inaccessible evidence (process lifetime)
   private flakeRateCache = new Map<string, { at: number; rates: Map<string, number> }>(); // repo → name\0event → ratePct (#37)
   private durationRegressions = new Map<string, Map<string, DurationRegressionView>>(); // repo → name\0event → active step (#41)
-  private lastRegressionScanAt = 0;                       // epoch ms of the last regression scan (#41)
+  private poolStarvation = new Map<string, Map<string, PoolHealthView>>(); // repo → pool → live health (#45)
+  private lastHourlyScanAt = 0;                           // epoch ms of the last hourly scan pass (#41/#45)
   private warnedAncestryFallback = new Set<string>();    // repos whose api→clone ancestry fallback was logged (log once)
   private ancestryViaApiLogged = new Set<string>();      // repos whose first compare-API ancestry answer was logged (log once)
   private readonly apiAncestry: ApiAncestry;              // ancestrySource 'api' (the default)
@@ -740,7 +793,7 @@ export class Poller extends EventEmitter {
         ingestCheckSet(history, repo, snap.checks, (n) => this.needsFor(repo, n),
           (p, e) => this.needActiveFor(repo, p, e), this.graphKeysFor(repo),
           this.rollupWorkflowFor(repo), snap.headSha || null,
-          (n) => this.timeoutMinutesFor(repo, n));
+          (n) => this.timeoutMinutesFor(repo, n), (n) => this.poolsFor(repo, n));
       }
     }
   }
@@ -789,7 +842,7 @@ export class Poller extends EventEmitter {
             ingestCheckSet(this.deps.history, repo, checks, (n) => this.needsFor(repo, n),
               (p, e) => this.needActiveFor(repo, p, e), this.graphKeysFor(repo),
               this.rollupWorkflowFor(repo), commit.oid as string,
-              (n) => this.timeoutMinutesFor(repo, n));
+              (n) => this.timeoutMinutesFor(repo, n), (n) => this.poolsFor(repo, n));
             // failed-group attribution (#38): maybeRecordGroupRun skips failed
             // groups (their wall-clock would skew medians) — culprits record here
             ingestGroupFailures(this.deps.history, repo, commit.oid as string, checks);
@@ -859,9 +912,9 @@ export class Poller extends EventEmitter {
         }
       }
     }
-    // Duration-regression scan (issue #41) rides this cycle with its own
-    // hourly throttle — local SQLite only, no API budget involved.
-    this.maybeScanRegressions();
+    // Hourly scans (duration regressions #41, pool starvation #45) ride this
+    // cycle with a shared hourly throttle — local SQLite only, no API budget.
+    this.maybeRunHourlyScans();
     this.emitUpdate();
   }
 
@@ -1864,6 +1917,7 @@ export class Poller extends EventEmitter {
         regressed: reg != null,
         regression: reg ? { priorP50Secs: reg.priorP50Secs, recentP50Secs: reg.recentP50Secs,
           ratio: reg.ratio, sinceApprox: reg.sinceApprox } : null,
+        rerunInProgress: rerunInProgressFor(c, checks),
       };
     });
   }
@@ -1898,13 +1952,15 @@ export class Poller extends EventEmitter {
     return rates;
   }
 
-  /** Hourly trigger for the duration-regression scan (issue #41) — rides the
-   *  deploy cycle, so the effective cadence is max(deployMs, 1h). */
-  private maybeScanRegressions(): void {
+  /** Hourly trigger for the duration-regression scan (issue #41) and the
+   *  pool-starvation scan (issue #45) — rides the deploy cycle, so the
+   *  effective cadence is max(deployMs, 1h). */
+  private maybeRunHourlyScans(): void {
     const nowMs = this.now().getTime();
-    if (nowMs - this.lastRegressionScanAt < REGRESSION_SCAN_INTERVAL_MS) return;
-    this.lastRegressionScanAt = nowMs;
+    if (nowMs - this.lastHourlyScanAt < REGRESSION_SCAN_INTERVAL_MS) return;
+    this.lastHourlyScanAt = nowMs;
     this.scanDurationRegressions();
+    this.scanRunnerStarvation();
   }
 
   /**
@@ -1971,6 +2027,69 @@ export class Poller extends EventEmitter {
         repo,
         checks: [...byCheck.values()].sort((a, b) =>
           a.check.localeCompare(b.check) || a.event.localeCompare(b.event)),
+      }));
+  }
+
+  /**
+   * One pool-starvation scan (issue #45): read the last 7 days of pool-labeled
+   * pickup waits, split each (repo, pool) series at now−1h, and evaluate the
+   * starvation thresholds (estimator/starvation.ts — enter at p90 >
+   * max(5min, 4× the 7d baseline p90) with ≥5 last-hour samples; hysteresis
+   * holds an active alert until p90 falls below 2×). Rebuilds the live
+   * poolHealth cache and feeds the notifier, which debounces one
+   * 'runner-starvation' event per (repo, pool) episode.
+   */
+  scanRunnerStarvation(): void {
+    const { history, config } = this.deps;
+    const nowMs = this.now().getTime();
+    const since = new Date(nowMs - STARVATION_BASELINE_MS).toISOString();
+    const hourAgo = new Date(nowMs - STARVATION_LAST_HOUR_MS).toISOString();
+    const byPool = new Map<string, { repo: string; pool: string; lastHour: number[]; baseline: number[] }>();
+    for (const r of history.runnerPoolWaitsSince(since)) {
+      if (config.exclude.includes(r.repo)) continue;
+      const k = `${r.repo}\u0000${r.pool}`;
+      let g = byPool.get(k);
+      if (!g) byPool.set(k, g = { repo: r.repo, pool: r.pool, lastHour: [], baseline: [] });
+      (r.at >= hourAgo ? g.lastHour : g.baseline).push(r.waitSecs);
+    }
+    const next = new Map<string, Map<string, PoolHealthView>>();
+    let starvingCount = 0;
+    for (const g of byPool.values()) {
+      const e = evaluateStarvation(g.lastHour, g.baseline);
+      const wasStarving = this.poolStarvation.get(g.repo)?.get(g.pool)?.starving ?? false;
+      const starving = nextStarving(e, wasStarving);
+      if (starving) starvingCount++;
+      let repoMap = next.get(g.repo);
+      if (!repoMap) next.set(g.repo, repoMap = new Map());
+      repoMap.set(g.pool, { pool: g.pool, lastHourP90Secs: e.lastHourP90,
+        baselineP90Secs: e.baselineP90, n: e.n, starving });
+      this.deps.notifier?.runnerStarvation(g.repo, g.pool, starving,
+        starving ? starvationDetail(g.pool, e) : '');
+    }
+    // pools that left the evaluated set entirely (no samples in 7d, repo
+    // excluded): clear the notifier debounce so a returning episode re-fires
+    for (const [repo, repoMap] of this.poolStarvation) {
+      for (const pool of repoMap.keys()) {
+        if (!next.get(repo)?.has(pool)) {
+          this.deps.notifier?.runnerStarvation(repo, pool, false, '');
+        }
+      }
+    }
+    this.poolStarvation = next;
+    if (byPool.size > 0) {
+      console.log(`[starvation] scanned ${byPool.size} repo×pool series — `
+        + `${starvingCount} starving`);
+    }
+  }
+
+  /** Live pool-health snapshot per repo (sorted) — the metrics payload's
+   *  `runnerPools` section joins this onto its window-bucketed series. */
+  poolHealth(): { repo: string; pools: PoolHealthView[] }[] {
+    return [...this.poolStarvation]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([repo, byPool]) => ({
+        repo,
+        pools: [...byPool.values()].sort((a, b) => a.pool.localeCompare(b.pool)),
       }));
   }
 

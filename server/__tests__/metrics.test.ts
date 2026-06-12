@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { HistoryStore } from '../history';
-import { computeMetrics, resolveMetricsQuery, METRICS_WINDOWS, WINDOW_DAYS } from '../metrics';
+import { computeMetrics, resolveMetricsQuery, sweepBucketPeaks, METRICS_WINDOWS, WINDOW_DAYS } from '../metrics';
 
 const REPO = 'acme/widgets';
 const NOW = new Date('2026-06-11T12:00:00Z');
@@ -296,7 +296,7 @@ describe('computeMetrics: empty history', () => {
       window: '3d', bucket: 'hour',
       runnerWaits: [], queue: [], slowestJobs: [], velocity: [], leadTime: [], trends: [],
       calibration: [], flakiness: [], trainKillers: [], criticalPath: [], lint: [],
-      regressions: [],
+      regressions: [], runnerPools: [], reclaims: [], concurrency: [],
     });
   });
 });
@@ -822,5 +822,187 @@ describe('computeMetrics: duration regressions (issue #41)', () => {
     const m = computeMetrics(h, '3d', 'hour', NOW, [], () => 1, new Map(), new Map(),
       [{ repo: REPO, checks: [] }]);
     expect(m.regressions).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fleet telemetry: runner pools (#45), spot reclaims (#46), concurrency (#47)
+// ---------------------------------------------------------------------------
+
+describe('computeMetrics: runner pools (issue #45)', () => {
+  it('buckets pool-labeled waits per repo×pool with p50/p90 + headline delta', () => {
+    // current window (24h): pool p1 waits 30/60; previous window: 10
+    h.recordRunnerWait(REPO, 'a', 'pull_request', 30, '2026-06-11T10:00:00Z', 'p1');
+    h.recordRunnerWait(REPO, 'b', 'merge_group', 60, '2026-06-11T10:30:00Z', 'p1');
+    h.recordRunnerWait(REPO, 'c', 'pull_request', 10, '2026-06-10T06:00:00Z', 'p1'); // prev window
+    h.recordRunnerWait(REPO, 'd', 'pull_request', 400, '2026-06-11T11:00:00Z', 'p2');
+    h.recordRunnerWait(REPO, 'legacy', 'pull_request', 999, '2026-06-11T11:00:00Z'); // no pool
+    const m = computeMetrics(h, '24h', 'hour', NOW);
+    expect(m.runnerPools.map((r) => [r.repo, r.pool])).toEqual([
+      [REPO, 'p1'], [REPO, 'p2']]);
+    const p1 = m.runnerPools[0]!;
+    expect(p1.p50.value).toBe(30);  // nearest-rank p50 of [30, 60]
+    expect(p1.p50.prev).toBe(10);
+    expect(p1.buckets.map((b) => b.bucket)).toEqual(['2026-06-11T10']);
+    expect(p1.buckets[0]!.n).toBe(2);
+    // the event-keyed section keeps the unlabeled sample — both views coexist
+    expect(m.runnerWaits.some((rw) => rw.event === 'pull_request')).toBe(true);
+  });
+
+  it('joins the live pool-health snapshot (current p90 vs baseline + starving)', () => {
+    h.recordRunnerWait(REPO, 'a', 'pull_request', 30, '2026-06-11T10:00:00Z', 'p1');
+    const m = computeMetrics(h, '24h', 'hour', NOW, [], () => 1, new Map(), new Map(), [],
+      () => null,
+      [{ repo: REPO, pools: [{ pool: 'p1', lastHourP90Secs: 1500,
+        baselineP90Secs: 60, n: 8, starving: true }] }]);
+    expect(m.runnerPools[0]).toMatchObject({
+      pool: 'p1', lastHourP90Secs: 1500, baselineP90Secs: 60, starving: true });
+  });
+
+  it('pools without a health snapshot carry nulls + starving:false', () => {
+    h.recordRunnerWait(REPO, 'a', 'pull_request', 30, '2026-06-11T10:00:00Z', 'p1');
+    const m = computeMetrics(h, '24h', 'hour', NOW);
+    expect(m.runnerPools[0]).toMatchObject({
+      lastHourP90Secs: null, baselineP90Secs: null, starving: false });
+  });
+
+  it('exclude filter applies', () => {
+    h.recordRunnerWait(REPO, 'a', 'pull_request', 30, '2026-06-11T10:00:00Z', 'p1');
+    expect(computeMetrics(h, '24h', 'hour', NOW, [REPO]).runnerPools).toEqual([]);
+  });
+});
+
+describe('computeMetrics: spot reclaims (issue #46)', () => {
+  const seedReclaim = (name: string, cancelledAt: string, sha = 'shaR') => {
+    h.recordCheckDuration(REPO, name, 'merge_group',
+      new Date(Date.parse(cancelledAt) - 60_000).toISOString(), cancelledAt,
+      'CANCELLED', sha, 1);
+    const okAt = new Date(Date.parse(cancelledAt) + 20 * 60_000).toISOString();
+    h.recordCheckDuration(REPO, name, 'merge_group',
+      new Date(Date.parse(okAt) - 60_000).toISOString(), okAt, 'SUCCESS', sha, 2);
+  };
+
+  it('counts events per bucket and splits by pool via poolsFor', () => {
+    seedReclaim('e2e', '2026-06-11T09:10:00Z');
+    seedReclaim('e2e', '2026-06-11T10:10:00Z', 'shaR2');
+    seedReclaim('mystery-job', '2026-06-11T10:20:00Z', 'shaR3');
+    const poolsFor = (_repo: string, name: string): string[] | null =>
+      name === 'e2e' ? ['kindash-runner', 'kindash-ondemand'] : null;
+    const m = computeMetrics(h, '24h', 'hour', NOW, [], () => 1, new Map(), new Map(), [],
+      poolsFor);
+    expect(m.reclaims).toHaveLength(1);
+    const r = m.reclaims[0]!;
+    expect(r.repo).toBe(REPO);
+    expect(r.total).toBe(3);
+    expect(r.perBucket).toEqual([
+      { bucket: '2026-06-11T09', count: 1 }, { bucket: '2026-06-11T10', count: 2 }]);
+    // ternary candidates joined; unmappable jobs land in 'unknown'
+    expect(r.byPool).toEqual([
+      { pool: 'kindash-runner|kindash-ondemand', count: 2 }, { pool: 'unknown', count: 1 }]);
+  });
+
+  it('a FAILURE→SUCCESS pair (a flake) produces no reclaim entry', () => {
+    h.recordCheckDuration(REPO, 'flaky', 'merge_group',
+      '2026-06-11T09:00:00Z', '2026-06-11T09:10:00Z', 'FAILURE', 'shaF', 1);
+    h.recordCheckDuration(REPO, 'flaky', 'merge_group',
+      '2026-06-11T09:20:00Z', '2026-06-11T09:30:00Z', 'SUCCESS', 'shaF', 2);
+    expect(computeMetrics(h, '24h', 'hour', NOW).reclaims).toEqual([]);
+  });
+
+  it('exclude filter applies', () => {
+    seedReclaim('e2e', '2026-06-11T09:10:00Z');
+    expect(computeMetrics(h, '24h', 'hour', NOW, [REPO]).reclaims).toEqual([]);
+  });
+});
+
+describe('sweepBucketPeaks (issue #47 — the sweep-line math)', () => {
+  const T = (hhmm: string): number => Date.parse(`2026-06-11T${hhmm}:00Z`);
+  const WIN = [T('00:00'), T('12:00')] as const;
+
+  it('overlapping intervals raise the peak; disjoint ones do not', () => {
+    const out = sweepBucketPeaks([
+      { startMs: T('09:00'), endMs: T('09:30') },
+      { startMs: T('09:10'), endMs: T('09:40') },  // overlaps the first → 2
+      { startMs: T('09:50'), endMs: T('09:55') },  // disjoint → still 2 max
+    ], WIN[0], WIN[1], 'hour');
+    expect(out).toEqual([{ bucket: '2026-06-11T09', peak: 2 }]);
+  });
+
+  it('back-to-back intervals (end == start) are NOT concurrent', () => {
+    const out = sweepBucketPeaks([
+      { startMs: T('09:00'), endMs: T('09:30') },
+      { startMs: T('09:30'), endMs: T('10:00') },
+    ], WIN[0], WIN[1], 'hour');
+    expect(out).toEqual([{ bucket: '2026-06-11T09', peak: 1 }]);
+  });
+
+  it('a long interval carries its level into buckets with no events', () => {
+    const out = sweepBucketPeaks([
+      { startMs: T('08:30'), endMs: T('11:30') }, // spans 09 and 10 without events
+    ], WIN[0], WIN[1], 'hour');
+    expect(out).toEqual([
+      { bucket: '2026-06-11T08', peak: 1 }, { bucket: '2026-06-11T09', peak: 1 },
+      { bucket: '2026-06-11T10', peak: 1 }, { bucket: '2026-06-11T11', peak: 1 }]);
+  });
+
+  it('per-bucket PEAK, not closing value: a burst inside the hour wins', () => {
+    const out = sweepBucketPeaks([
+      { startMs: T('09:00'), endMs: T('09:10') },
+      { startMs: T('09:05'), endMs: T('09:10') },
+      { startMs: T('09:05'), endMs: T('09:10') },  // 3 concurrent 09:05–09:10
+      { startMs: T('09:50'), endMs: T('09:59') },  // hour closes at 1
+    ], WIN[0], WIN[1], 'hour');
+    expect(out).toEqual([{ bucket: '2026-06-11T09', peak: 3 }]);
+  });
+
+  it('intervals are clipped to the window (no buckets before since / after now)', () => {
+    const out = sweepBucketPeaks([
+      { startMs: T('00:00') - 3 * 3600_000, endMs: T('01:30') }, // started pre-window
+    ], WIN[0], WIN[1], 'hour');
+    expect(out).toEqual([
+      { bucket: '2026-06-11T00', peak: 1 }, { bucket: '2026-06-11T01', peak: 1 }]);
+  });
+
+  it('day buckets aggregate the same way', () => {
+    const out = sweepBucketPeaks([
+      { startMs: Date.parse('2026-06-10T23:00:00Z'), endMs: Date.parse('2026-06-11T01:00:00Z') },
+      { startMs: Date.parse('2026-06-10T23:30:00Z'), endMs: Date.parse('2026-06-10T23:45:00Z') },
+    ], Date.parse('2026-06-09T12:00:00Z'), Date.parse('2026-06-11T12:00:00Z'), 'day');
+    expect(out).toEqual([
+      { bucket: '2026-06-10', peak: 2 }, { bucket: '2026-06-11', peak: 1 }]);
+  });
+
+  it('degenerate/inverted intervals are dropped', () => {
+    expect(sweepBucketPeaks([
+      { startMs: T('09:00'), endMs: T('09:00') },
+      { startMs: T('10:00'), endMs: T('09:00') },
+      { startMs: NaN, endMs: T('09:00') },
+    ], WIN[0], WIN[1], 'hour')).toEqual([]);
+  });
+});
+
+describe('computeMetrics: concurrency demand (issue #47)', () => {
+  it('sweeps stored intervals per repo×pool (unknown pool grouped separately)', () => {
+    // two overlapping pool-p1 jobs + one unmappable job
+    h.recordCheckDuration(REPO, 'unit', 'pull_request',
+      '2026-06-11T09:00:00Z', '2026-06-11T09:30:00Z', 'SUCCESS', 'sha1', 1);
+    h.recordCheckDuration(REPO, 'e2e', 'pull_request',
+      '2026-06-11T09:10:00Z', '2026-06-11T09:40:00Z', 'CANCELLED', 'sha1', 1); // counts too
+    h.recordCheckDuration(REPO, 'mystery', 'pull_request',
+      '2026-06-11T09:00:00Z', '2026-06-11T09:05:00Z', 'SUCCESS', 'sha1', 1);
+    const poolsFor = (_repo: string, name: string): string[] | null =>
+      name === 'mystery' ? null : ['p1'];
+    const m = computeMetrics(h, '24h', 'hour', NOW, [], () => 1, new Map(), new Map(), [],
+      poolsFor);
+    expect(m.concurrency.map((c) => [c.pool, c.peak])).toEqual([
+      ['p1', 2], ['unknown', 1]]);
+    const p1 = m.concurrency.find((c) => c.pool === 'p1')!;
+    expect(p1.buckets).toEqual([{ bucket: '2026-06-11T09', peak: 2 }]);
+  });
+
+  it('exclude filter applies', () => {
+    h.recordCheckDuration(REPO, 'unit', 'pull_request',
+      '2026-06-11T09:00:00Z', '2026-06-11T09:30:00Z', 'SUCCESS');
+    expect(computeMetrics(h, '24h', 'hour', NOW, [REPO]).concurrency).toEqual([]);
   });
 });

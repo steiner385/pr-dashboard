@@ -456,3 +456,41 @@ describe('CheckGantt — duration-regression badge (issue #41)', () => {
     expect(badge.title).toBe('duration regression');
   });
 });
+
+describe('CheckGantt — spot-reclaim re-run marker (issue #46)', () => {
+  const cancelled = (over: Partial<CheckView> = {}) =>
+    check({ name: 'spot-killed', conclusion: 'CANCELLED', elapsedSeconds: 120, ...over });
+
+  it('a CANCELLED row with rerunInProgress shows the ↻ do-nothing advice', () => {
+    render(<CheckGantt stage="ci" checks={[cancelled({ rerunInProgress: true })]} />);
+    expect(screen.getByText(/↻ re-run in progress — likely spot reclaim, do nothing/))
+      .toBeInTheDocument();
+  });
+
+  it('the row stays in the failed style (g-failed) — the marker never recolors it', () => {
+    const { container } = render(
+      <CheckGantt stage="ci" checks={[cancelled({ rerunInProgress: true })]} />);
+    expect(container.querySelector('.g-row')!.className).toContain('g-failed');
+  });
+
+  it('a CANCELLED row without the flag (or on a pre-upgrade payload) renders the plain ✗', () => {
+    render(<CheckGantt stage="ci" checks={[cancelled()]} />);
+    expect(screen.getByText('2m ✗')).toBeInTheDocument();
+    expect(screen.queryByText(/re-run in progress/)).toBeNull();
+  });
+
+  it('a FAILURE row never gets the marker even with the flag set (CANCELLED-only)', () => {
+    render(<CheckGantt stage="ci" checks={[
+      check({ name: 'real-fail', conclusion: 'FAILURE', elapsedSeconds: 120, rerunInProgress: true }),
+    ]} />);
+    expect(screen.queryByText(/re-run in progress/)).toBeNull();
+  });
+
+  it('the marker takes precedence over the flake annotation on a cancelled flaky row', () => {
+    render(<CheckGantt stage="ci" checks={[
+      cancelled({ rerunInProgress: true, likelyFlake: true, flakeRatePct: 40 }),
+    ]} />);
+    expect(screen.getByText(/re-run in progress/)).toBeInTheDocument();
+    expect(screen.queryByText(/likely flake, consider re-run/)).toBeNull();
+  });
+});

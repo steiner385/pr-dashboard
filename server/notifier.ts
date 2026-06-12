@@ -20,14 +20,14 @@ import type { StageResult } from './types';
 
 export const NOTIFICATION_EVENT_TYPES = [
   'ci-failed', 'group-failed', 'queue-blocked', 'ready', 'overdue', 'prod-live',
-  'queue-stalled', 'duration-regression',
+  'queue-stalled', 'duration-regression', 'runner-starvation',
 ] as const;
 export type NotificationEventType = (typeof NOTIFICATION_EVENT_TYPES)[number];
 
 /** Repo-level event types: prNumber 0, debounce keys outside the PR lifecycle
  *  (prune() must not touch them), and the rendered subject is the repo. */
 const REPO_LEVEL_TYPES: ReadonlySet<NotificationEventType> =
-  new Set(['queue-stalled', 'duration-regression']);
+  new Set(['queue-stalled', 'duration-regression', 'runner-starvation']);
 
 /** The `notifications` config block (file-only — never PUT-writable). */
 export interface NotificationsConfig {
@@ -47,8 +47,8 @@ export const DEFAULT_NOTIFICATIONS: NotificationsConfig = {
   command: ['notify-send', '{title}', '{body}'],
   events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
     ready: false, overdue: false, 'prod-live': true, 'queue-stalled': true,
-    // an alert type, not a status type — ON by default (issue #41)
-    'duration-regression': true },
+    // alert types, not status types — ON by default (issues #41/#45)
+    'duration-regression': true, 'runner-starvation': true },
 };
 
 /** One notification event — the SSE `notification` payload.
@@ -86,6 +86,7 @@ const LABELS: Record<NotificationEventType, string> = {
   'prod-live': 'live on prod',
   'queue-stalled': 'merge queue STALLED',
   'duration-regression': 'duration regression',
+  'runner-starvation': 'runner pool starving',
 };
 
 /** Render an event to the {title}/{body} strings both sinks display. */
@@ -98,8 +99,8 @@ export function renderNotification(ev: NotificationEvent): { title: string; body
   };
 }
 
-type StageEventType =
-  Exclude<NotificationEventType, 'prod-live' | 'queue-stalled' | 'duration-regression'>;
+type StageEventType = Exclude<NotificationEventType,
+  'prod-live' | 'queue-stalled' | 'duration-regression' | 'runner-starvation'>;
 
 interface Condition {
   /** Whether the condition holds for a classify result (drives debounce clearing). */
@@ -218,6 +219,25 @@ export class Notifier extends EventEmitter {
     this.fire({ repo, prNumber: 0, title: check, type: 'duration-regression', detail });
   }
 
+  /**
+   * Runner-starvation feed (issue #45): the poller's hourly scan reports every
+   * evaluated (repo, pool) with its current starving flag. Fires once per pool
+   * ENTRY; `starving=false` (hysteresis cleared, or the pool left the
+   * evaluated set) clears the debounce key, so a re-starved pool re-fires.
+   * Repo-level (prNumber 0) with the POOL as the title.
+   */
+  runnerStarvation(repo: string, pool: string, starving: boolean, detail: string): void {
+    // pool labels are operator-controlled but keep the NUL convention anyway
+    const key = `${repo}\u0000${pool}|runner-starvation`;
+    if (!starving) {
+      this.active.delete(key);
+      return;
+    }
+    if (this.active.has(key)) return; // already fired for this starvation episode
+    this.active.add(key);
+    this.fire({ repo, prNumber: 0, title: pool, type: 'runner-starvation', detail });
+  }
+
   /** The "shipped" signal: a merged PR's commit just became prod ancestry. */
   prodLive(repo: string, prNumber: number, title: string): void {
     const key = `${repo}#${prNumber}|prod-live`;
@@ -227,12 +247,13 @@ export class Notifier extends EventEmitter {
   }
 
   /** Drop debounce state for PRs no longer tracked (keys are `repo#number`).
-   *  Repo-level keys (`repo|queue-stalled`, `…|duration-regression`) are
-   *  exempt — they clear via their own feeds (queueHealth / the regression
-   *  scan), not via PR lifecycle. */
+   *  Repo-level keys (`repo|queue-stalled`, `…|duration-regression`,
+   *  `…|runner-starvation`) are exempt — they clear via their own feeds
+   *  (queueHealth / the hourly scans), not via PR lifecycle. */
   prune(livePrKeys: ReadonlySet<string>): void {
     for (const key of this.active) {
-      if (key.endsWith('|queue-stalled') || key.endsWith('|duration-regression')) continue;
+      if (key.endsWith('|queue-stalled') || key.endsWith('|duration-regression')
+        || key.endsWith('|runner-starvation')) continue;
       if (!livePrKeys.has(key.slice(0, key.lastIndexOf('|')))) this.active.delete(key);
     }
   }

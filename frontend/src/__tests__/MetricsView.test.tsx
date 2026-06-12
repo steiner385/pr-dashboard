@@ -7,7 +7,7 @@ const EMPTY: MetricsPayload = {
   window: '3d', bucket: 'hour',
   runnerWaits: [], queue: [], slowestJobs: [], velocity: [], leadTime: [], trends: [],
   calibration: [], flakiness: [], trainKillers: [], criticalPath: [], lint: [],
-  regressions: [],
+  regressions: [], runnerPools: [], reclaims: [], concurrency: [],
 };
 
 const H = (h: number): string => `2026-06-11T${String(h).padStart(2, '0')}`;
@@ -151,6 +151,35 @@ const PAYLOAD: MetricsPayload = {
         recentP50Secs: 600, ratio: 2.5, sinceApprox: '2026-06-09T14:00:00Z' },
       { check: 'unit-tests', event: 'pull_request', priorP50Secs: 120,
         recentP50Secs: 200, ratio: 1.67, sinceApprox: '2026-06-10T08:00:00Z' },
+    ] },
+  ],
+  runnerPools: [
+    { repo: 'acme/widgets', pool: 'kindash-runner', p50: { value: 45, prev: 20 },
+      buckets: [
+        { bucket: H(8), p50: 30, p90: 90, n: 5 },
+        { bucket: H(9), p50: 45, p90: 1200, n: 8 },
+        { bucket: H(10), p50: 50, p90: 1500, n: 6 },
+      ],
+      lastHourP90Secs: 1500, baselineP90Secs: 60, starving: true },
+    { repo: 'acme/widgets', pool: 'kindash-ondemand', p50: { value: 4, prev: 5 },
+      buckets: [{ bucket: H(10), p50: 4, p90: 9, n: 3 }],
+      lastHourP90Secs: 9, baselineP90Secs: 8, starving: false },
+  ],
+  reclaims: [
+    { repo: 'acme/widgets', total: 4,
+      perBucket: [
+        { bucket: H(8), count: 1 }, { bucket: H(9), count: 2 }, { bucket: H(10), count: 1 }],
+      byPool: [
+        { pool: 'kindash-runner', count: 3 },
+        { pool: 'unknown', count: 1 },
+      ] },
+  ],
+  concurrency: [
+    { repo: 'acme/widgets', pool: 'kindash-runner', peak: 18, buckets: [
+      { bucket: H(8), peak: 7 }, { bucket: H(9), peak: 18 }, { bucket: H(10), peak: 12 },
+    ] },
+    { repo: 'acme/widgets', pool: 'unknown', peak: 2, buckets: [
+      { bucket: H(10), peak: 2 },
     ] },
   ],
 };
@@ -702,5 +731,117 @@ describe('MetricsView — duration regressions strip (issue #41)', () => {
     render(<MetricsView now={NOW} />);
     const panel = await regPanel();
     expect(within(panel).getByText('none active')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fleet telemetry panels (issues #45/#46/#47)
+// ---------------------------------------------------------------------------
+
+describe('MetricsView — Runner pools panel (issue #45)', () => {
+  const poolPanel = async () => {
+    const heading = await screen.findByRole('heading', { name: 'Runner pools' });
+    return heading.closest('section')! as HTMLElement;
+  };
+
+  it('renders one stat + band chart per pool, with pool-keyed labels', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    const panel = await poolPanel();
+    expect(within(panel).getByText('kindash-runner p50 wait')).toBeInTheDocument();
+    expect(within(panel).getByText('kindash-ondemand p50 wait')).toBeInTheDocument();
+    expect(within(panel).getByLabelText(
+      'acme/widgets kindash-runner runner wait p50/p90 per hour')).toBeInTheDocument();
+  });
+
+  it('a starving pool shows the loud STARVING callout with current p90 vs baseline', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    const panel = await poolPanel();
+    const callout = within(panel).getByTestId('pool-health-acme/widgets-kindash-runner');
+    expect(callout.textContent).toContain('STARVING');
+    expect(callout.textContent).toContain('last-hour p90 25m');
+    expect(callout.textContent).toContain('baseline p90 1m');
+    expect(callout.className).toContain('pool-starving');
+  });
+
+  it('a healthy pool renders the quiet health line without the alarm class', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    const panel = await poolPanel();
+    const callout = within(panel).getByTestId('pool-health-acme/widgets-kindash-ondemand');
+    expect(callout.textContent).not.toContain('STARVING');
+    expect(callout.className).not.toContain('pool-starving');
+  });
+
+  it('empty state explains samples label from new runs onward; tolerates pre-upgrade payloads', async () => {
+    const { runnerPools: _drop, ...legacy } = EMPTY;
+    mockFetchOk(legacy as MetricsPayload);
+    render(<MetricsView now={NOW} />);
+    const panel = await poolPanel();
+    expect(within(panel).getByText(/no pool-labeled waits yet/)).toBeInTheDocument();
+  });
+});
+
+describe('MetricsView — Spot reclaims panel (issue #46)', () => {
+  const reclaimPanel = async () => {
+    const heading = await screen.findByRole('heading', { name: 'Spot reclaims' });
+    return heading.closest('section')! as HTMLElement;
+  };
+
+  it('renders the event count, trend chart, and by-pool mini-table', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    const panel = await reclaimPanel();
+    expect(within(panel).getByText('reclaim events')).toBeInTheDocument();
+    expect(within(panel).getByText('4')).toBeInTheDocument();
+    expect(within(panel).getByLabelText(
+      'acme/widgets spot-reclaim events per hour')).toBeInTheDocument();
+    const rows = within(panel).getAllByRole('row');
+    expect(rows.map((r) => r.textContent)).toEqual(
+      expect.arrayContaining(['poolevents', 'kindash-runner3', 'unknown1']));
+    expect(within(panel).getByText(/infra kill \(spot reclaim\), not a verdict/)).toBeInTheDocument();
+  });
+
+  it("empty state reads 'no reclaim events in window' (likely empty — that's good news)", async () => {
+    const { reclaims: _drop, ...legacy } = EMPTY;
+    mockFetchOk(legacy as MetricsPayload);
+    render(<MetricsView now={NOW} />);
+    const panel = await reclaimPanel();
+    expect(within(panel).getByText('no reclaim events in window')).toBeInTheDocument();
+  });
+});
+
+describe('MetricsView — Concurrency demand panel (issue #47)', () => {
+  const concPanel = async () => {
+    const heading = await screen.findByRole('heading', { name: 'Concurrency demand' });
+    return heading.closest('section')! as HTMLElement;
+  };
+
+  it('renders a window-peak stat and an area chart per pool', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    const panel = await concPanel();
+    const stat = within(panel).getByText('kindash-runner window peak')
+      .closest('.metric-stat')! as HTMLElement;
+    expect(within(stat).getByText('18')).toBeInTheDocument();
+    expect(within(panel).getByText('unknown window peak')).toBeInTheDocument();
+    expect(within(panel).getByLabelText(
+      'acme/widgets kindash-runner peak concurrent jobs per hour')).toBeInTheDocument();
+  });
+
+  it('the note flags the missing cap overlay as a known follow-up', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    const panel = await concPanel();
+    expect(within(panel).getByText(/no fleet-cap overlay yet/)).toBeInTheDocument();
+  });
+
+  it('empty state + pre-upgrade tolerance', async () => {
+    const { concurrency: _drop, ...legacy } = EMPTY;
+    mockFetchOk(legacy as MetricsPayload);
+    render(<MetricsView now={NOW} />);
+    const panel = await concPanel();
+    expect(within(panel).getByText('no job intervals in window yet')).toBeInTheDocument();
   });
 });

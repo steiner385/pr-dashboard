@@ -13,7 +13,7 @@ const ALL_ON: NotificationsConfig = {
   command: ['notify-send', '{title}', '{body}'],
   events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
     ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
-    'duration-regression': true },
+    'duration-regression': true, 'runner-starvation': true },
 };
 
 type ExecCall = { cmd: string; args: string[]; cb: (err: Error | null) => void };
@@ -193,7 +193,8 @@ describe('Notifier events config filtering', () => {
     expect(DEFAULT_NOTIFICATIONS.events).toEqual({
       'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
       ready: false, overdue: false, 'prod-live': true, 'queue-stalled': true,
-      'duration-regression': true, // an alert type — default ON (issue #41)
+      'duration-regression': true, // alert types — default ON (issue #41)
+      'runner-starvation': true,    // (issue #45)
     });
     const h = harness({ ...DEFAULT_NOTIFICATIONS, enabled: true });
     h.observe(stage('ci'), stage('ready', 'armed'));
@@ -419,5 +420,67 @@ describe('Notifier durationRegression', () => {
     expect(title).toBe('acme/widgets duration regression');
     expect(title).not.toContain('#0');
     expect(body).toBe(`build-test — ${DETAIL}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #45: repo-level runner-starvation events
+// ---------------------------------------------------------------------------
+
+describe('Notifier runnerStarvation', () => {
+  const DETAIL = "pool 'kindash-runner' pickup p90 25m over the last hour (7d baseline 40s, n=8) — capacity starvation likely";
+
+  it('fires once per (repo, pool) while the episode holds', () => {
+    const h = harness();
+    h.notifier.runnerStarvation('acme/widgets', 'kindash-runner', true, DETAIL);
+    h.notifier.runnerStarvation('acme/widgets', 'kindash-runner', true, DETAIL);
+    expect(h.events).toHaveLength(1);
+    expect(h.events[0]).toMatchObject({ repo: 'acme/widgets', prNumber: 0,
+      title: 'kindash-runner', type: 'runner-starvation', detail: DETAIL });
+  });
+
+  it('re-fires after the episode clears (hysteresis) and re-enters', () => {
+    const h = harness();
+    h.notifier.runnerStarvation('acme/widgets', 'kindash-runner', true, DETAIL);
+    h.notifier.runnerStarvation('acme/widgets', 'kindash-runner', false, '');
+    h.notifier.runnerStarvation('acme/widgets', 'kindash-runner', true, DETAIL);
+    expect(h.events.map((e) => e.type)).toEqual(['runner-starvation', 'runner-starvation']);
+  });
+
+  it('non-starving evaluations never fire', () => {
+    const h = harness();
+    h.notifier.runnerStarvation('acme/widgets', 'kindash-runner', false, '');
+    expect(h.events).toHaveLength(0);
+  });
+
+  it('debounce is keyed per (repo, pool) — pools fire separately', () => {
+    const h = harness();
+    h.notifier.runnerStarvation('acme/widgets', 'kindash-runner', true, DETAIL);
+    h.notifier.runnerStarvation('acme/widgets', 'kindash-ondemand', true, DETAIL);
+    h.notifier.runnerStarvation('octo/gizmos', 'kindash-runner', true, DETAIL);
+    expect(h.events).toHaveLength(3);
+  });
+
+  it('prune does not clear the debounce (repo-level key, no PR lifecycle)', () => {
+    const h = harness();
+    h.notifier.runnerStarvation('acme/widgets', 'kindash-runner', true, DETAIL);
+    h.notifier.prune(new Set());
+    h.notifier.runnerStarvation('acme/widgets', 'kindash-runner', true, DETAIL);
+    expect(h.events).toHaveLength(1);
+  });
+
+  it('events config can disable runner-starvation', () => {
+    const h = harness({ ...ALL_ON, events: { ...ALL_ON.events, 'runner-starvation': false } });
+    h.notifier.runnerStarvation('acme/widgets', 'kindash-runner', true, DETAIL);
+    expect(h.events).toHaveLength(0);
+    expect(h.execCalls).toHaveLength(0);
+  });
+
+  it('renderNotification titles the repo (never "repo#0"), body carries the pool + detail', () => {
+    const { title, body } = renderNotification({ repo: 'acme/widgets', prNumber: 0,
+      title: 'kindash-runner', type: 'runner-starvation', detail: DETAIL });
+    expect(title).toBe('acme/widgets runner pool starving');
+    expect(title).not.toContain('#0');
+    expect(body).toBe(`kindash-runner — ${DETAIL}`);
   });
 });

@@ -451,6 +451,9 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
 .regression-arrow { color: var(--amber); font-weight: 700; margin-right: 4px; }
 .regression-step { color: var(--muted); font-variant-numeric: tabular-nums; }
 .metric-note { font-size: 11px; color: var(--muted); font-style: italic; margin: 6px 0 0; }
+/* runner-pool starvation callout (#45): the live p90-vs-baseline line goes loud */
+.metric-note.pool-starving { color: var(--fail); font-style: normal; }
+.metric-note.pool-starving strong { font-weight: 700; }
 
 /* --- Critical path (#42): the expected path as a horizontal chain --- */
 .cp-chain { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px;

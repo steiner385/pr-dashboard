@@ -31,6 +31,10 @@ export interface CheckView {
   regressed?: boolean;
   /** The step behind the badge (tooltip numbers); null/absent when not regressed. */
   regression?: DurationRegressionInfo | null;
+  /** Spot-reclaim ledger (issue #46): a CANCELLED check whose sha has a newer
+   *  attempt running/queued — render '↻ re-run in progress — likely spot
+   *  reclaim, do nothing'. Optional to tolerate pre-upgrade payloads. */
+  rerunInProgress?: boolean;
 }
 
 /** Mirror of server poller.ts DurationRegressionInfo (issue #41). */
@@ -112,7 +116,7 @@ export interface DashboardState {
 
 export type NotificationEventType =
   | 'ci-failed' | 'group-failed' | 'queue-blocked' | 'ready' | 'overdue' | 'prod-live'
-  | 'queue-stalled' | 'duration-regression';
+  | 'queue-stalled' | 'duration-regression' | 'runner-starvation';
 
 export interface NotificationEvent {
   repo: string;
@@ -297,4 +301,24 @@ export interface MetricsPayload {
    *  GitHub default). Repos with zero findings are omitted. */
   lint: { repo: string; findings: { rule: 'timeout'; severity: 'warn' | 'info';
     job: string; message: string; observed: number; configured: number | null }[] }[];
+  /** Per-pool runner telemetry (issue #45): like runnerWaits but keyed by the
+   *  job's runs-on pool ('a|b' = a multi-candidate ternary, one composite
+   *  pool). lastHour/baseline p90 + starving = the live starvation snapshot
+   *  from the server's hourly scan (window-independent; nulls until the first
+   *  scan). */
+  runnerPools: { repo: string; pool: string; p50: HeadlineStat;
+    buckets: { bucket: string; p50: number; p90: number; n: number }[];
+    lastHourP90Secs: number | null; baselineP90Secs: number | null;
+    starving: boolean }[];
+  /** Spot-reclaim ledger (issue #46): infra-kill events (CANCELLED at attempt
+   *  N, SUCCESS on the same sha at a higher attempt) — count trend + by-pool
+   *  split. Repos with zero events are omitted. */
+  reclaims: { repo: string; total: number;
+    perBucket: { bucket: string; count: number }[];
+    byPool: { pool: string; count: number }[] }[];
+  /** Concurrency demand curve (issue #47): per repo×pool, PEAK concurrent
+   *  jobs per bucket (sweep-line over stored job intervals). No cap overlay
+   *  in v1 — the fleet cap isn't known to the dashboard. */
+  concurrency: { repo: string; pool: string; peak: number;
+    buckets: { bucket: string; peak: number }[] }[];
 }

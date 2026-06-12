@@ -988,3 +988,181 @@ describe('duration regression reads (issue #41)', () => {
     expect(Date.parse(s[0]!.completedAt)).toBe(Date.parse('2026-06-10T10:36:00Z'));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Fleet telemetry (issues #45/#46/#47): pool column, intervals, reclaim ledger
+// ---------------------------------------------------------------------------
+
+describe('runner_waits pool column (issue #45)', () => {
+  it('records and reads pool-labeled waits; unlabeled rows are excluded', () => {
+    h.recordRunnerWait(REPO, 'unit-tests', 'pull_request', 30, '2026-06-10T10:00:00Z', 'kindash-runner');
+    h.recordRunnerWait(REPO, 'legacy-job', 'pull_request', 99, '2026-06-10T10:01:00Z'); // no pool
+    const rows = h.runnerPoolWaitsSince('2026-06-10T00:00:00Z');
+    expect(rows).toEqual([{ repo: REPO, pool: 'kindash-runner',
+      at: '2026-06-10T10:00:00Z', waitSecs: 30 }]);
+  });
+
+  it('multi-candidate pools store the joined candidates string verbatim', () => {
+    // a `${{ … && 'a' || 'b' }}` runs-on: the caller pre-joins — one composite pool
+    h.recordRunnerWait(REPO, 'shards', 'merge_group', 12, '2026-06-10T10:00:00Z',
+      'kindash-runner|kindash-ondemand');
+    expect(h.runnerPoolWaitsSince('2026-06-10T00:00:00Z')[0]!.pool)
+      .toBe('kindash-runner|kindash-ondemand');
+  });
+
+  it('the since filter applies and ordering is repo → pool → started_at', () => {
+    h.recordRunnerWait(REPO, 'a', 'pull_request', 1, '2026-06-01T10:00:00Z', 'p1'); // out of window
+    h.recordRunnerWait(REPO, 'b', 'pull_request', 2, '2026-06-10T11:00:00Z', 'p2');
+    h.recordRunnerWait(REPO, 'c', 'pull_request', 3, '2026-06-10T10:00:00Z', 'p1');
+    h.recordRunnerWait('octo/gizmos', 'd', 'pull_request', 4, '2026-06-10T09:00:00Z', 'p1');
+    expect(h.runnerPoolWaitsSince('2026-06-09T00:00:00Z').map((r) => [r.repo, r.pool, r.waitSecs]))
+      .toEqual([[REPO, 'p1', 3], [REPO, 'p2', 2], ['octo/gizmos', 'p1', 4]]);
+  });
+});
+
+describe('check_durations started_at + intervals (issue #47)', () => {
+  it('checkIntervalsSince returns the exact stored interval, every conclusion', () => {
+    h.recordCheckDuration(REPO, 'unit-tests', 'pull_request',
+      '2026-06-10T10:00:00Z', '2026-06-10T10:05:00Z', 'SUCCESS');
+    h.recordCheckDuration(REPO, 'e2e', 'merge_group',
+      '2026-06-10T10:01:00Z', '2026-06-10T10:02:30Z', 'CANCELLED'); // occupied a runner too
+    const rows = h.checkIntervalsSince('2026-06-10T00:00:00Z');
+    expect(rows).toHaveLength(2);
+    expect(rows.find((r) => r.name === 'unit-tests')).toMatchObject({
+      repo: REPO, event: 'pull_request',
+      startedAt: '2026-06-10T10:00:00Z', completedAt: '2026-06-10T10:05:00Z' });
+    expect(rows.find((r) => r.name === 'e2e')).toMatchObject({
+      startedAt: '2026-06-10T10:01:00Z', completedAt: '2026-06-10T10:02:30Z' });
+  });
+
+  it('the since filter applies to completed_at', () => {
+    h.recordCheckDuration(REPO, 'old', 'pull_request',
+      '2026-06-01T10:00:00Z', '2026-06-01T10:05:00Z', 'SUCCESS');
+    expect(h.checkIntervalsSince('2026-06-09T00:00:00Z')).toEqual([]);
+  });
+});
+
+describe('reclaim ledger (issue #46)', () => {
+  const SHA = 'sha-reclaim';
+  const rec = (name: string, conclusion: string, attempt: number | null,
+    completedAt: string, sha: string | null = SHA) =>
+    h.recordCheckDuration(REPO, name, 'merge_group',
+      new Date(Date.parse(completedAt) - 60_000).toISOString(), completedAt,
+      conclusion, sha, attempt);
+  const SINCE = '2026-06-10T00:00:00Z';
+
+  it('CANCELLED at attempt N + SUCCESS on the same sha at N+1 = one reclaim event', () => {
+    rec('e2e', 'CANCELLED', 1, '2026-06-10T10:00:00Z');
+    rec('e2e', 'SUCCESS', 2, '2026-06-10T10:20:00Z');
+    expect(h.reclaimEventsByRepo(SINCE).get(REPO)).toEqual([
+      { name: 'e2e', event: 'merge_group', at: '2026-06-10T10:00:00Z' }]);
+  });
+
+  it('a SUCCESS at any HIGHER attempt resolves (intermediate attempt also killed)', () => {
+    rec('e2e', 'CANCELLED', 1, '2026-06-10T10:00:00Z');
+    rec('e2e', 'CANCELLED', 2, '2026-06-10T10:10:00Z');
+    rec('e2e', 'SUCCESS', 3, '2026-06-10T10:20:00Z');
+    expect(h.reclaimEventsByRepo(SINCE).get(REPO)).toHaveLength(2); // both kills count
+  });
+
+  it('FAILURE-class is NOT a reclaim — that is the flake/real-failure domain', () => {
+    rec('e2e', 'FAILURE', 1, '2026-06-10T10:00:00Z');
+    rec('e2e', 'SUCCESS', 2, '2026-06-10T10:20:00Z');
+    expect(h.reclaimEventsByRepo(SINCE).size).toBe(0);
+  });
+
+  it('a SUCCESS at the SAME attempt does not resolve a cancellation', () => {
+    rec('e2e', 'CANCELLED', 2, '2026-06-10T10:00:00Z');
+    rec('e2e', 'SUCCESS', 2, '2026-06-10T10:20:00Z');
+    expect(h.reclaimEventsByRepo(SINCE).size).toBe(0);
+  });
+
+  it('a SUCCESS on a DIFFERENT sha never resolves (new push ≠ re-run)', () => {
+    rec('e2e', 'CANCELLED', 1, '2026-06-10T10:00:00Z');
+    rec('e2e', 'SUCCESS', 2, '2026-06-10T10:20:00Z', 'other-sha');
+    expect(h.reclaimEventsByRepo(SINCE).size).toBe(0);
+  });
+
+  it('rows without head_sha or run_attempt cannot participate', () => {
+    rec('no-sha', 'CANCELLED', 1, '2026-06-10T10:00:00Z', null);
+    rec('no-sha', 'SUCCESS', 2, '2026-06-10T10:20:00Z', null);
+    rec('no-attempt', 'CANCELLED', null, '2026-06-10T11:00:00Z');
+    rec('no-attempt', 'SUCCESS', 2, '2026-06-10T11:20:00Z');
+    rec('success-no-attempt', 'CANCELLED', 1, '2026-06-10T12:00:00Z');
+    rec('success-no-attempt', 'SUCCESS', null, '2026-06-10T12:20:00Z');
+    expect(h.reclaimEventsByRepo(SINCE).size).toBe(0);
+  });
+
+  it('events are keyed per (check, event, sha) and per repo', () => {
+    rec('e2e', 'CANCELLED', 1, '2026-06-10T10:00:00Z');
+    rec('e2e', 'SUCCESS', 2, '2026-06-10T10:20:00Z');
+    rec('unit', 'CANCELLED', 1, '2026-06-10T10:01:00Z');
+    rec('unit', 'SUCCESS', 2, '2026-06-10T10:21:00Z');
+    h.recordCheckDuration('octo/gizmos', 'e2e', 'merge_group',
+      '2026-06-10T10:00:00Z', '2026-06-10T10:02:00Z', 'CANCELLED', SHA, 1);
+    h.recordCheckDuration('octo/gizmos', 'e2e', 'merge_group',
+      '2026-06-10T10:20:00Z', '2026-06-10T10:22:00Z', 'SUCCESS', SHA, 2);
+    const m = h.reclaimEventsByRepo(SINCE);
+    expect(m.get(REPO)!.map((e) => e.name).sort()).toEqual(['e2e', 'unit']);
+    expect(m.get('octo/gizmos')).toHaveLength(1);
+  });
+
+  it('the window filter applies to completed_at', () => {
+    rec('e2e', 'CANCELLED', 1, '2026-06-01T10:00:00Z');
+    rec('e2e', 'SUCCESS', 2, '2026-06-01T10:20:00Z');
+    expect(h.reclaimEventsByRepo(SINCE).size).toBe(0);
+  });
+});
+
+describe('fleet-telemetry migrations (issues #45/#47): pre-existing DBs', () => {
+  const dirs2: string[] = [];
+  afterEach(() => { for (const d of dirs2.splice(0)) rmSync(d, { recursive: true, force: true }); });
+
+  function preFleetDb(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'prdash-fleet-'));
+    dirs2.push(dir);
+    const path = join(dir, 'history.db');
+    // exact pre-#45/#47 shapes: runner_waits without pool, check_durations
+    // without started_at (head_sha/run_attempt already migrated by #34)
+    const raw = new Database(path);
+    raw.exec(`
+      CREATE TABLE runner_waits (
+        repo TEXT NOT NULL, check_name TEXT NOT NULL, event TEXT NOT NULL,
+        wait_secs REAL NOT NULL, started_at TEXT NOT NULL,
+        UNIQUE(repo, check_name, event, started_at)
+      );
+      CREATE TABLE check_durations (
+        repo TEXT NOT NULL, check_name TEXT NOT NULL, event TEXT NOT NULL,
+        duration_secs REAL NOT NULL, completed_at TEXT NOT NULL, conclusion TEXT NOT NULL,
+        head_sha TEXT, run_attempt INTEGER,
+        UNIQUE(repo, check_name, event, completed_at)
+      );
+    `);
+    raw.prepare('INSERT INTO runner_waits VALUES (?,?,?,?,?)')
+      .run(REPO, 'old-job', 'pull_request', 42, '2026-06-10T10:00:00Z');
+    raw.prepare('INSERT INTO check_durations VALUES (?,?,?,?,?,?,?,?)')
+      .run(REPO, 'old-check', 'pull_request', 300, '2026-06-10T10:05:00Z', 'SUCCESS', 'sha1', 1);
+    raw.close();
+    return path;
+  }
+
+  it('opens a pre-migration DB; old waits stay readable but pool-less (excluded from pool reads)', () => {
+    const store = new HistoryStore(preFleetDb());
+    expect(store.expectedRunnerWait(REPO, 'old-job', 'pull_request')).toBe(42); // legacy read intact
+    expect(store.runnerPoolWaitsSince('2026-06-01T00:00:00Z')).toEqual([]);    // NULL pool excluded
+    store.recordRunnerWait(REPO, 'new-job', 'pull_request', 7, '2026-06-10T11:00:00Z', 'p1');
+    expect(store.runnerPoolWaitsSince('2026-06-01T00:00:00Z')).toHaveLength(1);
+  });
+
+  it('legacy duration rows derive started = completed − duration; new rows store it exactly', () => {
+    const store = new HistoryStore(preFleetDb());
+    store.recordCheckDuration(REPO, 'new-check', 'pull_request',
+      '2026-06-10T11:00:00Z', '2026-06-10T11:02:00Z', 'SUCCESS');
+    const rows = store.checkIntervalsSince('2026-06-01T00:00:00Z');
+    // legacy: 10:05 completed − 300s = 10:00 derived start
+    expect(rows.find((r) => r.name === 'old-check')!.startedAt)
+      .toBe('2026-06-10T10:00:00.000Z');
+    expect(rows.find((r) => r.name === 'new-check')!.startedAt)
+      .toBe('2026-06-10T11:00:00Z');
+  });
+});

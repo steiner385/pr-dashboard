@@ -36,7 +36,8 @@
       "overdue": false,
       "prod-live": true,
       "queue-stalled": true,
-      "duration-regression": true
+      "duration-regression": true,
+      "runner-starvation": true
     }
   }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { Poller, RetryThrottle, describeError, ingestCheckSet, ingestGroupFailures, maxPlausibleSuccessSecs, type DashboardState } from '../poller';
+import { Poller, RetryThrottle, describeError, ingestCheckSet, ingestGroupFailures, maxPlausibleSuccessSecs, rerunInProgressFor, type DashboardState } from '../poller';
 import { HistoryStore } from '../history';
 import { deriveCiGraph } from '../required-checks';
 import type { CheckRun } from '../types';
@@ -3866,7 +3866,7 @@ describe('Poller notifier wiring (issue #19)', () => {
     command: [],
     events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
       ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
-      'duration-regression': true },
+      'duration-regression': true, 'runner-starvation': true },
   };
 
   function notifierHarness() {
@@ -3975,7 +3975,7 @@ describe('Poller notifier wiring (issue #19)', () => {
       notifications: { enabled, command: ['notify-send', '{title}', '{body}'],
         events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
           ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
-          'duration-regression': true } } });
+          'duration-regression': true, 'runner-starvation': true } } });
     const execCalls: string[] = [];
     // index.ts wiring shape: the notifier reads the POLLER's live config, so a
     // PUT /api/config → reconfigure() flips the command sink with no restart
@@ -4199,7 +4199,7 @@ describe('Poller queue cycle records group failures (issue #38)', () => {
     const notifier = new Notifier({ config: () => ({ enabled: false, command: [],
       events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
         ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
-        'duration-regression': true } }) });
+        'duration-regression': true, 'runner-starvation': true } }) });
     notifier.on('notification', (ev: NotificationEvent) => events.push(ev));
     (p as unknown as { deps: { notifier?: Notifier } }).deps.notifier = notifier;
     p.buildState();
@@ -4288,7 +4288,7 @@ describe('Poller queue ops console (#39) + merge ETA simulation (#40)', () => {
     enabled: false, command: [],
     events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
       ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
-      'duration-regression': true },
+      'duration-regression': true, 'runner-starvation': true },
   };
 
   const opsSweep = (n: number) => ({
@@ -4682,7 +4682,7 @@ describe('Poller duration-regression scan (issue #41)', () => {
     enabled: false, command: [],
     events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
       ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
-      'duration-regression': true },
+      'duration-regression': true, 'runner-starvation': true },
   };
   const REG_CHECK = 'fast-checks / ESLint';
 
@@ -4819,5 +4819,241 @@ describe('Poller duration-regression scan (issue #41)', () => {
     const other = pr.checks.find((c) => !c.name.includes('ESLint'))!;
     expect(other.regressed).toBe(false);
     expect(other.regression).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fleet telemetry (issues #45/#46): pool-labeled ingestion, re-run marker,
+// starvation scan
+// ---------------------------------------------------------------------------
+
+describe('ingestCheckSet pool labels (issue #45)', () => {
+  const mkCheck = (over: Partial<CheckRun>): CheckRun => ({
+    name: 'job', rawName: 'job', status: 'COMPLETED', conclusion: 'SUCCESS',
+    startedAt: null, completedAt: null, event: 'pull_request', workflowName: 'CI',
+    runNumber: 1, runAttempt: 1, isRequired: true, url: null, ...over });
+  const PREP = mkCheck({ name: 'prep',
+    startedAt: '2026-06-10T11:00:00Z', completedAt: '2026-06-10T11:05:00Z' });
+  const JOB = mkCheck({ name: 'job',
+    startedAt: '2026-06-10T11:07:00Z', completedAt: '2026-06-10T11:20:00Z' });
+  const needsFor = (n: string): string[] | null =>
+    n === 'job' ? ['prep'] : n === 'prep' ? [] : null;
+
+  it('stores the pool label on the runner-wait sample', () => {
+    ingestCheckSet(history, 'acme/widgets', [PREP, JOB], needsFor, () => true,
+      ['prep', 'job'], 'CI', 'sha1', () => null,
+      (n) => (n === 'job' ? ['kindash-runner'] : null));
+    expect(history.runnerPoolWaitsSince('2026-06-10T00:00:00Z')).toEqual([
+      { repo: 'acme/widgets', pool: 'kindash-runner',
+        at: '2026-06-10T11:07:00Z', waitSecs: 120 }]);
+  });
+
+  it('multi-candidate runs-on (ternary) joins the candidates into ONE pool key', () => {
+    ingestCheckSet(history, 'acme/widgets', [PREP, JOB], needsFor, () => true,
+      ['prep', 'job'], 'CI', 'sha1', () => null,
+      () => ['kindash-runner', 'kindash-ondemand']);
+    expect(history.runnerPoolWaitsSince('2026-06-10T00:00:00Z')[0]!.pool)
+      .toBe('kindash-runner|kindash-ondemand');
+  });
+
+  it('unknown pool (no graph / reusable workflow) stores NULL — the sample still feeds event-keyed reads', () => {
+    ingestCheckSet(history, 'acme/widgets', [PREP, JOB], needsFor, () => true,
+      ['prep', 'job'], 'CI', 'sha1', () => null /* default poolFor */);
+    expect(history.runnerPoolWaitsSince('2026-06-10T00:00:00Z')).toEqual([]);
+    expect(history.expectedRunnerWait('acme/widgets', 'job', 'pull_request')).toBe(120);
+  });
+
+  it('an empty candidates array also stores NULL', () => {
+    ingestCheckSet(history, 'acme/widgets', [PREP, JOB], needsFor, () => true,
+      ['prep', 'job'], 'CI', 'sha1', () => null, () => []);
+    expect(history.runnerPoolWaitsSince('2026-06-10T00:00:00Z')).toEqual([]);
+  });
+});
+
+describe('Poller wires poolsFor into detail ingestion (issue #45)', () => {
+  it('a derived-graph node with runsOn labels the pickup-wait sample', async () => {
+    const PREPARE = 'Prepare (prisma + packages)';
+    const AFFECTED = 'pr-affected-tests / Affected Unit + Server Tests';
+    const prepDone = { ...CHECK_DONE, name: PREPARE, isRequired: false,
+      startedAt: '2026-06-10T11:48:00Z', completedAt: '2026-06-10T11:53:00Z' };
+    const detail = { r0: { nameWithOwner: 'acme/widgets', pr8962: {
+      ...DETAIL_RESPONSE.r0.pr8962,
+      commits: { nodes: [{ commit: { statusCheckRollup: { state: 'PENDING',
+        contexts: { pageInfo: { hasNextPage: false }, nodes: [prepDone, CHECK_RUNNING] } } } }] },
+    } } };
+    const p = new Poller({ router: asRouter(fakeClient(SWEEP_RESPONSE, detail)), history,
+      deploy: noDeploy(), config: CONFIG, now: () => NOW });
+    p.setDerivedGraph('acme/widgets', new Map([
+      ['pr-affected-tests /', { needs: [PREPARE], activity: { mode: 'all' as const },
+        runsOn: ['kindash-runner', 'kindash-ondemand'], timeoutMinutes: null }],
+      [PREPARE, { needs: [], activity: { mode: 'all' as const },
+        runsOn: ['kindash-runner'], timeoutMinutes: null }],
+    ]));
+    await p.sweepOnce();
+    await p.detailOnce();
+    const rows = history.runnerPoolWaitsSince('2026-06-10T00:00:00Z');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ pool: 'kindash-runner|kindash-ondemand', waitSecs: 120 });
+    expect(history.expectedRunnerWait('acme/widgets', AFFECTED, 'pull_request')).toBe(120);
+  });
+});
+
+describe('rerunInProgressFor (issue #46 — the "do nothing" marker)', () => {
+  const mk = (over: Partial<CheckRun>): CheckRun => ({
+    name: 'e2e', rawName: 'e2e', status: 'COMPLETED', conclusion: 'CANCELLED',
+    startedAt: '2026-06-10T11:00:00Z', completedAt: '2026-06-10T11:05:00Z',
+    event: 'merge_group', workflowName: 'CI', runNumber: 9, runAttempt: 1,
+    isRequired: true, url: null, ...over });
+
+  it('true: CANCELLED at attempt 1 with a sibling running at attempt 2', () => {
+    const cancelled = mk({});
+    const sibling = mk({ name: 'unit', status: 'IN_PROGRESS', conclusion: null, runAttempt: 2 });
+    expect(rerunInProgressFor(cancelled, [cancelled, sibling])).toBe(true);
+  });
+
+  it('true: the newer attempt can be QUEUED too', () => {
+    const cancelled = mk({});
+    const queued = mk({ name: 'unit', status: 'QUEUED', conclusion: null,
+      startedAt: null, completedAt: null, runAttempt: 2 });
+    expect(rerunInProgressFor(cancelled, [cancelled, queued])).toBe(true);
+  });
+
+  it('false: the newer attempt already COMPLETED (nothing in flight)', () => {
+    const cancelled = mk({});
+    const done = mk({ name: 'unit', conclusion: 'SUCCESS', runAttempt: 2 });
+    expect(rerunInProgressFor(cancelled, [cancelled, done])).toBe(false);
+  });
+
+  it('false: a running check at the SAME attempt is the original run, not a re-run', () => {
+    const cancelled = mk({});
+    const peer = mk({ name: 'unit', status: 'IN_PROGRESS', conclusion: null, runAttempt: 1 });
+    expect(rerunInProgressFor(cancelled, [cancelled, peer])).toBe(false);
+  });
+
+  it('false: FAILURE conclusions never get the marker (reclaims are CANCELLED-class)', () => {
+    const failed = mk({ conclusion: 'FAILURE' });
+    const sibling = mk({ name: 'unit', status: 'IN_PROGRESS', conclusion: null, runAttempt: 2 });
+    expect(rerunInProgressFor(failed, [failed, sibling])).toBe(false);
+  });
+
+  it('false: a different EVENT population never matches', () => {
+    const cancelled = mk({});
+    const otherEvent = mk({ name: 'unit', status: 'QUEUED', conclusion: null,
+      event: 'pull_request', runAttempt: 2 });
+    expect(rerunInProgressFor(cancelled, [cancelled, otherEvent])).toBe(false);
+  });
+
+  it('false: null attempts on either side never match (no false advice on old data)', () => {
+    const noAttempt = mk({ runAttempt: null });
+    const sibling = mk({ name: 'unit', status: 'IN_PROGRESS', conclusion: null, runAttempt: 2 });
+    expect(rerunInProgressFor(noAttempt, [noAttempt, sibling])).toBe(false);
+    const cancelled = mk({});
+    const nullSibling = mk({ name: 'unit', status: 'IN_PROGRESS', conclusion: null, runAttempt: null });
+    expect(rerunInProgressFor(cancelled, [cancelled, nullSibling])).toBe(false);
+  });
+});
+
+describe('CheckView rerunInProgress (issue #46)', () => {
+  it('a CANCELLED check whose sha has a newer attempt in flight carries the flag', async () => {
+    const cancelled = { ...CHECK_DONE, name: 'spot-killed-job', conclusion: 'CANCELLED',
+      checkSuite: { workflowRun: { event: 'pull_request', runNumber: 9, runAttempt: 1 } } };
+    const rerunning = { ...CHECK_DONE, name: 'other-job', status: 'IN_PROGRESS', conclusion: null,
+      completedAt: null,
+      checkSuite: { workflowRun: { event: 'pull_request', runNumber: 9, runAttempt: 2 } } };
+    const detail = { r0: { nameWithOwner: 'acme/widgets', pr8962: {
+      ...DETAIL_RESPONSE.r0.pr8962,
+      commits: { nodes: [{ commit: { statusCheckRollup: { state: 'PENDING',
+        contexts: { pageInfo: { hasNextPage: false }, nodes: [cancelled, rerunning] } } } }] },
+    } } };
+    const p = new Poller({ router: asRouter(fakeClient(SWEEP_RESPONSE, detail)), history,
+      deploy: noDeploy(), config: CONFIG, now: () => NOW });
+    await p.sweepOnce();
+    await p.detailOnce();
+    const pr = p.buildState().repos[0]!.prs.find((x) => x.number === 8962)!;
+    expect(pr.checks.find((c) => c.name === 'spot-killed-job')!.rerunInProgress).toBe(true);
+    expect(pr.checks.find((c) => c.name === 'other-job')!.rerunInProgress).toBe(false);
+  });
+});
+
+describe('Poller runner-starvation scan (issue #45)', () => {
+  const POOL = 'kindash-runner';
+  const seedBaseline = (waitSecs = 10) => {
+    for (let i = 0; i < 6; i++) {
+      history.recordRunnerWait('acme/widgets', `base-${i}`, 'pull_request', waitSecs,
+        new Date(NOW.getTime() - 2 * 86400_000 + i * 60_000).toISOString(), POOL);
+    }
+  };
+  const seedSpike = (atMs: number, waitSecs: number) => {
+    for (let i = 0; i < 6; i++) {
+      history.recordRunnerWait('acme/widgets', `spike-${atMs}-${i}`, 'pull_request', waitSecs,
+        new Date(atMs - 30 * 60_000 + i * 60_000).toISOString(), POOL);
+    }
+  };
+  function starvationHarness() {
+    let now = NOW;
+    const events: NotificationEvent[] = [];
+    const notifier = new Notifier({ config: () => ({ enabled: false, command: [],
+      events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
+        ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
+        'duration-regression': true, 'runner-starvation': true } }) });
+    notifier.on('notification', (ev: NotificationEvent) => events.push(ev));
+    const p = new Poller({ router: asRouter(fakeClient()), history,
+      deploy: noDeploy(), config: CONFIG, notifier, now: () => now });
+    return { p, events, setNow: (d: Date) => { now = d; } };
+  }
+
+  it('a last-hour p90 blowout vs the 7d baseline fires runner-starvation once', () => {
+    seedBaseline();
+    seedSpike(NOW.getTime(), 2_000);
+    const { p, events } = starvationHarness();
+    p.scanRunnerStarvation();
+    p.scanRunnerStarvation(); // same episode — debounced
+    const starve = events.filter((e) => e.type === 'runner-starvation');
+    expect(starve).toHaveLength(1);
+    expect(starve[0]).toMatchObject({ repo: 'acme/widgets', prNumber: 0, title: POOL });
+    expect(starve[0]!.detail).toContain(`pool '${POOL}'`);
+    const health = p.poolHealth();
+    expect(health).toHaveLength(1);
+    expect(health[0]!.pools[0]).toMatchObject({ pool: POOL, starving: true, n: 6 });
+    expect(health[0]!.pools[0]!.lastHourP90Secs).toBe(2_000);
+    expect(health[0]!.pools[0]!.baselineP90Secs).toBe(10);
+  });
+
+  it('a healthy pool never fires but still appears in poolHealth', () => {
+    seedBaseline(10);
+    seedSpike(NOW.getTime(), 12); // ~baseline
+    const { p, events } = starvationHarness();
+    p.scanRunnerStarvation();
+    expect(events.filter((e) => e.type === 'runner-starvation')).toHaveLength(0);
+    expect(p.poolHealth()[0]!.pools[0]).toMatchObject({ pool: POOL, starving: false });
+  });
+
+  it('episode lifecycle: clears when the spike leaves the last hour, re-fires on a new spike', () => {
+    seedBaseline();
+    seedSpike(NOW.getTime(), 2_000);
+    const { p, events, setNow } = starvationHarness();
+    p.scanRunnerStarvation();
+    expect(events.filter((e) => e.type === 'runner-starvation')).toHaveLength(1);
+    // two hours later: no last-hour samples → episode clears (idle/recovered)
+    const later = new Date(NOW.getTime() + 2 * 3600_000);
+    setNow(later);
+    p.scanRunnerStarvation();
+    expect(p.poolHealth()[0]!.pools[0]!.starving).toBe(false);
+    // a fresh, even bigger spike re-fires (the old spike is baseline now: p90 2000 → bar 8000)
+    seedSpike(later.getTime() + 3600_000, 9_000);
+    setNow(new Date(later.getTime() + 3600_000));
+    p.scanRunnerStarvation();
+    expect(events.filter((e) => e.type === 'runner-starvation')).toHaveLength(2);
+  });
+
+  it('excluded repos are never evaluated', () => {
+    seedBaseline();
+    seedSpike(NOW.getTime(), 2_000);
+    const { p, events } = starvationHarness();
+    (p as unknown as { deps: { config: AppConfig } }).deps.config =
+      { ...CONFIG, exclude: ['acme/widgets'] };
+    p.scanRunnerStarvation();
+    expect(events).toHaveLength(0);
+    expect(p.poolHealth()).toEqual([]);
   });
 });

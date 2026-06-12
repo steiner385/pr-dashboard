@@ -155,6 +155,9 @@ export class HistoryStore {
   private readonly stmtSelectGroupFailuresSince: Database.Statement;
   private readonly stmtCountGroupRuns: Database.Statement;
   private readonly stmtCountGroupEjects: Database.Statement;
+  // Fleet telemetry (issues #45/#47): pool-keyed waits + job intervals
+  private readonly stmtSelectPoolWaitsSince: Database.Statement;
+  private readonly stmtSelectIntervalsSince: Database.Statement;
 
   constructor(path: string) {
     this.db = new Database(path);
@@ -163,7 +166,7 @@ export class HistoryStore {
       CREATE TABLE IF NOT EXISTS check_durations (
         repo TEXT NOT NULL, check_name TEXT NOT NULL, event TEXT NOT NULL,
         duration_secs REAL NOT NULL, completed_at TEXT NOT NULL, conclusion TEXT NOT NULL,
-        head_sha TEXT, run_attempt INTEGER,
+        head_sha TEXT, run_attempt INTEGER, started_at TEXT,
         UNIQUE(repo, check_name, event, completed_at)
       );
       CREATE INDEX IF NOT EXISTS idx_durations ON check_durations(repo, check_name, event, completed_at);
@@ -186,7 +189,7 @@ export class HistoryStore {
       );
       CREATE TABLE IF NOT EXISTS runner_waits (
         repo TEXT NOT NULL, check_name TEXT NOT NULL, event TEXT NOT NULL,
-        wait_secs REAL NOT NULL, started_at TEXT NOT NULL,
+        wait_secs REAL NOT NULL, started_at TEXT NOT NULL, pool TEXT,
         UNIQUE(repo, check_name, event, started_at)
       );
       CREATE INDEX IF NOT EXISTS idx_runner_waits ON runner_waits(repo, check_name, event, started_at);
@@ -230,10 +233,22 @@ export class HistoryStore {
     // waterfalls. Both nullable; the UNIQUE constraint is unchanged.
     addColumnIfMissing(this.db, 'check_durations', 'head_sha TEXT');
     addColumnIfMissing(this.db, 'check_durations', 'run_attempt INTEGER');
+    // Migration (issue #47): check_durations gains started_at — exact job
+    // intervals for the concurrency demand curve. Old rows stay NULL; reads
+    // derive started = completed − duration (identical for non-clamped rows).
+    addColumnIfMissing(this.db, 'check_durations', 'started_at TEXT');
+    // Migration (issue #45): runner_waits gains pool — the runs-on label
+    // candidates of the job's derived-graph node at ingestion time.
+    // Multi-candidate pools (runs-on ternaries) store the JOINED candidates
+    // string ('a|b') — one composite pool key, since the actually-chosen label
+    // is unknowable from the GraphQL rollup. NULL when unknown (no derived
+    // graph, unmatched name, reusable workflow without an outer label input,
+    // or rows persisted before #45).
+    addColumnIfMissing(this.db, 'runner_waits', 'pool TEXT');
 
     // Prepare all statements after schema is guaranteed to exist.
     this.stmtInsertDuration = this.db.prepare(
-      'INSERT OR IGNORE INTO check_durations (repo, check_name, event, duration_secs, completed_at, conclusion, head_sha, run_attempt) VALUES (?,?,?,?,?,?,?,?)'
+      'INSERT OR IGNORE INTO check_durations (repo, check_name, event, duration_secs, completed_at, conclusion, head_sha, run_attempt, started_at) VALUES (?,?,?,?,?,?,?,?,?)'
     );
     this.stmtSelectDurations = this.db.prepare(
       `SELECT duration_secs FROM check_durations
@@ -296,7 +311,7 @@ export class HistoryStore {
       'SELECT wait_secs FROM queue_waits WHERE repo=? ORDER BY rowid DESC LIMIT 20'
     );
     this.stmtInsertRunnerWait = this.db.prepare(
-      'INSERT OR IGNORE INTO runner_waits (repo, check_name, event, wait_secs, started_at) VALUES (?,?,?,?,?)'
+      'INSERT OR IGNORE INTO runner_waits (repo, check_name, event, wait_secs, started_at, pool) VALUES (?,?,?,?,?,?)'
     );
     this.stmtSelectRunnerWaits = this.db.prepare(
       `SELECT wait_secs FROM runner_waits
@@ -407,6 +422,21 @@ export class HistoryStore {
        WHERE repo=? AND check_name=? AND event=? AND conclusion='SUCCESS'
        ORDER BY completed_at DESC LIMIT ?`
     );
+    // Pool telemetry (issue #45): only rows WITH a pool label participate —
+    // pre-#45 history and unmappable jobs carry NULL and would otherwise read
+    // as a phantom pool.
+    this.stmtSelectPoolWaitsSince = this.db.prepare(
+      `SELECT repo, pool, started_at AS at, wait_secs
+       FROM runner_waits WHERE started_at >= ? AND pool IS NOT NULL
+       ORDER BY repo, pool, started_at`
+    );
+    // Concurrency sweep (issue #47): every conclusion counts — a CANCELLED or
+    // FAILED job occupied a runner for its whole span just the same.
+    this.stmtSelectIntervalsSince = this.db.prepare(
+      `SELECT repo, check_name, event, started_at, completed_at, duration_secs
+       FROM check_durations WHERE completed_at >= ?
+       ORDER BY repo, completed_at`
+    );
   }
 
   /** `headSha`/`runAttempt` (issue #34): the PR/group head commit the check ran
@@ -419,8 +449,10 @@ export class HistoryStore {
     if (!startedAt || !completedAt) return false;
     const secs = (Date.parse(completedAt) - Date.parse(startedAt)) / 1000;
     if (!(secs > 0)) return false; // rejects negative durations (SKIPPED placeholders) and NaN
+    // started_at persisted verbatim (issue #47): exact job intervals for the
+    // concurrency sweep — pre-#47 rows derive it as completed − duration.
     this.stmtInsertDuration.run(repo, name, event, secs, completedAt, conclusion,
-      headSha || null, runAttempt ?? null);
+      headSha || null, runAttempt ?? null, startedAt);
     return true;
   }
 
@@ -647,11 +679,13 @@ export class HistoryStore {
 
   /** Observed runner-pickup wait for a check (needs-complete → startedAt).
    *  Accepts 0 (same-second warm pickups are real samples; UNIQUE dedupes);
-   *  rejects negative/NaN. */
+   *  rejects negative/NaN. `pool` (issue #45): the job's runner-pool label —
+   *  multi-candidate runs-on ternaries arrive pre-joined ('a|b'); null when
+   *  unknown. */
   recordRunnerWait(repo: string, name: string, event: string,
-    waitSecs: number, startedAt: string): boolean {
+    waitSecs: number, startedAt: string, pool: string | null = null): boolean {
     if (!(waitSecs >= 0)) return false; // rejects <0 and NaN
-    this.stmtInsertRunnerWait.run(repo, name, event, waitSecs, startedAt);
+    this.stmtInsertRunnerWait.run(repo, name, event, waitSecs, startedAt, pool || null);
     return true;
   }
 
@@ -773,6 +807,70 @@ export class HistoryStore {
     const rows = this.stmtSelectRunnerWaitsSince.all(since) as Record<string, unknown>[];
     return rows.map((r) => ({ repo: r.repo as string, event: r.event as string,
       at: r.at as string, waitSecs: r.wait_secs as number }));
+  }
+
+  /** Pool-labeled runner-pickup waits at/after `since` (issue #45) — rows
+   *  without a pool label (pre-#45 history, unmappable jobs) are excluded.
+   *  Multi-candidate pools arrive as the stored JOINED string ('a|b'). */
+  runnerPoolWaitsSince(since: string):
+    { repo: string; pool: string; at: string; waitSecs: number }[] {
+    const rows = this.stmtSelectPoolWaitsSince.all(since) as Record<string, unknown>[];
+    return rows.map((r) => ({ repo: r.repo as string, pool: r.pool as string,
+      at: r.at as string, waitSecs: r.wait_secs as number }));
+  }
+
+  /** Job occupancy intervals completing at/after `since` (issue #47), every
+   *  conclusion — a cancelled job held its runner too. Rows persisted before
+   *  the started_at column derive start = completed − duration (exact for
+   *  uncontaminated rows; recordCheckDuration computes duration from the same
+   *  pair). `startedAt` is therefore never null. */
+  checkIntervalsSince(since: string):
+    { repo: string; name: string; event: string; startedAt: string; completedAt: string }[] {
+    const rows = this.stmtSelectIntervalsSince.all(since) as Record<string, unknown>[];
+    return rows.map((r) => {
+      const completedAt = r.completed_at as string;
+      const startedAt = (r.started_at as string | null)
+        ?? new Date(Date.parse(completedAt) - (r.duration_secs as number) * 1000).toISOString();
+      return { repo: r.repo as string, name: r.check_name as string,
+        event: r.event as string, startedAt, completedAt };
+    });
+  }
+
+  /**
+   * Spot-reclaim / infra-kill events (issue #46) per repo over a window: a
+   * CANCELLED sample at run_attempt N on (check, event, head_sha) where a
+   * SUCCESS exists on the SAME sha at a HIGHER attempt — the re-run that
+   * `re-run-on-spot-cancel` (or a human) triggered went green, proving the
+   * cancellation was an infra kill, not a verdict. Deliberately disjoint from
+   * flake detection: a flake is FAILING-class (FAILURE/TIMED_OUT/
+   * STARTUP_FAILURE) resolved on the same sha; a reclaim is CANCELLED-class.
+   * Both attempts must be known (run_attempt non-null) — unlike flakeStats
+   * there is no timestamp fallback, because the attempt relationship IS the
+   * signal. Rows without head_sha (pre-#34) are excluded entirely.
+   */
+  reclaimEventsByRepo(since: string): Map<string, { name: string; event: string; at: string }[]> {
+    interface Row { repo: string; check_name: string; event: string; head_sha: string;
+      run_attempt: number | null; completed_at: string; conclusion: string }
+    const rows = this.stmtSelectFlakeRows.all(since) as unknown as Row[];
+    const SEP = '\u0000'; // names contain spaces and ' / '
+    const bySha = new Map<string, Row[]>();
+    for (const r of rows) {
+      const k = `${r.repo}${SEP}${r.check_name}${SEP}${r.event}${SEP}${r.head_sha}`;
+      bySha.set(k, [...(bySha.get(k) ?? []), r]);
+    }
+    const out = new Map<string, { name: string; event: string; at: string }[]>();
+    for (const shaRows of bySha.values()) {
+      const successes = shaRows.filter((r) => r.conclusion === 'SUCCESS' && r.run_attempt != null);
+      if (!successes.length) continue;
+      for (const c of shaRows) {
+        if (c.conclusion !== 'CANCELLED' || c.run_attempt == null) continue;
+        if (!successes.some((s) => s.run_attempt! > c.run_attempt!)) continue;
+        const ev = { name: c.check_name, event: c.event, at: c.completed_at };
+        out.set(c.repo, [...(out.get(c.repo) ?? []), ev]);
+      }
+    }
+    for (const events of out.values()) events.sort((a, b) => a.at.localeCompare(b.at));
+    return out;
   }
 
   /** SUCCESS check durations at/after `since` with full timestamps (bucketing happens in metrics). */

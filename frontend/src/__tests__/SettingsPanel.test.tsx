@@ -21,7 +21,7 @@ const CONFIG: ConfigResponse = {
       command: ['notify-send', '{title}', '{body}'],
       events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
         ready: false, overdue: false, 'prod-live': true, 'queue-stalled': true,
-        'duration-regression': true },
+        'duration-regression': true, 'runner-starvation': true },
     },
   },
   readOnlyKeys: ['tokenSource', 'apiUrl', 'port', 'ancestrySource'],
