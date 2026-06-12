@@ -513,6 +513,18 @@ export function SettingsPanel({ open, onClose, returnFocusRef, connected }: Sett
                 </dd>
                 <dt>command</dt>
                 <dd><code>{config.resolved.notifications.command.join(' ') || '(none)'}</code></dd>
+                <dt>webhook</dt>
+                <dd>
+                  <code title="generic webhook sink — every event is POSTed as JSON; masked to host only (the URL path may carry a token)">
+                    {config.resolved.notifications.webhookUrl ?? '(none)'}
+                  </code>
+                </dd>
+                <dt>digest</dt>
+                <dd title="daily 24h summary (merges, ejects, regressions, runner waits, queue health) sent through the command and webhook sinks">
+                  {config.resolved.notifications.digest.enabled
+                    ? `daily at ${String(config.resolved.notifications.digest.hourLocal).padStart(2, '0')}:00 local`
+                    : 'off'}
+                </dd>
                 <dt>events</dt>
                 <dd>
                   {Object.entries(config.resolved.notifications.events)
@@ -525,8 +537,9 @@ export function SettingsPanel({ open, onClose, returnFocusRef, connected }: Sett
                 bell in the header.
               </p>
               <p className="settings-hint">
-                command and events are file-only — edit notifications.* in config.json
-                (the command runs on the server host)
+                command, webhookUrl, digest, and events are file-only — edit
+                notifications.* in config.json (the command runs on the server host;
+                the webhook URL may carry a token)
               </p>
             </section>
 

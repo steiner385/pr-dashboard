@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { DashboardState, RepoSettingsReport } from './poller';
 import { READ_ONLY_CONFIG_KEYS, validateConfigPatch, type AppConfig, type ConfigPatch } from './config';
+import { maskWebhookUrl } from './notifier';
 import { resolveMetricsQuery, type MetricsBucket, type MetricsPayload, type MetricsWindow } from './metrics';
 import { verifySignature, routeEvent, type WebhookRoute } from './webhooks';
 
@@ -135,8 +136,15 @@ export function createApp(opts: {
   if (opts.config) {
     const cfg = opts.config;
     app.get('/api/config', (_req, res) => {
+      const resolved = cfg.get();
+      // webhook URLs often carry tokens in the PATH (Slack/Discord) — the
+      // browser only ever sees the scheme+host mask (issue #51)
+      const notifications = resolved.notifications.webhookUrl
+        ? { ...resolved.notifications,
+            webhookUrl: maskWebhookUrl(resolved.notifications.webhookUrl) }
+        : resolved.notifications;
       res.json({
-        resolved: cfg.get(),
+        resolved: { ...resolved, notifications },
         readOnlyKeys: READ_ONLY_CONFIG_KEYS,
         sources: { configPath: cfg.writableTo, perField: cfg.fileSources() },
         repos: cfg.repos(),

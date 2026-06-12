@@ -24,32 +24,71 @@ export const NOTIFICATION_EVENT_TYPES = [
 ] as const;
 export type NotificationEventType = (typeof NOTIFICATION_EVENT_TYPES)[number];
 
+/** Everything a notification frame can carry: the per-event-toggle types plus
+ *  'digest' (issue #51) — the scheduled daily summary, gated by
+ *  `notifications.digest.enabled` instead of the `events` map. */
+export type NotificationKind = NotificationEventType | 'digest';
+
 /** Repo-level event types: prNumber 0, debounce keys outside the PR lifecycle
  *  (prune() must not touch them), and the rendered subject is the repo. */
 const REPO_LEVEL_TYPES: ReadonlySet<NotificationEventType> =
   new Set(['queue-stalled', 'duration-regression', 'runner-starvation']);
 
+/** Daily-digest knobs (issue #51) — file-only, like the rest of the block. */
+export interface DigestConfig {
+  /** Opt-in: the scheduler is armed only when true. */
+  enabled: boolean;
+  /** Local hour (0–23) the digest fires at, every day. */
+  hourLocal: number;
+}
+
 /** The `notifications` config block (file-only — never PUT-writable). */
 export interface NotificationsConfig {
-  /** Master switch for the COMMAND sink. Event detection and SSE emission stay
-   *  on regardless — the browser sink has its own opt-in (bell + permission). */
+  /** Master switch for the COMMAND and WEBHOOK sinks. Event detection and SSE
+   *  emission stay on regardless — the browser sink has its own opt-in
+   *  (bell + permission). */
   enabled: boolean;
   /** Argv template for the host command. `{title}`/`{body}` are substituted in
    *  every ARGUMENT (argv[0], the executable, is never substituted). Run via
    *  execFile — no shell, so placeholder content can't inject. */
   command: string[];
-  /** Per-event-type toggles; a type set false fires NEITHER sink. */
+  /** Generic webhook sink (issue #51): when set (and `enabled`), every event is
+   *  POSTed as JSON `{type, repo, prNumber, title, detail, at}`. The URL often
+   *  carries a token (Slack/Discord) — file-only, NOT in the PUT carve-out, and
+   *  the UI only ever sees it host-masked. Fire-and-forget: 5s timeout, NO
+   *  retries (v1 — a missed notification is cheaper than a duplicate storm),
+   *  failures logged at most once per hour. */
+  webhookUrl?: string;
+  /** Daily digest schedule (issue #51). */
+  digest: DigestConfig;
+  /** Per-event-type toggles; a type set false fires NEITHER sink. The digest
+   *  is NOT an entry here — it is gated by `digest.enabled` alone. */
   events: Record<NotificationEventType, boolean>;
 }
 
 export const DEFAULT_NOTIFICATIONS: NotificationsConfig = {
   enabled: false,
   command: ['notify-send', '{title}', '{body}'],
+  digest: { enabled: false, hourLocal: 8 },
   events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
     ready: false, overdue: false, 'prod-live': true, 'queue-stalled': true,
     // alert types, not status types — ON by default (issues #41/#45)
     'duration-regression': true, 'runner-starvation': true },
 };
+
+/**
+ * Display form of a webhook URL: scheme + host only ('https://hooks.slack.com/…').
+ * Slack/Discord/ntfy webhook PATHS are bearer tokens — the full URL must never
+ * reach the browser (GET /api/config masks through this before responding).
+ */
+export function maskWebhookUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}/…`;
+  } catch {
+    return '(unparseable URL)';
+  }
+}
 
 /** One notification event — the SSE `notification` payload.
  *  Repo-level events carry prNumber 0; title = repo ('queue-stalled') or the
@@ -57,9 +96,9 @@ export const DEFAULT_NOTIFICATIONS: NotificationsConfig = {
 export interface NotificationEvent {
   repo: string;
   prNumber: number;
-  /** PR title. */
+  /** PR title. For 'digest': the pre-rendered subject line (repo is ''). */
   title: string;
-  type: NotificationEventType;
+  type: NotificationKind;
   detail: string;
 }
 
@@ -91,6 +130,8 @@ const LABELS: Record<NotificationEventType, string> = {
 
 /** Render an event to the {title}/{body} strings both sinks display. */
 export function renderNotification(ev: NotificationEvent): { title: string; body: string } {
+  // digest frames arrive pre-rendered (subject in title, multi-line body in detail)
+  if (ev.type === 'digest') return { title: ev.title, body: ev.detail };
   // repo-level events have no PR — "repo#0" must never render
   const subject = REPO_LEVEL_TYPES.has(ev.type) ? ev.repo : `${ev.repo}#${ev.prNumber}`;
   return {
@@ -148,17 +189,34 @@ function detailFor(type: StageEventType, t: StageTransition): string {
 /** execFile-shaped callable — injectable for tests. */
 export type ExecLike = (cmd: string, args: string[], cb: (err: Error | null) => void) => unknown;
 
+/** fetch-shaped callable (the subset the webhook sink uses) — injectable for tests. */
+export type FetchLike = (url: string, init: {
+  method: string; headers: Record<string, string>; body: string; signal: AbortSignal;
+}) => Promise<{ ok: boolean; status: number }>;
+
+/** Webhook POST abort timeout — a slow receiver must never back up a poll cycle. */
+export const WEBHOOK_TIMEOUT_MS = 5_000;
+/** Webhook failures log at most this often (the command sink logs once ever;
+ *  webhooks are remote and may recover, so an hourly reminder is kept). */
+const WEBHOOK_FAILURE_LOG_INTERVAL_MS = 3600_000;
+
 export interface NotifierDeps {
   /** Live notifications config (a getter so hot-applied config swaps take effect). */
   config: () => NotificationsConfig;
   exec?: ExecLike;
+  /** Webhook transport — defaults to global fetch. */
+  fetchFn?: FetchLike;
   log?: (msg: string) => void;
+  /** Clock (epoch ms) — drives the webhook-failure log throttle and the
+   *  payload `at` timestamp; injectable for tests. */
+  now?: () => number;
 }
 
 export class Notifier extends EventEmitter {
   /** `${repo}#${prNumber}|${type}` of currently-active (already fired) conditions. */
   private active = new Set<string>();
   private commandFailureLogged = false;
+  private lastWebhookFailureLogMs = -Infinity;
 
   constructor(private deps: NotifierDeps) {
     super();
@@ -258,10 +316,64 @@ export class Notifier extends EventEmitter {
     }
   }
 
+  /**
+   * Daily digest (issue #51): a pre-rendered subject + multi-line body from the
+   * DigestScheduler, fanned out through every sink (SSE frame, command,
+   * webhook). Not an `events` toggle type — `digest.enabled` gates the
+   * scheduler itself; `enabled` still gates the command/webhook sinks.
+   */
+  sendDigest(subject: string, body: string): void {
+    this.fire({ repo: '', prNumber: 0, title: subject, type: 'digest', detail: body });
+  }
+
   private fire(ev: NotificationEvent): void {
-    if (this.deps.config().events[ev.type] === false) return; // type toggled off — neither sink
+    // type toggled off — no sink fires ('digest' is not an events key; it is
+    // gated upstream by digest.enabled)
+    if (ev.type !== 'digest' && this.deps.config().events[ev.type] === false) return;
     this.emit('notification', ev);
     this.runCommand(ev);
+    this.postWebhook(ev);
+  }
+
+  /**
+   * Webhook sink (issue #51): fire-and-forget JSON POST per event. 5s abort
+   * timeout; NO retries in v1 (a dropped notification is cheaper than building
+   * a delivery queue — revisit if it ever matters); failures are logged at
+   * most once per hour and must never crash a poll cycle.
+   */
+  private postWebhook(ev: NotificationEvent): void {
+    const cfg = this.deps.config();
+    if (!cfg.enabled || !cfg.webhookUrl) return;
+    const body = JSON.stringify({
+      type: ev.type, repo: ev.repo, prNumber: ev.prNumber, title: ev.title,
+      detail: ev.detail, at: new Date(this.nowMs()).toISOString(),
+    });
+    const fetchFn: FetchLike = this.deps.fetchFn ?? ((url, init) => fetch(url, init));
+    try {
+      void Promise.resolve(fetchFn(cfg.webhookUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+        signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
+      })).then((res) => {
+        if (!res.ok) this.logWebhookFailure(new Error(`receiver responded ${res.status}`));
+      }).catch((e: unknown) => this.logWebhookFailure(e));
+    } catch (e) {
+      this.logWebhookFailure(e); // a sink failure must never crash a poll cycle
+    }
+  }
+
+  private nowMs(): number {
+    return this.deps.now?.() ?? Date.now();
+  }
+
+  private logWebhookFailure(e: unknown): void {
+    const now = this.nowMs();
+    if (now - this.lastWebhookFailureLogMs < WEBHOOK_FAILURE_LOG_INTERVAL_MS) return;
+    this.lastWebhookFailureLogMs = now;
+    const msg = e instanceof Error ? e.message : String(e);
+    (this.deps.log ?? console.warn)(
+      `[notifier] webhook POST failed (no retries; logged at most hourly): ${msg}`);
   }
 
   private runCommand(ev: NotificationEvent): void {

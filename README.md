@@ -154,6 +154,7 @@ All fields are optional; the table shows default values.
 | `webhooks.enabled` | `false` | Opt-in signed webhook receiver (see [Webhooks](#webhooks-optional)). File-only. |
 | `webhooks.secretPath` | — | **Required when webhooks are enabled.** Path to the shared webhook secret file (written by `pnpm app:setup`). File-only. |
 | `webhooks.path` | `"/api/webhooks/github"` | Route the receiver listens on. File-only. |
+| `notifications` | see [Notifications](#notifications) | Desktop/webhook notification sinks + daily digest. File-only except the `enabled` toggle. `webhookUrl` (often token-bearing) is shown host-masked everywhere. |
 | `deployUrlAllowlist` | unset | Optional hostname allowlist for **in-repo** (`.pr-dashboard.yml`-sourced) deploy `healthUrl`/`cloneUrl` (`cloneUrl` is only checked with `ancestrySource: "clone"` — it is never touched otherwise). Unset → in-repo URLs honored as-is. File-only. |
 | `ancestrySource` | `"api"` | How deploy ancestry is answered. `"api"` = GitHub compare API (no git binary, no local clones; a pre-existing clone serves as a transport-error fallback only). `"clone"` = local bare clones in `data/clones/` (the previous mechanism — useful if you prefer local checks or are rate-limit constrained). File-only. |
 | `apiUrl` | `"https://api.github.com/graphql"` | GraphQL endpoint. Override for GitHub Enterprise (e.g. `"https://github.example.com/api/graphql"`). |
@@ -244,6 +245,8 @@ event) (`duration-regression` — clears when the ratio drops below 1.2) or per
 "notifications": {
   "enabled": true,
   "command": ["notify-send", "{title}", "{body}"],
+  "webhookUrl": "https://hooks.slack.com/services/T123/B456/xxxx",
+  "digest": { "enabled": false, "hourLocal": 8 },
   "events": { "ci-failed": true, "group-failed": true, "queue-blocked": true,
               "ready": false, "overdue": false, "prod-live": true,
               "queue-stalled": true, "duration-regression": true,
@@ -265,11 +268,52 @@ Notification events also ride the SSE stream as named `notification` frames.
 The bell button in the header toggles browser Web Notifications: turning it on
 requests `Notification` permission and persists the choice in localStorage.
 Works regardless of `notifications.enabled` (that flag gates only the host
-command); the per-type `events` toggles apply to both sinks.
+command and the webhook); the per-type `events` toggles apply to every sink.
 
 **Caveat:** there is no service worker — the dashboard tab must be open
 (backgrounded is fine) to receive browser notifications. For tab-independent
-delivery, use the command sink.
+delivery, use the command or webhook sink.
+
+### Sink C — generic webhook (`notifications.webhookUrl`, file-only)
+
+Set `webhookUrl` to any HTTP(S) endpoint (Slack/Discord/ntfy relay, your own
+receiver) and every notification event is POSTed as JSON while
+`notifications.enabled` is true:
+
+```json
+{ "type": "ci-failed", "repo": "acme/widgets", "prNumber": 7,
+  "title": "fix: the thing", "detail": "a required check failed",
+  "at": "2026-06-12T08:00:00.000Z" }
+```
+
+- **Fire-and-forget, no retries (v1):** one POST per event with a 5s timeout.
+  A missed delivery is dropped — building a retry queue trades a duplicate
+  storm for a missed ping, which is the wrong trade for notifications. If a
+  receiver needs reliability, poll `GET /api/state` instead.
+- Failures are logged at most once per hour and never crash a poll cycle.
+- **File-only** — webhook URLs routinely carry tokens in the path (Slack), so
+  the key is rejected by `PUT /api/config` and the settings panel only ever
+  shows the scheme+host (`https://hooks.slack.com/…`); the same mask applies
+  to `GET /api/config` and the server log line.
+- Slack/Discord expect their own payload shapes (`{"text": …}` etc.) — point
+  `webhookUrl` at a small relay (or an ntfy topic) if you need translation;
+  the dashboard deliberately stays format-agnostic.
+
+### Daily digest (`notifications.digest`, file-only)
+
+A scheduled morning summary of the last 24h — merges, queue ejects with the
+top culprit check (cross-referenced against the flake radar), runner-pool p90
+vs baseline, active duration regressions, and queue health — sent through the
+command and webhook sinks (and the SSE stream) as one `digest` event with a
+multi-line body.
+
+- Enable with `"digest": { "enabled": true, "hourLocal": 8 }` in the
+  `notifications` block (file-only; restart to apply). `hourLocal` is the
+  server's local hour, 0–23.
+- The scheduler self-re-arms to the next wall-clock occurrence after each
+  firing (DST-safe), and a compose failure never kills the schedule.
+- Delivery uses the same gates as every event: `enabled` must be true for the
+  command/webhook sinks; the browser bell shows it regardless.
 
 ## Kiosk mode (wall displays)
 

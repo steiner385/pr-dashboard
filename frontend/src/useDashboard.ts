@@ -70,6 +70,11 @@ export function useDashboard(): DashboardHook {
       if (!notifySupported() || Notification.permission !== 'granted') return;
       try {
         const ev = JSON.parse(e.data as string) as NotificationEvent;
+        if (ev.type === 'digest') {
+          // pre-rendered daily summary (issue #51): subject in title, body in detail
+          new Notification(ev.title, { body: ev.detail, tag: 'digest' });
+          return;
+        }
         // repo-level events carry prNumber 0 — never show "#0"
         const subject = REPO_LEVEL_TYPES.has(ev.type) ? ev.repo : `${ev.repo}#${ev.prNumber}`;
         new Notification(`${subject} ${NOTIFY_LABELS[ev.type] ?? ev.type}`, {

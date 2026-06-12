@@ -19,6 +19,9 @@ const CONFIG: ConfigResponse = {
     notifications: {
       enabled: true,
       command: ['notify-send', '{title}', '{body}'],
+      // already host-masked by the server (issue #51)
+      webhookUrl: 'https://hooks.slack.com/…',
+      digest: { enabled: true, hourLocal: 8 },
       events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
         ready: false, overdue: false, 'prod-live': true, 'queue-stalled': true,
         'duration-regression': true, 'runner-starvation': true },
@@ -310,6 +313,28 @@ describe('SettingsPanel notifications section (issue #19)', () => {
     expect(within(section).queryByRole('checkbox')).not.toBeInTheDocument();
     // one hint line distinguishes the two sinks (command toggle vs header bell)
     expect(within(section).getByText(/browser pop-ups — the bell in the header/i)).toBeInTheDocument();
+  });
+
+  it('shows the webhook URL host-masked and the digest schedule, read-only (issue #51)', async () => {
+    render(<SettingsPanel open onClose={() => {}} />);
+    const heading = await screen.findByRole('heading', { name: 'Notifications' });
+    const section = heading.closest('section')!;
+    // the server already masked the URL — the panel must show it verbatim (host only)
+    expect(within(section).getByText('https://hooks.slack.com/…')).toBeInTheDocument();
+    expect(within(section).getByText('daily at 08:00 local')).toBeInTheDocument();
+  });
+
+  it('renders (none)/off when webhookUrl is unset and the digest is disabled', async () => {
+    const noHook = { ...CONFIG, resolved: { ...CONFIG.resolved, notifications: {
+      ...CONFIG.resolved.notifications, webhookUrl: undefined,
+      digest: { enabled: false, hourLocal: 8 } } } };
+    fetchSpy.mockImplementation(async (url: unknown) =>
+      String(url) === '/api/repos' ? mockFetchOk({ repos: [] }) : mockFetchOk(noHook));
+    render(<SettingsPanel open onClose={() => {}} />);
+    const heading = await screen.findByRole('heading', { name: 'Notifications' });
+    const section = heading.closest('section')!;
+    expect(within(section).getByText('(none)')).toBeInTheDocument();
+    expect(within(section).getByText('off')).toBeInTheDocument();
   });
 
   it('toggle → Save PUTs { notifications: { enabled: false } }', async () => {

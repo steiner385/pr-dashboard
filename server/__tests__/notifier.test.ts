@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Notifier, renderNotification, DEFAULT_NOTIFICATIONS,
+import { Notifier, renderNotification, maskWebhookUrl, DEFAULT_NOTIFICATIONS,
   type NotificationEvent, type NotificationsConfig } from '../notifier';
 import type { StageResult } from '../types';
 
@@ -11,27 +11,39 @@ const stage = (s: StageResult['stage'], substate: string | null = null,
 const ALL_ON: NotificationsConfig = {
   enabled: true,
   command: ['notify-send', '{title}', '{body}'],
+  digest: { enabled: false, hourLocal: 8 },
   events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
     ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
     'duration-regression': true, 'runner-starvation': true },
 };
 
 type ExecCall = { cmd: string; args: string[]; cb: (err: Error | null) => void };
+type FetchCall = { url: string; init: { method: string; headers: Record<string, string>;
+  body: string; signal: AbortSignal } };
 
-function harness(cfg: NotificationsConfig = ALL_ON) {
+function harness(cfg: NotificationsConfig = ALL_ON, opts: {
+  fetchResult?: () => Promise<{ ok: boolean; status: number }>;
+  now?: () => number;
+} = {}) {
   const execCalls: ExecCall[] = [];
+  const fetchCalls: FetchCall[] = [];
   const logs: string[] = [];
   const events: NotificationEvent[] = [];
   const notifier = new Notifier({
     config: () => cfg,
     exec: (cmd, args, cb) => { execCalls.push({ cmd, args, cb }); },
+    fetchFn: (url, init) => {
+      fetchCalls.push({ url, init });
+      return (opts.fetchResult ?? (() => Promise.resolve({ ok: true, status: 200 })))();
+    },
+    now: opts.now,
     log: (msg) => logs.push(msg),
   });
   notifier.on('notification', (ev: NotificationEvent) => events.push(ev));
   const observe = (prev: StageResult | null, next: StageResult, queueCulprit: number | null = null) =>
     notifier.observe({ repo: 'acme/widgets', prNumber: 7, title: 'fix: the thing',
       prev, next, queueCulprit });
-  return { notifier, observe, execCalls, logs, events };
+  return { notifier, observe, execCalls, fetchCalls, logs, events };
 }
 
 describe('Notifier transition matrix', () => {
@@ -482,5 +494,141 @@ describe('Notifier runnerStarvation', () => {
     expect(title).toBe('acme/widgets runner pool starving');
     expect(title).not.toContain('#0');
     expect(body).toBe(`kindash-runner — ${DETAIL}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #51: generic webhook sink + daily digest
+// ---------------------------------------------------------------------------
+
+const HOOK = 'https://hooks.example.com/T123/B456/secret-token';
+const WITH_HOOK: NotificationsConfig = { ...ALL_ON, webhookUrl: HOOK };
+
+describe('Notifier webhook sink (issue #51)', () => {
+  it('POSTs JSON {type, repo, prNumber, title, detail, at} per event', () => {
+    const h = harness(WITH_HOOK, { now: () => Date.parse('2026-06-12T08:00:00Z') });
+    h.observe(stage('ci'), stage('parked', 'ci-failed'));
+    expect(h.fetchCalls).toHaveLength(1);
+    const { url, init } = h.fetchCalls[0]!;
+    expect(url).toBe(HOOK);
+    expect(init.method).toBe('POST');
+    expect(init.headers['content-type']).toBe('application/json');
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(JSON.parse(init.body)).toEqual({
+      type: 'ci-failed', repo: 'acme/widgets', prNumber: 7,
+      title: 'fix: the thing', detail: 'a required check failed',
+      at: '2026-06-12T08:00:00.000Z',
+    });
+  });
+
+  it('no webhookUrl → no POST (command sink unaffected)', () => {
+    const h = harness();
+    h.observe(stage('ci'), stage('parked', 'ci-failed'));
+    expect(h.fetchCalls).toHaveLength(0);
+    expect(h.execCalls).toHaveLength(1);
+  });
+
+  it('enabled:false disarms the webhook sink (SSE event still emitted)', () => {
+    const h = harness({ ...WITH_HOOK, enabled: false });
+    h.observe(stage('ci'), stage('parked', 'ci-failed'));
+    expect(h.fetchCalls).toHaveLength(0);
+    expect(h.events).toHaveLength(1);
+  });
+
+  it('a type toggled off fires no webhook either', () => {
+    const h = harness({ ...WITH_HOOK, events: { ...ALL_ON.events, 'ci-failed': false } });
+    h.observe(stage('ci'), stage('parked', 'ci-failed'));
+    expect(h.fetchCalls).toHaveLength(0);
+  });
+
+  it('a rejecting fetch is contained and logged (never crashes the cycle)', async () => {
+    const h = harness(WITH_HOOK, { fetchResult: () => Promise.reject(new Error('ECONNREFUSED')) });
+    expect(() => h.observe(stage('ci'), stage('parked', 'ci-failed'))).not.toThrow();
+    await vi.waitFor(() => {
+      expect(h.logs.some((l) => l.includes('ECONNREFUSED'))).toBe(true);
+    });
+    expect(h.logs[0]).toContain('no retries');
+  });
+
+  it('a non-ok response is logged with its status', async () => {
+    const h = harness(WITH_HOOK, { fetchResult: () => Promise.resolve({ ok: false, status: 404 }) });
+    h.observe(stage('ci'), stage('parked', 'ci-failed'));
+    await vi.waitFor(() => {
+      expect(h.logs.some((l) => l.includes('404'))).toBe(true);
+    });
+  });
+
+  it('failures log at most once per hour, then resume', async () => {
+    let nowMs = Date.parse('2026-06-12T08:00:00Z');
+    const h = harness(WITH_HOOK, {
+      fetchResult: () => Promise.reject(new Error('down')), now: () => nowMs });
+    h.observe(stage('ci'), stage('parked', 'ci-failed'));
+    await vi.waitFor(() => expect(h.logs).toHaveLength(1));
+    nowMs += 30 * 60_000; // +30min — still throttled
+    h.notifier.prodLive('r/a', 1, 't');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.logs).toHaveLength(1);
+    nowMs += 31 * 60_000; // past the hour — logs again
+    h.notifier.prodLive('r/a', 2, 't');
+    await vi.waitFor(() => expect(h.logs).toHaveLength(2));
+  });
+
+  it('a synchronously-throwing fetch is contained', () => {
+    const logs: string[] = [];
+    const notifier = new Notifier({
+      config: () => WITH_HOOK,
+      exec: (_c, _a, cb) => cb(null),
+      fetchFn: () => { throw new Error('bad signal'); },
+      log: (m) => logs.push(m),
+    });
+    expect(() => notifier.prodLive('r/a', 1, 't')).not.toThrow();
+    expect(logs.some((l) => l.includes('bad signal'))).toBe(true);
+  });
+});
+
+describe('Notifier digest delivery (issue #51)', () => {
+  it('sendDigest fans out through SSE, command, and webhook with the pre-rendered text', () => {
+    const h = harness(WITH_HOOK);
+    h.notifier.sendDigest('Daily CI digest (24h) — 14 merges, 2 ejects', 'r/a:\n  merged: 14');
+    expect(h.events).toEqual([{ repo: '', prNumber: 0, type: 'digest',
+      title: 'Daily CI digest (24h) — 14 merges, 2 ejects', detail: 'r/a:\n  merged: 14' }]);
+    // command sink gets the digest subject/body verbatim (no "repo#0" mangling)
+    expect(h.execCalls[0]!.args).toEqual([
+      'Daily CI digest (24h) — 14 merges, 2 ejects', 'r/a:\n  merged: 14']);
+    expect(JSON.parse(h.fetchCalls[0]!.init.body)).toMatchObject({
+      type: 'digest', repo: '', prNumber: 0 });
+  });
+
+  it('digest is not gated by the events map (no digest key exists)', () => {
+    const allOff = Object.fromEntries(Object.keys(ALL_ON.events).map((k) => [k, false]));
+    const h = harness({ ...ALL_ON, events: allOff as NotificationsConfig['events'] });
+    h.notifier.sendDigest('subject', 'body');
+    expect(h.events).toHaveLength(1);
+  });
+
+  it('enabled:false still emits the SSE digest frame but no command/webhook', () => {
+    const h = harness({ ...WITH_HOOK, enabled: false });
+    h.notifier.sendDigest('subject', 'body');
+    expect(h.events).toHaveLength(1);
+    expect(h.execCalls).toHaveLength(0);
+    expect(h.fetchCalls).toHaveLength(0);
+  });
+
+  it('renderNotification passes digest subject/body through untouched', () => {
+    const r = renderNotification({ repo: '', prNumber: 0, title: 'subject',
+      type: 'digest', detail: 'line1\nline2' });
+    expect(r).toEqual({ title: 'subject', body: 'line1\nline2' });
+  });
+});
+
+describe('maskWebhookUrl', () => {
+  it('masks to scheme + host (the path may carry a token)', () => {
+    expect(maskWebhookUrl('https://hooks.slack.com/services/T123/B456/tok'))
+      .toBe('https://hooks.slack.com/…');
+    expect(maskWebhookUrl('http://127.0.0.1:9099/hook')).toBe('http://127.0.0.1:9099/…');
+  });
+
+  it('never echoes an unparseable value back', () => {
+    expect(maskWebhookUrl('not a url with secret')).toBe('(unparseable URL)');
   });
 });

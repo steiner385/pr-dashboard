@@ -139,18 +139,25 @@ export type NotificationEventType =
   | 'ci-failed' | 'group-failed' | 'queue-blocked' | 'ready' | 'overdue' | 'prod-live'
   | 'queue-stalled' | 'duration-regression' | 'runner-starvation';
 
+/** Event types plus 'digest' (issue #51) — the daily summary frame, gated by
+ *  `notifications.digest.enabled` rather than the per-event toggles. */
+export type NotificationKind = NotificationEventType | 'digest';
+
 export interface NotificationEvent {
   repo: string;
   prNumber: number;
-  /** PR title. */
+  /** PR title. For 'digest': the pre-rendered subject line (repo is ''). */
   title: string;
-  type: NotificationEventType;
+  type: NotificationKind;
   detail: string;
 }
 
 export interface NotificationsConfig {
   enabled: boolean;
   command: string[];
+  /** Masked by the server to scheme+host — the path may carry a token. */
+  webhookUrl?: string;
+  digest: { enabled: boolean; hourLocal: number };
   events: Record<NotificationEventType, boolean>;
 }
 

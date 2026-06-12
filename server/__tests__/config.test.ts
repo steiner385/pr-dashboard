@@ -765,6 +765,7 @@ describe('notifications config', () => {
     expect(cfg.notifications).toEqual({
       enabled: false,
       command: ['notify-send', '{title}', '{body}'],
+      digest: { enabled: false, hourLocal: 8 }, // issue #51 — off by default
       events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
         ready: false, overdue: false, 'prod-live': true, 'queue-stalled': true,
         'duration-regression': true, 'runner-starvation': true },
@@ -828,5 +829,79 @@ describe('notifications config', () => {
     writeConfigPatch(path, { retentionDays: 14 });
     const onDisk = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
     expect(onDisk.notifications).toEqual({ enabled: true, command: ['my-hook', '{title}'] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #51: webhookUrl + digest config (file-only, like the rest of the block)
+// ---------------------------------------------------------------------------
+
+describe('notifications.webhookUrl + digest config (issue #51)', () => {
+  it('defaults: no webhookUrl, digest disabled at 08 local', () => {
+    const cfg = loadConfig('/nonexistent/config.json');
+    expect(cfg.notifications.webhookUrl).toBeUndefined();
+    expect(cfg.notifications.digest).toEqual({ enabled: false, hourLocal: 8 });
+  });
+
+  it('accepts an https webhookUrl and partial digest (defaults fill hourLocal)', () => {
+    const cfg = loadConfig(writeConfig({ notifications: {
+      webhookUrl: 'https://hooks.slack.com/services/T/B/x',
+      digest: { enabled: true },
+    } }));
+    expect(cfg.notifications.webhookUrl).toBe('https://hooks.slack.com/services/T/B/x');
+    expect(cfg.notifications.digest).toEqual({ enabled: true, hourLocal: 8 });
+  });
+
+  it('accepts a loopback http webhookUrl (local relay/test receiver)', () => {
+    const cfg = loadConfig(writeConfig({ notifications: { webhookUrl: 'http://127.0.0.1:9099/hook' } }));
+    expect(cfg.notifications.webhookUrl).toBe('http://127.0.0.1:9099/hook');
+  });
+
+  it('rejects non-http(s) and non-string webhookUrls at load', () => {
+    expect(() => loadConfig(writeConfig({ notifications: { webhookUrl: 'file:///etc/passwd' } })))
+      .toThrow(/webhookUrl must be an http\(s\):\/\/ URL/);
+    expect(() => loadConfig(writeConfig({ notifications: { webhookUrl: 'hooks.slack.com/x' } })))
+      .toThrow(/webhookUrl must be an http\(s\):\/\/ URL/);
+    expect(() => loadConfig(writeConfig({ notifications: { webhookUrl: 42 } })))
+      .toThrow(/webhookUrl/);
+  });
+
+  it('rejects a bad digest block at load', () => {
+    expect(() => loadConfig(writeConfig({ notifications: { digest: { enabled: 'yes' } } })))
+      .toThrow(/digest\.enabled must be a boolean/);
+    for (const hourLocal of [24, -1, 8.5, '8']) {
+      expect(() => loadConfig(writeConfig({ notifications: { digest: { enabled: true, hourLocal } } })))
+        .toThrow(/digest\.hourLocal must be an integer 0–23/);
+    }
+  });
+
+  it('enabled with a webhookUrl but an empty command is valid (webhook-only setup)', () => {
+    const cfg = loadConfig(writeConfig({ notifications: {
+      enabled: true, command: [], webhookUrl: 'https://hooks.example.com/x' } }));
+    expect(cfg.notifications.enabled).toBe(true);
+  });
+
+  it('PIN — webhookUrl/digest are NOT in the PUT carve-out (token-bearing URL must stay file-only)', () => {
+    const v = validateConfigPatch({ notifications: {
+      enabled: true, webhookUrl: 'https://evil.example.com/exfil', digest: { enabled: true } } });
+    expect(v.ok).toBe(false);
+    if (!v.ok) {
+      expect(v.offendingKeys).toContain('notifications.webhookUrl');
+      expect(v.offendingKeys).toContain('notifications.digest');
+    }
+  });
+
+  it('writeConfigPatch preserves webhookUrl + digest when PUT flips enabled', () => {
+    const path = writeConfig({ owners: ['acme'], notifications: {
+      enabled: true, command: ['notify-send', '{title}', '{body}'],
+      webhookUrl: 'https://hooks.example.com/x', digest: { enabled: true, hourLocal: 7 } } });
+    const next = writeConfigPatch(path, { notifications: { enabled: false } });
+    expect(next.notifications.enabled).toBe(false);
+    expect(next.notifications.webhookUrl).toBe('https://hooks.example.com/x');
+    expect(next.notifications.digest).toEqual({ enabled: true, hourLocal: 7 });
+    const onDisk = JSON.parse(readFileSync(path, 'utf8')) as {
+      notifications: Record<string, unknown> };
+    expect(onDisk.notifications.webhookUrl).toBe('https://hooks.example.com/x');
+    expect(onDisk.notifications.digest).toEqual({ enabled: true, hourLocal: 7 });
   });
 });

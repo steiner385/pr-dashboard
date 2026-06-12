@@ -8,7 +8,8 @@ import { ClientRouter } from './client-router';
 import { HistoryStore } from './history';
 import { DeployWatcher } from './deploy-watcher';
 import { Poller, describeError } from './poller';
-import { Notifier, NOTIFICATION_EVENT_TYPES } from './notifier';
+import { Notifier, NOTIFICATION_EVENT_TYPES, maskWebhookUrl } from './notifier';
+import { DigestScheduler, composeDigest, gatherDigestInput, queueHealthFromState } from './digest';
 import { backfillRepo } from './backfill';
 import { computeMetrics } from './metrics';
 import { createApp } from './api';
@@ -113,8 +114,12 @@ async function main() {
     const on = NOTIFICATION_EVENT_TYPES.filter((t) => config.notifications.events[t]);
     console.log(`[notifier] armed — command sink: ${config.notifications.command[0] ?? '(none)'}`
       + ` (events: ${on.join(', ') || 'none'})`);
+    if (config.notifications.webhookUrl) {
+      // never log the full URL — the path often carries a token (issue #51)
+      console.log(`[notifier] webhook sink armed — ${maskWebhookUrl(config.notifications.webhookUrl)}`);
+    }
   } else {
-    console.log('[notifier] command sink disabled (notifications.enabled=false) — '
+    console.log('[notifier] command/webhook sinks disabled (notifications.enabled=false) — '
       + 'browser notifications via SSE remain available');
   }
   poller = new Poller({ router, history, deploy, config, notifier });
@@ -157,6 +162,25 @@ async function main() {
   }
 
   poller.start();
+
+  // Daily digest (issue #51): a self-rearming timer to the next local
+  // digest.hourLocal; composes the 24h summary from history + the poller's
+  // live caches and fans it out through every notifier sink.
+  const digest = new DigestScheduler({
+    config: () => config.notifications.digest,
+    send: () => {
+      const { subject, body } = composeDigest(gatherDigestInput({
+        history,
+        exclude: poller.currentExclude(),
+        activeRegressions: poller.activeRegressions(),
+        poolHealth: poller.poolHealth(),
+        queueHealth: queueHealthFromState(poller.getState()),
+      }));
+      notifier.sendDigest(subject, body);
+    },
+  });
+  digest.start();
+
   const cfgPath = configPath();
   const app = createApp({
     getState: () => poller.getState(),

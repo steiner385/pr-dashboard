@@ -28,6 +28,8 @@
   "notifications": {
     "enabled": false,
     "command": ["notify-send", "{title}", "{body}"],
+    "webhookUrl": "https://hooks.slack.com/services/T123/B456/your-token",
+    "digest": { "enabled": false, "hourLocal": 8 },
     "events": {
       "ci-failed": true,
       "group-failed": true,

@@ -3864,6 +3864,7 @@ describe('Poller notifier wiring (issue #19)', () => {
   const ALL_EVENTS_ON: NotificationsConfig = {
     enabled: false, // command sink off — bus emission is what's under test
     command: [],
+    digest: { enabled: false, hourLocal: 8 },
     events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
       ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
       'duration-regression': true, 'runner-starvation': true },
@@ -3973,6 +3974,7 @@ describe('Poller notifier wiring (issue #19)', () => {
   it('reconfigure() hot-applies notifications.enabled — the command sink disarms and re-arms without a restart', () => {
     const cfgWith = (enabled: boolean): AppConfig => ({ ...CONFIG,
       notifications: { enabled, command: ['notify-send', '{title}', '{body}'],
+        digest: { enabled: false, hourLocal: 8 },
         events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
           ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
           'duration-regression': true, 'runner-starvation': true } } });
@@ -4196,7 +4198,7 @@ describe('Poller queue cycle records group failures (issue #38)', () => {
       at: '2026-06-10T11:38:00Z' }]);
     // group-failed notification detail names the culprit (issue #38)
     const events: NotificationEvent[] = [];
-    const notifier = new Notifier({ config: () => ({ enabled: false, command: [],
+    const notifier = new Notifier({ config: () => ({ enabled: false, command: [], digest: { enabled: false, hourLocal: 8 },
       events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
         ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
         'duration-regression': true, 'runner-starvation': true } }) });
@@ -4285,7 +4287,7 @@ describe('CheckView likelyFlake annotation (issue #37)', () => {
 
 describe('Poller queue ops console (#39) + merge ETA simulation (#40)', () => {
   const OPS_EVENTS_ON: NotificationsConfig = {
-    enabled: false, command: [],
+    enabled: false, command: [], digest: { enabled: false, hourLocal: 8 },
     events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
       ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
       'duration-regression': true, 'runner-starvation': true },
@@ -4679,7 +4681,7 @@ describe('guard workflow scoping + liveForeignNames (issue #61 follow-up)', () =
 
 describe('Poller duration-regression scan (issue #41)', () => {
   const REG_EVENTS: NotificationsConfig = {
-    enabled: false, command: [],
+    enabled: false, command: [], digest: { enabled: false, hourLocal: 8 },
     events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
       ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
       'duration-regression': true, 'runner-starvation': true },
@@ -4992,7 +4994,7 @@ describe('Poller runner-starvation scan (issue #45)', () => {
   function starvationHarness() {
     let now = NOW;
     const events: NotificationEvent[] = [];
-    const notifier = new Notifier({ config: () => ({ enabled: false, command: [],
+    const notifier = new Notifier({ config: () => ({ enabled: false, command: [], digest: { enabled: false, hourLocal: 8 },
       events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
         ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
         'duration-regression': true, 'runner-starvation': true } }) });

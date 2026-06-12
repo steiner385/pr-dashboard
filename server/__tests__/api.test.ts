@@ -166,6 +166,19 @@ describe('GET /api/config', () => {
     const app = createApp({ getState: () => STATE, bus: new EventEmitter() });
     expect((await request(app).get('/api/config')).status).toBe(404);
   });
+
+  it('masks notifications.webhookUrl to scheme+host — the token-bearing path never reaches the browser (issue #51)', async () => {
+    const withHook: AppConfig = { ...LIVE_CONFIG, notifications: {
+      ...LIVE_CONFIG.notifications,
+      webhookUrl: 'https://hooks.slack.com/services/T123/B456/secret-token' } };
+    const res = await request(configApp({ get: () => withHook })).get('/api/config');
+    expect(res.status).toBe(200);
+    expect(res.body.resolved.notifications.webhookUrl).toBe('https://hooks.slack.com/…');
+    expect(JSON.stringify(res.body)).not.toContain('secret-token');
+    // no webhookUrl configured → the key is simply absent
+    const bare = await request(configApp()).get('/api/config');
+    expect(bare.body.resolved.notifications.webhookUrl).toBeUndefined();
+  });
 });
 
 describe('PUT /api/config', () => {

@@ -290,9 +290,10 @@ function normalizeDeployConfig(repo: string, dc: Partial<DeployConfig>): DeployC
  * security boundary, not the UI.
  *
  * `notifications` is a NARROW carve-out: only `{ enabled }` is writable — it
- * merely flips the pre-configured command sink on/off (no injection surface).
- * `command`/`events`/anything else inside the block stay file-only and are
- * rejected as `notifications.<key>` offendingKeys.
+ * merely flips the pre-configured command/webhook sinks on/off (no injection
+ * surface). `command`/`events`/`webhookUrl` (often token-bearing)/`digest`/
+ * anything else inside the block stay file-only and are rejected as
+ * `notifications.<key>` offendingKeys.
  */
 export const SAFE_CONFIG_KEYS = ['owners', 'exclude', 'retentionDays', 'batchSize', 'intervals', 'notifications'] as const;
 export type SafeConfigKey = (typeof SAFE_CONFIG_KEYS)[number];
@@ -466,7 +467,8 @@ export function loadConfig(path?: string): AppConfig {
     repos: { ...DEFAULTS.repos, ...(user.repos ?? {}) },
     webhooks: { ...DEFAULTS.webhooks, ...(user.webhooks ?? {}) },
     notifications: { ...DEFAULTS.notifications, ...(user.notifications ?? {}),
-      events: { ...DEFAULTS.notifications.events, ...(user.notifications?.events ?? {}) } },
+      events: { ...DEFAULTS.notifications.events, ...(user.notifications?.events ?? {}) },
+      digest: { ...DEFAULTS.notifications.digest, ...(user.notifications?.digest ?? {}) } },
     // internal, never honored from the file: derived from what the file actually set
     hotMsExplicit: user.intervals?.hotMs !== undefined,
   };
@@ -520,8 +522,30 @@ export function loadConfig(path?: string): AppConfig {
     throw new Error('config: notifications.command must be an array of strings '
       + '(argv template — {title}/{body} are substituted in arguments, never via a shell)');
   }
-  if (n.enabled && n.command.length === 0) {
-    throw new Error('config: notifications.enabled requires a non-empty notifications.command');
+  if (n.enabled && n.command.length === 0 && n.webhookUrl === undefined) {
+    throw new Error('config: notifications.enabled requires a non-empty notifications.command '
+      + 'or a notifications.webhookUrl');
+  }
+  if (n.webhookUrl !== undefined) {
+    // file-only (NOT in the PUT carve-out — the URL often carries a token);
+    // must be an absolute http(s) URL so the sink's fetch can't be pointed at
+    // file:/data: schemes by a typo
+    if (typeof n.webhookUrl !== 'string' || !/^https?:\/\//.test(n.webhookUrl)) {
+      throw new Error('config: notifications.webhookUrl must be an http(s):// URL '
+        + `(got ${JSON.stringify(n.webhookUrl)})`);
+    }
+    try { new URL(n.webhookUrl); } catch {
+      throw new Error(`config: notifications.webhookUrl is not a valid URL (got ${JSON.stringify(n.webhookUrl)})`);
+    }
+  }
+  const dg = n.digest;
+  if (typeof dg.enabled !== 'boolean') {
+    throw new Error(`config: notifications.digest.enabled must be a boolean (got ${JSON.stringify(dg.enabled)})`);
+  }
+  if (typeof dg.hourLocal !== 'number' || !Number.isInteger(dg.hourLocal)
+      || dg.hourLocal < 0 || dg.hourLocal > 23) {
+    throw new Error('config: notifications.digest.hourLocal must be an integer 0–23 '
+      + `(got ${JSON.stringify(dg.hourLocal)})`);
   }
   for (const [k, v] of Object.entries(n.events)) {
     if (!(NOTIFICATION_EVENT_TYPES as readonly string[]).includes(k)) {
