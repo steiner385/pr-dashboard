@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react';
 import { TILE_DEFINITIONS } from './StatusStrip';
+import { METRIC_DEFINITIONS, SUBLINE_TERMS } from './definitions';
 
 interface LegendPanelProps {
   open: boolean;
@@ -54,17 +55,9 @@ function ExampleBar({ kind, name, fillPct, time, band, tick, nameTitle }: {
   );
 }
 
-const SUBLINE_TERMS: [string, string][] = [
-  ['group N%', 'progress of the merge-group build (never the head-commit PR checks)'],
-  ['behind N', 'number of queue entries ahead of this PR'],
-  ['queue blocked — conflict ahead (#n)',
-    'a conflicting entry ahead poisons this PR’s speculative merge — rebasing won’t help; it revalidates once #n is ejected'],
-  ['unmergeable — needs rebase',
-    'genuinely conflicts with the base branch — facing ejection from the queue until rebased'],
-  ['retrying', 'CI is re-running after a failed attempt on the same commit'],
-  ['overdue', 'running longer than its expected duration'],
-  ['waiting for runners (N jobs)', 'jobs are queued but no CI runner has picked them up yet'],
-];
+// Sub-line terms + metric definitions are shared with the in-place tooltips
+// (issue #66) via definitions.ts — the legend is the deep-dive view of the
+// SAME copy, so the two layers can't drift.
 
 export function LegendPanel({ open, onClose, returnFocusRef }: LegendPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -145,10 +138,10 @@ export function LegendPanel({ open, onClose, returnFocusRef }: LegendPanelProps)
           <section className="settings-section">
             <h3>Row sub-line terms</h3>
             <dl className="legend-dl">
-              {SUBLINE_TERMS.map(([term, def]) => (
+              {SUBLINE_TERMS.map(({ term, text }) => (
                 <div className="legend-dl-row" key={term}>
                   <dt>{term}</dt>
-                  <dd>{def}</dd>
+                  <dd>{text}</dd>
                 </div>
               ))}
             </dl>
@@ -244,6 +237,24 @@ export function LegendPanel({ open, onClose, returnFocusRef }: LegendPanelProps)
               ))}
             </dl>
             <p className="legend-caption">Click a tile to filter the board to that bucket; click again to clear.</p>
+          </section>
+
+          {/* (f) Metrics & ops figures — the same copy the in-place tooltips
+              carry (issue #66); this is the browsable deep-dive. */}
+          <section className="settings-section">
+            <h3>Metrics &amp; ops figures</h3>
+            <p className="legend-caption">
+              Every headline number also explains itself in place — hover it.
+              The full vocabulary:
+            </p>
+            <dl className="legend-dl">
+              {Object.entries(METRIC_DEFINITIONS).map(([key, def]) => (
+                <div className="legend-dl-row" key={key}>
+                  <dt>{def.label}</dt>
+                  <dd>{def.text}</dd>
+                </div>
+              ))}
+            </dl>
           </section>
         </div>
       </div>

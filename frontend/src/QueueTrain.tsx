@@ -1,6 +1,7 @@
 import type { RepoQueueView, QueueGroupView, MergeEtaSimulation, QueueHealthState } from './types';
 import { formatDur } from './format';
 import { scrollBehavior } from './motion';
+import { DEFS, defTitle } from './definitions';
 
 const MAX_NUMBERS_PER_CAR = 6;
 
@@ -129,18 +130,22 @@ function OpsStrip({ queue }: { queue: RepoQueueView }) {
       {health.state !== 'healthy' && (
         <span className="ops-remediation">{health.detail}</span>
       )}
-      <span className="ops-stat">depth {queue.depth ?? 0}</span>
+      <span className="ops-stat" title={defTitle(DEFS.queueDepth)}>depth {queue.depth ?? 0}</span>
       {queue.trainsPerHour != null && (
-        <span className="ops-stat">{queue.trainsPerHour.toFixed(1)} trains/hr</span>
+        <span className="ops-stat" title={defTitle(DEFS.trainsPerHour)}>
+          {queue.trainsPerHour.toFixed(1)} trains/hr</span>
       )}
       {queue.batchSuccessRatePct != null && (
-        <span className="ops-stat">{queue.batchSuccessRatePct}% batch success</span>
+        <span className="ops-stat" title={defTitle(DEFS.batchSuccessRate)}>
+          {queue.batchSuccessRatePct}% batch success</span>
       )}
       {(queue.ejects24h ?? 0) > 0 && (
-        <span className="ops-stat">{queue.ejects24h} eject{queue.ejects24h === 1 ? '' : 's'} 24h</span>
+        <span className="ops-stat" title={defTitle(DEFS.ejects24h)}>
+          {queue.ejects24h} eject{queue.ejects24h === 1 ? '' : 's'} 24h</span>
       )}
       {oldest != null && (
-        <span className="ops-stat">oldest wait ~{formatDur(oldest)}</span>
+        <span className="ops-stat" title={defTitle(DEFS.oldestWait)}>
+          oldest wait ~{formatDur(oldest)}</span>
       )}
     </div>
   );

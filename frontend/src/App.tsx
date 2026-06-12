@@ -137,6 +137,7 @@ export function App() {
           ref={legendRef}
           className="legend-btn"
           aria-label="Legend"
+          title="Legend — what every shape, color, and term on the board means"
           aria-haspopup="dialog"
           aria-expanded={legendOpen}
           onClick={() => setLegendOpen(true)}
@@ -162,6 +163,7 @@ export function App() {
           ref={gearRef}
           className="settings-gear"
           aria-label="Settings"
+          title="Settings — watched repos, tuning, notifications, per-repo config"
           aria-haspopup="dialog"
           aria-expanded={settingsOpen}
           onClick={() => setSettingsOpen(true)}

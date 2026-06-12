@@ -4,6 +4,7 @@ import { formatDur, formatEta, stageLabel } from './format';
 import { MetroTrack } from './MetroTrack';
 import { CheckGantt } from './CheckGantt';
 import { Waterfall, waterfallSegments } from './Waterfall';
+import { subLineTitle } from './definitions';
 
 /** Muted one-line status under the track: percent + active-check for ci,
  *  substate reason for parked, group/position info for queue.
@@ -107,7 +108,9 @@ export function PrRow({ pr, hasDeploy, queueCulprit = null, expandable = true }:
           )}
         </div>
         <MetroTrack stage={s} hasDeploy={hasDeploy} />
-        {sub && <div className="sub">{sub}</div>}
+        {/* sub-line vocabulary tooltips (issue #66): the definitions of every
+            recognized term in the line, from the shared SUBLINE_TERMS map */}
+        {sub && <div className="sub" title={subLineTitle(sub)}>{sub}</div>}
       </div>
       {/* workflow-change impact card (issue #49): derived-graph diff summary,
           above the gantt in the expanded panel. */}
