@@ -7,6 +7,7 @@ const EMPTY: MetricsPayload = {
   window: '3d', bucket: 'hour',
   runnerWaits: [], queue: [], slowestJobs: [], velocity: [], leadTime: [], trends: [],
   calibration: [], flakiness: [], trainKillers: [], criticalPath: [], lint: [],
+  regressions: [],
 };
 
 const H = (h: number): string => `2026-06-11T${String(h).padStart(2, '0')}`;
@@ -142,6 +143,14 @@ const PAYLOAD: MetricsPayload = {
       { rule: 'timeout', severity: 'info', job: 'build',
         message: 'timeout 60m vs p99 4m — tighten to fail fast',
         observed: 240, configured: 3600 },
+    ] },
+  ],
+  regressions: [
+    { repo: 'acme/widgets', checks: [
+      { check: 'build-test', event: 'merge_group', priorP50Secs: 240,
+        recentP50Secs: 600, ratio: 2.5, sinceApprox: '2026-06-09T14:00:00Z' },
+      { check: 'unit-tests', event: 'pull_request', priorP50Secs: 120,
+        recentP50Secs: 200, ratio: 1.67, sinceApprox: '2026-06-10T08:00:00Z' },
     ] },
   ],
 };
@@ -658,5 +667,40 @@ describe('MetricsView — lead time panel (issue #44)', () => {
     render(<MetricsView now={NOW} />);
     const panel = await ltPanel();
     expect(within(panel).getByText(/first-green and enqueued timestamps\s+only record from new merges/)).toBeInTheDocument();
+  });
+});
+
+describe('MetricsView — duration regressions strip (issue #41)', () => {
+  const regPanel = async () => {
+    const heading = await screen.findByRole('heading', { name: 'Duration regressions' });
+    return heading.closest('section')! as HTMLElement;
+  };
+
+  it('renders one chip per active regression with check, event, p50 step, ratio and onset', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    const panel = await regPanel();
+    expect(within(panel).getByText('acme/widgets')).toBeInTheDocument();
+    const chip = within(panel).getByText('build-test').closest('li')! as HTMLElement;
+    expect(chip.textContent).toContain('merge_group');
+    expect(chip.textContent).toContain('4m → 10m');
+    expect(chip.textContent).toContain('×2.5');
+    expect(chip.textContent).toContain('since ');
+    expect(within(panel).getByText('unit-tests')).toBeInTheDocument();
+  });
+
+  it("empty state says 'none active' (a healthy day, not missing data)", async () => {
+    mockFetchOk(EMPTY);
+    render(<MetricsView now={NOW} />);
+    const panel = await regPanel();
+    expect(within(panel).getByText('none active')).toBeInTheDocument();
+  });
+
+  it('tolerates a pre-upgrade payload without the regressions field', async () => {
+    const { regressions: _drop, ...legacy } = EMPTY;
+    mockFetchOk(legacy as MetricsPayload);
+    render(<MetricsView now={NOW} />);
+    const panel = await regPanel();
+    expect(within(panel).getByText('none active')).toBeInTheDocument();
   });
 });

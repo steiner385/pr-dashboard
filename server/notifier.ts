@@ -20,9 +20,14 @@ import type { StageResult } from './types';
 
 export const NOTIFICATION_EVENT_TYPES = [
   'ci-failed', 'group-failed', 'queue-blocked', 'ready', 'overdue', 'prod-live',
-  'queue-stalled',
+  'queue-stalled', 'duration-regression',
 ] as const;
 export type NotificationEventType = (typeof NOTIFICATION_EVENT_TYPES)[number];
+
+/** Repo-level event types: prNumber 0, debounce keys outside the PR lifecycle
+ *  (prune() must not touch them), and the rendered subject is the repo. */
+const REPO_LEVEL_TYPES: ReadonlySet<NotificationEventType> =
+  new Set(['queue-stalled', 'duration-regression']);
 
 /** The `notifications` config block (file-only — never PUT-writable). */
 export interface NotificationsConfig {
@@ -41,11 +46,14 @@ export const DEFAULT_NOTIFICATIONS: NotificationsConfig = {
   enabled: false,
   command: ['notify-send', '{title}', '{body}'],
   events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
-    ready: false, overdue: false, 'prod-live': true, 'queue-stalled': true },
+    ready: false, overdue: false, 'prod-live': true, 'queue-stalled': true,
+    // an alert type, not a status type — ON by default (issue #41)
+    'duration-regression': true },
 };
 
 /** One notification event — the SSE `notification` payload.
- *  Repo-level events ('queue-stalled') carry prNumber 0 and title = repo. */
+ *  Repo-level events carry prNumber 0; title = repo ('queue-stalled') or the
+ *  check name ('duration-regression'). */
 export interface NotificationEvent {
   repo: string;
   prNumber: number;
@@ -77,19 +85,21 @@ const LABELS: Record<NotificationEventType, string> = {
   overdue: 'overdue',
   'prod-live': 'live on prod',
   'queue-stalled': 'merge queue STALLED',
+  'duration-regression': 'duration regression',
 };
 
 /** Render an event to the {title}/{body} strings both sinks display. */
 export function renderNotification(ev: NotificationEvent): { title: string; body: string } {
-  // repo-level events (queue-stalled) have no PR — "repo#0" must never render
-  const subject = ev.type === 'queue-stalled' ? ev.repo : `${ev.repo}#${ev.prNumber}`;
+  // repo-level events have no PR — "repo#0" must never render
+  const subject = REPO_LEVEL_TYPES.has(ev.type) ? ev.repo : `${ev.repo}#${ev.prNumber}`;
   return {
     title: `${subject} ${LABELS[ev.type]}`,
     body: ev.detail ? `${ev.title} — ${ev.detail}` : ev.title,
   };
 }
 
-type StageEventType = Exclude<NotificationEventType, 'prod-live' | 'queue-stalled'>;
+type StageEventType =
+  Exclude<NotificationEventType, 'prod-live' | 'queue-stalled' | 'duration-regression'>;
 
 interface Condition {
   /** Whether the condition holds for a classify result (drives debounce clearing). */
@@ -187,6 +197,27 @@ export class Notifier extends EventEmitter {
     this.fire({ repo, prNumber: 0, title: repo, type: 'queue-stalled', detail });
   }
 
+  /**
+   * Duration-regression feed (issue #41): the poller's hourly scan reports
+   * every evaluated (repo, check, event) series with its current active flag.
+   * Fires once per series ENTRY; `active=false` (measured ratio fell below the
+   * clear threshold, or the series left the candidate set) clears the debounce
+   * key, so a re-entered regression re-fires. The event is repo-level
+   * (prNumber 0) with the CHECK name as the title.
+   */
+  durationRegression(repo: string, check: string, event: string,
+    active: boolean, detail: string): void {
+    // check names contain spaces and ' / ' — NUL-separate the key parts
+    const key = `${repo}\u0000${check}\u0000${event}|duration-regression`;
+    if (!active) {
+      this.active.delete(key);
+      return;
+    }
+    if (this.active.has(key)) return; // already fired for this activation
+    this.active.add(key);
+    this.fire({ repo, prNumber: 0, title: check, type: 'duration-regression', detail });
+  }
+
   /** The "shipped" signal: a merged PR's commit just became prod ancestry. */
   prodLive(repo: string, prNumber: number, title: string): void {
     const key = `${repo}#${prNumber}|prod-live`;
@@ -196,11 +227,12 @@ export class Notifier extends EventEmitter {
   }
 
   /** Drop debounce state for PRs no longer tracked (keys are `repo#number`).
-   *  Repo-level keys (`repo|queue-stalled`) are exempt — they clear via
-   *  queueHealth when the stall resolves, not via PR lifecycle. */
+   *  Repo-level keys (`repo|queue-stalled`, `…|duration-regression`) are
+   *  exempt — they clear via their own feeds (queueHealth / the regression
+   *  scan), not via PR lifecycle. */
   prune(livePrKeys: ReadonlySet<string>): void {
     for (const key of this.active) {
-      if (key.endsWith('|queue-stalled')) continue;
+      if (key.endsWith('|queue-stalled') || key.endsWith('|duration-regression')) continue;
       if (!livePrKeys.has(key.slice(0, key.lastIndexOf('|')))) this.active.delete(key);
     }
   }

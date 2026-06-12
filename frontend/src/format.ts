@@ -8,6 +8,18 @@ export function formatDur(secs: number): string {
   return `${Math.round(secs)}s`;
 }
 
+/** Compact local onset time for duration-regression badges (issue #41):
+ *  weekday style ('Tue 14:00') within the last 7 days, date style
+ *  ('Jun 10, 14:00') beyond. Unparseable input passes through. */
+export function formatSince(iso: string, now: Date = new Date()): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const withinWeek = Math.abs(now.getTime() - d.getTime()) < 7 * 86400_000;
+  return d.toLocaleString(undefined, withinWeek
+    ? { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }
+    : { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
 export function formatEta(etaSeconds: number | null, range: [number, number] | null, overdue: boolean): string {
   if (overdue) return 'overdue';
   if (etaSeconds == null) return '';

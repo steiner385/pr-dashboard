@@ -12,7 +12,8 @@ const ALL_ON: NotificationsConfig = {
   enabled: true,
   command: ['notify-send', '{title}', '{body}'],
   events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
-    ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true },
+    ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
+    'duration-regression': true },
 };
 
 type ExecCall = { cmd: string; args: string[]; cb: (err: Error | null) => void };
@@ -192,6 +193,7 @@ describe('Notifier events config filtering', () => {
     expect(DEFAULT_NOTIFICATIONS.events).toEqual({
       'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
       ready: false, overdue: false, 'prod-live': true, 'queue-stalled': true,
+      'duration-regression': true, // an alert type — default ON (issue #41)
     });
     const h = harness({ ...DEFAULT_NOTIFICATIONS, enabled: true });
     h.observe(stage('ci'), stage('ready', 'armed'));
@@ -354,5 +356,68 @@ describe('Notifier queueHealth (queue-stalled)', () => {
     expect(title).toBe('acme/widgets merge queue STALLED');
     expect(title).not.toContain('#0');
     expect(body).toContain('do NOT admin-merge');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #41: repo-level duration-regression events
+// ---------------------------------------------------------------------------
+
+describe('Notifier durationRegression', () => {
+  const DETAIL = 'p50 4m → 10m (×2.5, merge_group) since 2026-06-12T11:51:00Z';
+
+  it('fires once per (repo, check, event) while the condition holds', () => {
+    const h = harness();
+    h.notifier.durationRegression('acme/widgets', 'build-test', 'merge_group', true, DETAIL);
+    h.notifier.durationRegression('acme/widgets', 'build-test', 'merge_group', true, DETAIL);
+    expect(h.events).toHaveLength(1);
+    expect(h.events[0]).toMatchObject({ repo: 'acme/widgets', prNumber: 0,
+      title: 'build-test', type: 'duration-regression', detail: DETAIL });
+  });
+
+  it('re-fires after the condition clears (ratio < 1.2) and re-enters', () => {
+    const h = harness();
+    h.notifier.durationRegression('acme/widgets', 'build-test', 'merge_group', true, DETAIL);
+    h.notifier.durationRegression('acme/widgets', 'build-test', 'merge_group', false, '');
+    h.notifier.durationRegression('acme/widgets', 'build-test', 'merge_group', true, DETAIL);
+    expect(h.events.map((e) => e.type))
+      .toEqual(['duration-regression', 'duration-regression']);
+  });
+
+  it('inactive evaluations never fire', () => {
+    const h = harness();
+    h.notifier.durationRegression('acme/widgets', 'build-test', 'merge_group', false, '');
+    expect(h.events).toHaveLength(0);
+  });
+
+  it('debounce is keyed per (check, event) — pull_request and merge_group fire separately', () => {
+    const h = harness();
+    h.notifier.durationRegression('acme/widgets', 'build-test', 'merge_group', true, DETAIL);
+    h.notifier.durationRegression('acme/widgets', 'build-test', 'pull_request', true, DETAIL);
+    h.notifier.durationRegression('acme/widgets', 'lint', 'merge_group', true, DETAIL);
+    expect(h.events).toHaveLength(3);
+  });
+
+  it('prune does not clear the debounce (repo-level key, no PR lifecycle)', () => {
+    const h = harness();
+    h.notifier.durationRegression('acme/widgets', 'build-test', 'merge_group', true, DETAIL);
+    h.notifier.prune(new Set());
+    h.notifier.durationRegression('acme/widgets', 'build-test', 'merge_group', true, DETAIL);
+    expect(h.events).toHaveLength(1);
+  });
+
+  it('events config can disable duration-regression', () => {
+    const h = harness({ ...ALL_ON, events: { ...ALL_ON.events, 'duration-regression': false } });
+    h.notifier.durationRegression('acme/widgets', 'build-test', 'merge_group', true, DETAIL);
+    expect(h.events).toHaveLength(0);
+    expect(h.execCalls).toHaveLength(0);
+  });
+
+  it('renderNotification titles the repo (never "repo#0"), body carries the check + step', () => {
+    const { title, body } = renderNotification({ repo: 'acme/widgets', prNumber: 0,
+      title: 'build-test', type: 'duration-regression', detail: DETAIL });
+    expect(title).toBe('acme/widgets duration regression');
+    expect(title).not.toContain('#0');
+    expect(body).toBe(`build-test — ${DETAIL}`);
   });
 });

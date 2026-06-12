@@ -4,7 +4,7 @@ import {
   AreaSeries, BandSeries, MultiLine, ScatterPlot, SignedLine,
   type BandPoint, type ChartPoint, type LineSeries,
 } from './charts';
-import { formatDur } from './format';
+import { formatDur, formatSince } from './format';
 
 const WINDOWS = ['24h', '3d', '7d', '14d', '30d'] as const;
 const WINDOW_DAYS: Record<MetricsWindow, number> = {
@@ -288,10 +288,38 @@ export function MetricsView({ now }: {
   const lintRepos = payload.lint.filter((l) => l.findings.length);
   // ?? []: tolerate a pre-upgrade server payload while the SPA is newer
   const leadTimeRepos = payload.leadTime ?? [];
+  const regressionRepos = (payload.regressions ?? []).filter((r) => r.checks.length);
 
   return (
     <div className="metrics">
       {controls}
+
+      <Panel title="Duration regressions" empty={regressionRepos.length === 0}
+        emptyText="none active">
+        {regressionRepos.map((r) => (
+          <div key={r.repo} className="metric-repo">
+            <h3>{r.repo}</h3>
+            <ul className="regression-strip">
+              {r.checks.map((c) => (
+                <li key={`${c.check}/${c.event}`} className="regression-chip">
+                  <span className="regression-arrow" aria-hidden="true">↑</span>
+                  <span className="metric-job-name">{c.check}</span>
+                  <span className="regression-step">
+                    {' '}({c.event}) p50 {formatDur(c.priorP50Secs)} → {formatDur(c.recentP50Secs)}
+                    {' '}(×{(Math.round(c.ratio * 10) / 10).toString()})
+                    {' '}since {formatSince(c.sinceApprox)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="metric-note">
+              active p50 step-ups from the hourly scan — recent 10-run median ≥
+              1.5× the prior 20-run median AND +60s; an entry clears below
+              ×1.2. Live state, ignores the window selector
+            </p>
+          </div>
+        ))}
+      </Panel>
 
       <Panel title="Lead time" empty={leadTimeRepos.length === 0}>
         {leadTimeRepos.map((lt) => <LeadTimeRepo key={lt.repo} lt={lt} />)}

@@ -766,7 +766,8 @@ describe('notifications config', () => {
       enabled: false,
       command: ['notify-send', '{title}', '{body}'],
       events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
-        ready: false, overdue: false, 'prod-live': true, 'queue-stalled': true },
+        ready: false, overdue: false, 'prod-live': true, 'queue-stalled': true,
+        'duration-regression': true },
     });
   });
 
@@ -777,7 +778,7 @@ describe('notifications config', () => {
     expect(cfg.notifications.command).toEqual(['notify-send', '{title}', '{body}']); // default kept
     expect(cfg.notifications.events).toEqual({ 'ci-failed': true, 'group-failed': true,
       'queue-blocked': true, ready: true, overdue: false, 'prod-live': true,
-      'queue-stalled': true });
+      'queue-stalled': true, 'duration-regression': true });
   });
 
   it('accepts a custom command array', () => {

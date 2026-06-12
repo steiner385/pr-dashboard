@@ -163,6 +163,18 @@ describe('useDashboard browser notifications (issue #19)', () => {
     expect(MockNotification.instances[0]!.opts?.body).toBe('fix: the thing \u2014 a required check failed');
   });
 
+  it('a duration-regression event titles the repo (never "repo#0") with the check in the body', async () => {
+    const { result } = renderHook(() => useDashboard());
+    await act(async () => { result.current.toggleNotify(); });
+    act(() => { MockEventSource.instances[0]!.fireNamed('notification', JSON.stringify({
+      repo: 'acme/widgets', prNumber: 0, title: 'build-test', type: 'duration-regression',
+      detail: 'p50 4m \u2192 10m (\u00d72.5, merge_group) since 2026-06-09T14:00:00Z' })); });
+    expect(MockNotification.instances).toHaveLength(1);
+    expect(MockNotification.instances[0]!.title).toBe('acme/widgets duration regression');
+    expect(MockNotification.instances[0]!.title).not.toContain('#0');
+    expect(MockNotification.instances[0]!.opts?.body).toContain('build-test');
+  });
+
   it('no Web Notification while the bell is off', () => {
     renderHook(() => useDashboard());
     act(() => { MockEventSource.instances[0]!.fireNamed('notification', JSON.stringify(EV)); });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatDur, formatEta, stageLabel } from '../format';
+import { formatDur, formatEta, formatSince, stageLabel } from '../format';
 
 describe('formatDur', () => {
   it('formats compact durations', () => {
@@ -33,5 +33,25 @@ describe('stageLabel', () => {
   });
   it('keeps the plain queue label without substate', () => {
     expect(stageLabel('queue', null)).toBe('Merge queue');
+  });
+});
+
+describe('formatSince (issue #41)', () => {
+  const NOW = new Date('2026-06-12T18:00:00Z');
+
+  it('uses weekday style within the last 7 days', () => {
+    const out = formatSince('2026-06-09T14:00:00Z', NOW); // a Tuesday
+    expect(out).toContain('Tue');
+    expect(out).toMatch(/\d{2}:\d{2}/);
+  });
+
+  it('uses date style beyond 7 days', () => {
+    const out = formatSince('2026-05-20T14:00:00Z', NOW);
+    expect(out).toContain('May');
+    expect(out).toContain('20');
+  });
+
+  it('passes unparseable input through', () => {
+    expect(formatSince('garbage', NOW)).toBe('garbage');
   });
 });

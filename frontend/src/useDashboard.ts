@@ -15,7 +15,12 @@ const NOTIFY_LABELS: Record<NotificationEventType, string> = {
   overdue: 'overdue',
   'prod-live': 'live on prod',
   'queue-stalled': 'merge queue STALLED',
+  'duration-regression': 'duration regression',
 };
+
+/** Repo-level event types carry prNumber 0 — render the repo, never "repo#0". */
+const REPO_LEVEL_TYPES = new Set<NotificationEventType>(
+  ['queue-stalled', 'duration-regression']);
 
 function notifySupported(): boolean {
   return typeof Notification !== 'undefined';
@@ -64,8 +69,8 @@ export function useDashboard(): DashboardHook {
       if (!notifySupported() || Notification.permission !== 'granted') return;
       try {
         const ev = JSON.parse(e.data as string) as NotificationEvent;
-        // repo-level events (queue-stalled) carry prNumber 0 — never show "#0"
-        const subject = ev.type === 'queue-stalled' ? ev.repo : `${ev.repo}#${ev.prNumber}`;
+        // repo-level events carry prNumber 0 — never show "#0"
+        const subject = REPO_LEVEL_TYPES.has(ev.type) ? ev.repo : `${ev.repo}#${ev.prNumber}`;
         new Notification(`${subject} ${NOTIFY_LABELS[ev.type] ?? ev.type}`, {
           body: ev.detail ? `${ev.title} — ${ev.detail}` : ev.title,
           // tag collapses repeats of the same (PR, event) if the server restarts

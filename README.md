@@ -217,7 +217,7 @@ UI rides out the bounce on the existing SSE auto-reconnect.
 ## Notifications
 
 The poller already detects every alert-worthy transition; the notifier layer
-(issue #19) turns them into desktop notifications. Six event types:
+(issue #19) turns them into desktop notifications. The event types:
 
 | Type | Fires when | Default |
 |---|---|---|
@@ -227,10 +227,14 @@ The poller already detects every alert-worthy transition; the notifier layer
 | `ready` | a PR's checks go green (`ci` -> `ready/armed` or `ready/idle`) | off |
 | `overdue` | a stage's ETA is exceeded (`overdue` flips true) | off |
 | `prod-live` | a merged PR's commit becomes prod ancestry ("shipped") | on |
+| `queue-stalled` | a repo's merge queue enters dispatch-stall (repo-level) | on |
+| `duration-regression` | a check's recent p50 steps up persistently — recent 10-run median ≥ 1.5× the prior 20-run median AND +60s (repo-level; hourly scan, issue #41) | on |
 
 **Debounce:** one notification per (PR, event type) while the condition holds;
 if the condition clears (e.g. the failing check is retried green) and later
 re-enters, it fires again. `prod-live` fires once per PR per process lifetime.
+Repo-level types debounce per repo (`queue-stalled`) or per (repo, check,
+event) (`duration-regression` — clears when the ratio drops below 1.2).
 
 ### Sink A — host command (`notifications` in config.json, file-only)
 
@@ -239,7 +243,8 @@ re-enters, it fires again. `prod-live` fires once per PR per process lifetime.
   "enabled": true,
   "command": ["notify-send", "{title}", "{body}"],
   "events": { "ci-failed": true, "group-failed": true, "queue-blocked": true,
-              "ready": false, "overdue": false, "prod-live": true }
+              "ready": false, "overdue": false, "prod-live": true,
+              "queue-stalled": true, "duration-regression": true }
 }
 ```
 

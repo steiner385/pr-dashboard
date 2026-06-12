@@ -20,6 +20,8 @@ import { classify, requiredChecks, matchesRequiredPrefix, matchingPrefix, workfl
 import { queueStage, simulateMergeEta, ejectProbability, type GroupProgress, type QueueStageResult, type MergeEtaSimulation } from './estimator/queue';
 import { classifyQueueHealth, type GroupBuildTelemetry, type QueueHealthState } from './estimator/queue-health';
 import { classifyWait, extractRunnerWaits, type NeedActivePredicate } from './estimator/waits';
+import { measureDurationStep, flagsRegression, holdsRegression, regressionDetail,
+  REGRESSION_MIN_SAMPLES } from './estimator/regression';
 import { countMergeTrains } from './trains';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -39,6 +41,26 @@ export interface CheckView {
   /** True when the check is CURRENTLY failing-class AND its flake rate is
    *  ≥ LIKELY_FLAKE_MIN_RATE_PCT — "likely flake, consider re-run". */
   likelyFlake: boolean;
+  /** Duration regression (issue #41): true while the check's (name, event)
+   *  series has an ACTIVE rolling-median step-up (the Gantt's ↑ badge). */
+  regressed: boolean;
+  /** The step's numbers when `regressed` (badge tooltip); null otherwise. */
+  regression: DurationRegressionInfo | null;
+}
+
+/** The measured step behind an active duration regression (issue #41). */
+export interface DurationRegressionInfo {
+  priorP50Secs: number;
+  recentP50Secs: number;
+  ratio: number;
+  /** completed_at of the recent window's oldest sample — the approximate onset. */
+  sinceApprox: string;
+}
+
+/** One active regression as cached on the poller / served in metrics `regressions[]`. */
+export interface DurationRegressionView extends DurationRegressionInfo {
+  check: string;
+  event: string;
 }
 
 export interface PrView {
@@ -127,6 +149,17 @@ const FLAKE_LOOKBACK_MS = 7 * 86400_000;
 /** Re-query a repo's flake rates from history at most this often (the lookup is
  *  effectively cached per build — buildState runs well under this cadence). */
 const FLAKE_CACHE_TTL_MS = 60_000;
+
+/** Duration-regression scan cadence (issue #41): the scan rides the deploy
+ *  cycle but runs at most hourly — a step over 30 samples moves on the scale
+ *  of CI runs, not poll ticks, and the whole-DB candidate query needn't run
+ *  every few minutes. */
+export const REGRESSION_SCAN_INTERVAL_MS = 3600_000;
+
+/** A candidate series whose newest SUCCESS sample is older than this is
+ *  dormant — skipped, so a renamed/retired check's last step can't stick as an
+ *  active regression forever (mirrors the 14-day expectedSet horizon). */
+const REGRESSION_DORMANT_MS = 14 * 86400_000;
 
 /**
  * Train-killer attribution (issue #38): record each failing-class COMPLETED
@@ -340,6 +373,8 @@ export class Poller extends EventEmitter {
   private ancestryCheckedAt = new Map<string, number>();  // "sha:deployedSha" → last check (ms)
   private inaccessibleOwners = new Set<string>();        // owners with repository-inaccessible evidence (process lifetime)
   private flakeRateCache = new Map<string, { at: number; rates: Map<string, number> }>(); // repo → name\0event → ratePct (#37)
+  private durationRegressions = new Map<string, Map<string, DurationRegressionView>>(); // repo → name\0event → active step (#41)
+  private lastRegressionScanAt = 0;                       // epoch ms of the last regression scan (#41)
   private warnedAncestryFallback = new Set<string>();    // repos whose api→clone ancestry fallback was logged (log once)
   private ancestryViaApiLogged = new Set<string>();      // repos whose first compare-API ancestry answer was logged (log once)
   private readonly apiAncestry: ApiAncestry;              // ancestrySource 'api' (the default)
@@ -824,6 +859,9 @@ export class Poller extends EventEmitter {
         }
       }
     }
+    // Duration-regression scan (issue #41) rides this cycle with its own
+    // hourly throttle — local SQLite only, no API budget involved.
+    this.maybeScanRegressions();
     this.emitUpdate();
   }
 
@@ -1785,9 +1823,11 @@ export class Poller extends EventEmitter {
     const graphKeys = this.graphKeysFor(repo); // computed once per set, not per check
     const rollupWf = this.rollupWorkflowFor(repo);
     const flakeRates = this.flakeRatesFor(repo); // 7-day rates, cached per build (#37)
+    const regressions = this.durationRegressions.get(repo); // hourly-scan cache (#41)
     return checks.map((c) => {
       const inRollupWorkflow = workflowScopeAllows(c.workflowName, rollupWf);
       const flakeRatePct = flakeRates.get(flakeKey(c.name, c.event)) ?? null;
+      const reg = regressions?.get(flakeKey(c.name, c.event)) ?? null;
       const failingNow = c.status === 'COMPLETED' && FAILING_CONCLUSIONS.has(c.conclusion ?? '');
       // waitKind applies to live queued checks only; everything else carries nulls.
       // The derived needs graph describes the rollup workflow's jobs — a check
@@ -1821,6 +1861,9 @@ export class Poller extends EventEmitter {
         flakeRatePct,
         likelyFlake: failingNow && flakeRatePct != null
           && flakeRatePct >= LIKELY_FLAKE_MIN_RATE_PCT,
+        regressed: reg != null,
+        regression: reg ? { priorP50Secs: reg.priorP50Secs, recentP50Secs: reg.recentP50Secs,
+          ratio: reg.ratio, sinceApprox: reg.sinceApprox } : null,
       };
     });
   }
@@ -1853,6 +1896,82 @@ export class Poller extends EventEmitter {
     }
     this.flakeRateCache.set(repo, { at: nowMs, rates });
     return rates;
+  }
+
+  /** Hourly trigger for the duration-regression scan (issue #41) — rides the
+   *  deploy cycle, so the effective cadence is max(deployMs, 1h). */
+  private maybeScanRegressions(): void {
+    const nowMs = this.now().getTime();
+    if (nowMs - this.lastRegressionScanAt < REGRESSION_SCAN_INTERVAL_MS) return;
+    this.lastRegressionScanAt = nowMs;
+    this.scanDurationRegressions();
+  }
+
+  /**
+   * One full duration-regression scan (issue #41): for every (repo, check,
+   * event) series with ≥ REGRESSION_MIN_SAMPLES SUCCESS samples, run the
+   * rolling-median step test (estimator/regression.ts) and rebuild the active
+   * cache. Hysteresis: a series that WAS active stays active while the ratio
+   * holds ≥ the clear threshold even when it no longer trips the entry guards.
+   * Each evaluation also feeds the notifier, which debounces one
+   * 'duration-regression' event per series activation.
+   */
+  scanDurationRegressions(): void {
+    const { history, config } = this.deps;
+    const nowMs = this.now().getTime();
+    const next = new Map<string, Map<string, DurationRegressionView>>();
+    const evaluated = new Set<string>(); // `${repo}\0${name}\0${event}` seen this scan
+    let scanned = 0;
+    for (const cand of history.regressionCandidates(REGRESSION_MIN_SAMPLES)) {
+      if (config.exclude.includes(cand.repo)) continue;
+      if (nowMs - Date.parse(cand.newestAt) > REGRESSION_DORMANT_MS) continue; // dormant series
+      const key = flakeKey(cand.name, cand.event);
+      evaluated.add(`${cand.repo}\u0000${key}`);
+      const m = measureDurationStep(
+        history.recentDurationSamples(cand.repo, cand.name, cand.event, REGRESSION_MIN_SAMPLES));
+      if (!m) continue; // degenerate series (the candidate query guarantees the count)
+      scanned++;
+      const wasActive = this.durationRegressions.get(cand.repo)?.has(key) ?? false;
+      const active = flagsRegression(m) || (wasActive && holdsRegression(m));
+      if (active) {
+        let repoMap = next.get(cand.repo);
+        if (!repoMap) next.set(cand.repo, repoMap = new Map());
+        repoMap.set(key, { check: cand.name, event: cand.event, priorP50Secs: m.priorP50,
+          recentP50Secs: m.recentP50, ratio: m.ratio, sinceApprox: m.sinceApprox });
+      }
+      this.deps.notifier?.durationRegression(cand.repo, cand.name, cand.event, active,
+        regressionDetail(m, cand.event));
+    }
+    // Previously-active series that left the candidate set entirely (repo
+    // excluded, series gone dormant): clear the notifier debounce so a
+    // returning regression can re-fire. The cache rebuild drops them already.
+    for (const [repo, repoMap] of this.durationRegressions) {
+      for (const v of repoMap.values()) {
+        if (!evaluated.has(`${repo}\u0000${flakeKey(v.check, v.event)}`)) {
+          this.deps.notifier?.durationRegression(repo, v.check, v.event, false, '');
+        }
+      }
+    }
+    this.durationRegressions = next;
+    const active = [...next.values()].reduce((s, m2) => s + m2.size, 0);
+    // quiet when there was nothing to evaluate (fresh/shallow DBs) — otherwise
+    // one journal line per scan, the live "is it running?" probe
+    if (scanned > 0) {
+      console.log(`[regression] scanned ${scanned} check series — `
+        + `${active} active duration regression${active === 1 ? '' : 's'}`);
+    }
+  }
+
+  /** Current ACTIVE duration regressions per repo (sorted) — the metrics
+   *  payload's `regressions[]` section reads this live cache. */
+  activeRegressions(): { repo: string; checks: DurationRegressionView[] }[] {
+    return [...this.durationRegressions]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([repo, byCheck]) => ({
+        repo,
+        checks: [...byCheck.values()].sort((a, b) =>
+          a.check.localeCompare(b.check) || a.event.localeCompare(b.event)),
+      }));
   }
 
   /** Learned pickup-wait estimate: name-level median, falling back to the event pool. */

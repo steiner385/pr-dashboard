@@ -296,6 +296,7 @@ describe('computeMetrics: empty history', () => {
       window: '3d', bucket: 'hour',
       runnerWaits: [], queue: [], slowestJobs: [], velocity: [], leadTime: [], trends: [],
       calibration: [], flakiness: [], trainKillers: [], criticalPath: [], lint: [],
+      regressions: [],
     });
   });
 });
@@ -797,5 +798,29 @@ describe('computeMetrics: live foreign-name exclusion (issue #61 follow-up)', ()
       { rule: 'timeout', severity: 'warn', job: 'ci', observed: 10_000 }]);
     const pr = m.criticalPath.find((c) => c.event === 'pull_request')!;
     expect(pr.path.find((s) => s.name === 'ci')!.durationP50).toBe(10_000);
+  });
+});
+
+describe('computeMetrics: duration regressions (issue #41)', () => {
+  const REG = { check: 'build-test', event: 'merge_group', priorP50Secs: 240,
+    recentP50Secs: 600, ratio: 2.5, sinceApprox: '2026-06-10T14:00:00Z' };
+
+  it('passes the poller cache through per repo', () => {
+    const m = computeMetrics(h, '3d', 'hour', NOW, [], () => 1, new Map(), new Map(),
+      [{ repo: REPO, checks: [REG] }]);
+    expect(m.regressions).toEqual([{ repo: REPO, checks: [REG] }]);
+  });
+
+  it('defaults to empty and applies the exclude list', () => {
+    expect(computeMetrics(h, '3d', 'hour', NOW).regressions).toEqual([]);
+    const m = computeMetrics(h, '3d', 'hour', NOW, [REPO], () => 1, new Map(), new Map(),
+      [{ repo: REPO, checks: [REG] }, { repo: 'octo/gizmos', checks: [REG] }]);
+    expect(m.regressions.map((r) => r.repo)).toEqual(['octo/gizmos']);
+  });
+
+  it('omits repos with no active regressions', () => {
+    const m = computeMetrics(h, '3d', 'hour', NOW, [], () => 1, new Map(), new Map(),
+      [{ repo: REPO, checks: [] }]);
+    expect(m.regressions).toEqual([]);
   });
 });

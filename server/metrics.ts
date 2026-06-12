@@ -1,4 +1,5 @@
 import { FLAKE_MIN_RUNS, type HistoryStore } from './history';
+import type { DurationRegressionView } from './poller';
 import { percentile } from './math';
 import { activeForEvent, type CiGraphNode } from './required-checks';
 import { matchingPrefix } from './estimator/classify';
@@ -108,6 +109,13 @@ export interface MetricsPayload {
     segments: { id: LeadTimeSegmentId; medianSecs: number | null; n: number }[];
     totalP50Secs: number | null; totalN: number;
     prodDeploys: number; deploysPerDay: number }[];
+  /** Duration regressions (issue #41): the CURRENTLY-ACTIVE rolling-median
+   *  step-ups from the poller's hourly scan — a live alert strip, NOT a
+   *  window-scoped aggregate (the window selector never applies; the UI labels
+   *  this). Each entry: prior/recent p50 over the last 20-vs-10 SUCCESS
+   *  samples, their ratio, and the approximate onset (first sample of the
+   *  recent window). Repos with no active regressions are omitted. */
+  regressions: { repo: string; checks: DurationRegressionView[] }[];
   /** Workflow lint (issue #48, rule 1 — timeout calibration): per repo,
    *  findings from joining each derived job's `timeout-minutes` with its
    *  observed p99 duration (last 50 runs, ≥ LINT_MIN_RUNS samples; max across
@@ -245,7 +253,8 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
   bucket: MetricsBucket, now: Date = new Date(), exclude: string[] = [],
   batchSizeFor: (repo: string) => number = () => 1,
   ciGraphs: Map<string, Map<string, CiGraphNode>> = new Map(),
-  foreignNames: Map<string, Set<string>> = new Map()): MetricsPayload {
+  foreignNames: Map<string, Set<string>> = new Map(),
+  activeRegressions: { repo: string; checks: DurationRegressionView[] }[] = []): MetricsPayload {
   const dropped = new Set(exclude);
   const keep = <T extends { repo: string }>(rows: T[]): T[] =>
     dropped.size ? rows.filter((r) => !dropped.has(r.repo)) : rows;
@@ -562,6 +571,12 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
     if (findings.length > 0) lint.push({ repo, findings });
   }
 
+  // 11. Duration regressions (issue #41): a passthrough of the poller's live
+  // active-regression cache — exclude-filtered like everything else, empty
+  // repos omitted. Window-independent BY DESIGN (it's "what is regressed NOW").
+  const regressions = activeRegressions
+    .filter((r) => !dropped.has(r.repo) && r.checks.length > 0);
+
   return { window, bucket, runnerWaits, queue, slowestJobs, velocity, leadTime, trends,
-    calibration, flakiness, trainKillers, criticalPath, lint };
+    calibration, flakiness, trainKillers, criticalPath, lint, regressions };
 }

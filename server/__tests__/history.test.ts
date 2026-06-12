@@ -936,3 +936,55 @@ describe('durationP99 (issue #48 timeout lint — last-50 SUCCESS p99)', () => {
     expect(h.durationP99(REPO, 'CI', 'merge_group')).toEqual({ p99Secs: 60, n: 1 });
   });
 });
+
+describe('duration regression reads (issue #41)', () => {
+  /** Insert `n` SUCCESS samples of `secs` for (name, event), one minute apart,
+   *  newest ending at base + n minutes. */
+  const seed = (name: string, event: string, n: number, secs: number,
+    baseIso = '2026-06-10T10:00:00Z', repo = REPO) => {
+    const base = Date.parse(baseIso);
+    for (let i = 0; i < n; i++) {
+      const start = new Date(base + i * 60_000).toISOString();
+      const end = new Date(base + i * 60_000 + secs * 1000).toISOString();
+      h.recordCheckDuration(repo, name, event, start, end, 'SUCCESS');
+    }
+  };
+
+  it('regressionCandidates lists (repo, check, event) with ≥ minSamples SUCCESS rows + newestAt', () => {
+    seed('build-test', 'merge_group', 30, 120);
+    seed('lint', 'pull_request', 29, 60); // one short of the bar
+    const cands = h.regressionCandidates(30);
+    expect(cands).toHaveLength(1);
+    expect(cands[0]!.repo).toBe(REPO);
+    expect(cands[0]!.name).toBe('build-test');
+    expect(cands[0]!.event).toBe('merge_group');
+    // newest sample: base + 29min start + 120s duration
+    expect(Date.parse(cands[0]!.newestAt)).toBe(Date.parse('2026-06-10T10:31:00Z'));
+  });
+
+  it('regressionCandidates ignores non-SUCCESS rows in the count', () => {
+    seed('flaky', 'pull_request', 29, 60);
+    h.recordCheckDuration(REPO, 'flaky', 'pull_request',
+      '2026-06-11T10:00:00Z', '2026-06-11T10:01:00Z', 'FAILURE');
+    expect(h.regressionCandidates(30)).toHaveLength(0);
+  });
+
+  it('regressionCandidates spans repos (one scan query for the whole DB)', () => {
+    seed('build', 'pull_request', 30, 60);
+    seed('build', 'pull_request', 30, 60, '2026-06-10T10:00:00Z', 'octo/gizmos');
+    expect(h.regressionCandidates(30).map((c) => c.repo).sort())
+      .toEqual(['acme/widgets', 'octo/gizmos']);
+  });
+
+  it('recentDurationSamples returns newest-first SUCCESS samples with timestamps, capped', () => {
+    seed('build-test', 'merge_group', 35, 120);
+    h.recordCheckDuration(REPO, 'build-test', 'merge_group',
+      '2026-06-11T10:00:00Z', '2026-06-11T10:30:00Z', 'FAILURE'); // newest row, wrong conclusion
+    const s = h.recentDurationSamples(REPO, 'build-test', 'merge_group', 30);
+    expect(s).toHaveLength(30);
+    expect(s.every((x) => x.durationSecs === 120)).toBe(true);
+    // newest first — and the FAILURE row is absent
+    expect(Date.parse(s[0]!.completedAt)).toBeGreaterThan(Date.parse(s[1]!.completedAt));
+    expect(Date.parse(s[0]!.completedAt)).toBe(Date.parse('2026-06-10T10:36:00Z'));
+  });
+});

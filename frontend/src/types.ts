@@ -25,6 +25,21 @@ export interface CheckView {
   /** True when the check is currently failing-class AND its flake rate ≥ 20% —
    *  the failure is likely a flake; consider a re-run. */
   likelyFlake: boolean;
+  /** Duration regression (issue #41): true while the check's (name, event)
+   *  series has an active p50 step-up — the Gantt's ↑ badge. Optional to
+   *  tolerate pre-upgrade payloads. */
+  regressed?: boolean;
+  /** The step behind the badge (tooltip numbers); null/absent when not regressed. */
+  regression?: DurationRegressionInfo | null;
+}
+
+/** Mirror of server poller.ts DurationRegressionInfo (issue #41). */
+export interface DurationRegressionInfo {
+  priorP50Secs: number;
+  recentP50Secs: number;
+  ratio: number;
+  /** ISO time of the recent window's first sample — the approximate onset. */
+  sinceApprox: string;
 }
 export interface PrView {
   repo: string; number: number; title: string; url: string;
@@ -97,7 +112,7 @@ export interface DashboardState {
 
 export type NotificationEventType =
   | 'ci-failed' | 'group-failed' | 'queue-blocked' | 'ready' | 'overdue' | 'prod-live'
-  | 'queue-stalled';
+  | 'queue-stalled' | 'duration-regression';
 
 export interface NotificationEvent {
   repo: string;
@@ -272,6 +287,11 @@ export interface MetricsPayload {
     segments: { id: LeadTimeSegmentId; medianSecs: number | null; n: number }[];
     totalP50Secs: number | null; totalN: number;
     prodDeploys: number; deploysPerDay: number }[];
+  /** Duration regressions (issue #41): CURRENTLY-ACTIVE p50 step-ups from the
+   *  server's hourly scan — a live alert strip, not window-scoped (the window
+   *  selector never applies). Repos with no active regressions are omitted. */
+  regressions: { repo: string;
+    checks: ({ check: string; event: string } & DurationRegressionInfo)[] }[];
   /** Workflow lint (issue #48 rule 1 — timeout calibration). observed /
    *  configured are seconds; configured null = timeout-minutes unset (360m
    *  GitHub default). Repos with zero findings are omitted. */

@@ -148,6 +148,9 @@ export class HistoryStore {
   private readonly stmtSelectLeadTimeRows: Database.Statement;
   // Flake radar (#37) + train-killer leaderboard (#38)
   private readonly stmtSelectFlakeRows: Database.Statement;
+  // Duration-regression scan (issue #41)
+  private readonly stmtSelectRegressionCandidates: Database.Statement;
+  private readonly stmtSelectRecentDurations: Database.Statement;
   private readonly stmtInsertGroupFailure: Database.Statement;
   private readonly stmtSelectGroupFailuresSince: Database.Statement;
   private readonly stmtCountGroupRuns: Database.Statement;
@@ -390,6 +393,20 @@ export class HistoryStore {
       `SELECT repo, check_name, group_sha, observed_at AS at
        FROM group_failures WHERE observed_at >= ? ORDER BY repo, check_name, observed_at`
     );
+    // Duration-regression scan (issue #41): one whole-DB pass enumerates the
+    // (repo, check, event) series deep enough for the step test; the per-series
+    // read then pulls the newest samples WITH timestamps (sinceApprox needs them).
+    this.stmtSelectRegressionCandidates = this.db.prepare(
+      `SELECT repo, check_name, event, MAX(completed_at) AS newest_at
+       FROM check_durations WHERE conclusion='SUCCESS'
+       GROUP BY repo, check_name, event HAVING COUNT(*) >= ?
+       ORDER BY repo, check_name, event`
+    );
+    this.stmtSelectRecentDurations = this.db.prepare(
+      `SELECT duration_secs, completed_at FROM check_durations
+       WHERE repo=? AND check_name=? AND event=? AND conclusion='SUCCESS'
+       ORDER BY completed_at DESC LIMIT ?`
+    );
   }
 
   /** `headSha`/`runAttempt` (issue #34): the PR/group head commit the check ran
@@ -594,6 +611,26 @@ export class HistoryStore {
       out.set(repo, [...(out.get(repo) ?? []), stat]);
     }
     return out;
+  }
+
+  /** Every (repo, check, event) series with at least `minSamples` SUCCESS rows —
+   *  the duration-regression scan's candidate list (issue #41). `newestAt` lets
+   *  the caller skip dormant checks without reading their samples. */
+  regressionCandidates(minSamples: number):
+    { repo: string; name: string; event: string; newestAt: string }[] {
+    const rows = this.stmtSelectRegressionCandidates.all(minSamples) as Record<string, unknown>[];
+    return rows.map((r) => ({ repo: r.repo as string, name: r.check_name as string,
+      event: r.event as string, newestAt: r.newest_at as string }));
+  }
+
+  /** Newest-first SUCCESS duration samples WITH completed_at for one
+   *  (repo, check, event) series, capped at `limit` — the duration-regression
+   *  step test's input (issue #41). */
+  recentDurationSamples(repo: string, name: string, event: string, limit: number):
+    { durationSecs: number; completedAt: string }[] {
+    const rows = this.stmtSelectRecentDurations.all(repo, name, event, limit) as
+      { duration_secs: number; completed_at: string }[];
+    return rows.map((r) => ({ durationSecs: r.duration_secs, completedAt: r.completed_at }));
   }
 
   /** Observed enqueue→merge wall-clock wait for a merge-queue PR. Rejects ≤0/NaN. */

@@ -34,7 +34,9 @@
       "queue-blocked": true,
       "ready": false,
       "overdue": false,
-      "prod-live": true
+      "prod-live": true,
+      "queue-stalled": true,
+      "duration-regression": true
     }
   }
 }

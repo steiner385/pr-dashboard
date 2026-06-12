@@ -3865,7 +3865,8 @@ describe('Poller notifier wiring (issue #19)', () => {
     enabled: false, // command sink off — bus emission is what's under test
     command: [],
     events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
-      ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true },
+      ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
+      'duration-regression': true },
   };
 
   function notifierHarness() {
@@ -3973,7 +3974,8 @@ describe('Poller notifier wiring (issue #19)', () => {
     const cfgWith = (enabled: boolean): AppConfig => ({ ...CONFIG,
       notifications: { enabled, command: ['notify-send', '{title}', '{body}'],
         events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
-          ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true } } });
+          ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
+          'duration-regression': true } } });
     const execCalls: string[] = [];
     // index.ts wiring shape: the notifier reads the POLLER's live config, so a
     // PUT /api/config → reconfigure() flips the command sink with no restart
@@ -4196,7 +4198,8 @@ describe('Poller queue cycle records group failures (issue #38)', () => {
     const events: NotificationEvent[] = [];
     const notifier = new Notifier({ config: () => ({ enabled: false, command: [],
       events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
-        ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true } }) });
+        ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
+        'duration-regression': true } }) });
     notifier.on('notification', (ev: NotificationEvent) => events.push(ev));
     (p as unknown as { deps: { notifier?: Notifier } }).deps.notifier = notifier;
     p.buildState();
@@ -4284,7 +4287,8 @@ describe('Poller queue ops console (#39) + merge ETA simulation (#40)', () => {
   const OPS_EVENTS_ON: NotificationsConfig = {
     enabled: false, command: [],
     events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
-      ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true },
+      ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
+      'duration-regression': true },
   };
 
   const opsSweep = (n: number) => ({
@@ -4665,5 +4669,155 @@ describe('guard workflow scoping + liveForeignNames (issue #61 follow-up)', () =
     // unknown rollup workflow → no scoping possible → nothing reads as foreign
     p.setRollupWorkflowName('acme/widgets', null as unknown as string);
     expect(p.liveForeignNames()).toEqual(new Map());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Duration-regression scan (issue #41): hourly cadence riding the deploy
+// cycle, results cached on the poller, notifier events debounced per series.
+// ---------------------------------------------------------------------------
+
+describe('Poller duration-regression scan (issue #41)', () => {
+  const REG_EVENTS: NotificationsConfig = {
+    enabled: false, command: [],
+    events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
+      ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
+      'duration-regression': true },
+  };
+  const REG_CHECK = 'fast-checks / ESLint';
+
+  /** 20 prior samples @ priorSecs then 10 recent @ recentSecs, 5 min apart,
+   *  newest completing ~09:30 UTC (well inside NOW's recency window). */
+  function seedStep(recentSecs: number, priorSecs = 120, repo = 'acme/widgets') {
+    const base = Date.parse('2026-06-10T07:00:00Z');
+    for (let i = 0; i < 30; i++) {
+      const secs = i < 20 ? priorSecs : recentSecs;
+      history.recordCheckDuration(repo, REG_CHECK, 'pull_request',
+        new Date(base + i * 5 * 60_000).toISOString(),
+        new Date(base + i * 5 * 60_000 + secs * 1000).toISOString(), 'SUCCESS');
+    }
+  }
+
+  function regHarness(now: () => Date, config = CONFIG) {
+    const events: NotificationEvent[] = [];
+    const notifier = new Notifier({ config: () => REG_EVENTS });
+    notifier.on('notification', (ev: NotificationEvent) => events.push(ev));
+    const p = new Poller({ router: asRouter(fakeClient()), history, deploy: noDeploy(),
+      config, now, notifier });
+    return { p, events };
+  }
+
+  it('deployOnce scans, caches the active regression, and fires the notifier once', async () => {
+    seedStep(600); // 2m→10m: ×5, +8m — both guards trip
+    const { p, events } = regHarness(() => NOW);
+    await p.deployOnce();
+    const regs = p.activeRegressions();
+    expect(regs).toHaveLength(1);
+    expect(regs[0]!.repo).toBe('acme/widgets');
+    expect(regs[0]!.checks).toHaveLength(1);
+    expect(regs[0]!.checks[0]).toMatchObject({
+      check: REG_CHECK, event: 'pull_request', priorP50Secs: 120, recentP50Secs: 600 });
+    expect(regs[0]!.checks[0]!.ratio).toBeCloseTo(5);
+    const regEvents = events.filter((e) => e.type === 'duration-regression');
+    expect(regEvents).toHaveLength(1);
+    expect(regEvents[0]).toMatchObject({ repo: 'acme/widgets', prNumber: 0, title: REG_CHECK });
+    expect(regEvents[0]!.detail).toContain('2m → 10m');
+  });
+
+  it('no flag when only one guard trips (delta < 60s)', async () => {
+    seedStep(5, 3); // ×1.67 but +2s — noise
+    const { p, events } = regHarness(() => NOW);
+    await p.deployOnce();
+    expect(p.activeRegressions()).toHaveLength(0);
+    expect(events.filter((e) => e.type === 'duration-regression')).toHaveLength(0);
+  });
+
+  it('throttles to one scan per hour (re-fires after the hour elapses)', async () => {
+    seedStep(600);
+    let t = NOW;
+    const { p, events } = regHarness(() => t);
+    await p.deployOnce();
+    // active regression cleared between scans would be re-detected — but within
+    // the hour the scan must not even run, so the cache stays as-is
+    seedStep(600, 120, 'octo/gizmos');
+    await p.deployOnce();
+    expect(p.activeRegressions()).toHaveLength(1); // octo/gizmos not scanned yet
+    t = new Date(NOW.getTime() + 3601_000);
+    await p.deployOnce();
+    expect(p.activeRegressions()).toHaveLength(2);
+    expect(events.filter((e) => e.type === 'duration-regression')).toHaveLength(2);
+  });
+
+  it('debounces while the condition holds; hysteresis keeps 1.2 ≤ ratio < 1.5 active; clears below 1.2 and re-fires', async () => {
+    seedStep(600);
+    let t = NOW;
+    const { p, events } = regHarness(() => t);
+    await p.deployOnce(); // scan 1: flagged
+    // scan 2 (an hour later): same data → still active, no second event
+    t = new Date(t.getTime() + 3601_000);
+    await p.deployOnce();
+    expect(events.filter((e) => e.type === 'duration-regression')).toHaveLength(1);
+    expect(p.activeRegressions()).toHaveLength(1);
+    // scan 3: newest 10 samples now ~156s (×1.3, +36s) — below the flag bar but
+    // above the clear bar: stays active because it WAS active
+    const base3 = Date.parse('2026-06-10T13:00:00Z');
+    for (let i = 0; i < 10; i++) {
+      history.recordCheckDuration('acme/widgets', REG_CHECK, 'pull_request',
+        new Date(base3 + i * 5 * 60_000).toISOString(),
+        new Date(base3 + i * 5 * 60_000 + 156_000).toISOString(), 'SUCCESS');
+    }
+    t = new Date(t.getTime() + 3601_000);
+    await p.deployOnce();
+    expect(p.activeRegressions()).toHaveLength(1);
+    // scan 4: newest 10 samples back to ~120s (ratio ~1) — clears
+    const base4 = Date.parse('2026-06-10T15:00:00Z');
+    for (let i = 0; i < 10; i++) {
+      history.recordCheckDuration('acme/widgets', REG_CHECK, 'pull_request',
+        new Date(base4 + i * 5 * 60_000).toISOString(),
+        new Date(base4 + i * 5 * 60_000 + 120_000).toISOString(), 'SUCCESS');
+    }
+    t = new Date(t.getTime() + 3601_000);
+    await p.deployOnce();
+    expect(p.activeRegressions()).toHaveLength(0);
+    // scan 5: a fresh step (10 @ 600s) — re-fires after the clear
+    const base5 = Date.parse('2026-06-10T17:00:00Z');
+    for (let i = 0; i < 10; i++) {
+      history.recordCheckDuration('acme/widgets', REG_CHECK, 'pull_request',
+        new Date(base5 + i * 5 * 60_000).toISOString(),
+        new Date(base5 + i * 5 * 60_000 + 600_000).toISOString(), 'SUCCESS');
+    }
+    t = new Date(t.getTime() + 3601_000);
+    await p.deployOnce();
+    expect(events.filter((e) => e.type === 'duration-regression')).toHaveLength(2);
+  });
+
+  it('skips excluded repos and dormant series (newest sample > 14d old)', async () => {
+    seedStep(600); // acme/widgets — will be excluded
+    const base = Date.parse('2026-05-01T07:00:00Z'); // > 14d before NOW
+    for (let i = 0; i < 30; i++) {
+      const secs = i < 20 ? 120 : 600;
+      history.recordCheckDuration('octo/gizmos', 'old-check', 'pull_request',
+        new Date(base + i * 5 * 60_000).toISOString(),
+        new Date(base + i * 5 * 60_000 + secs * 1000).toISOString(), 'SUCCESS');
+    }
+    const { p } = regHarness(() => NOW, { ...CONFIG, exclude: ['acme/widgets'] });
+    await p.deployOnce();
+    expect(p.activeRegressions()).toHaveLength(0);
+  });
+
+  it('CheckView rows carry regressed + regression detail for badging (Gantt ↑ marker)', async () => {
+    seedStep(600);
+    const { p } = regHarness(() => NOW);
+    await p.deployOnce();
+    await p.sweepOnce();
+    await p.detailOnce();
+    const pr = p.getState().repos[0]!.prs.find((x) => x.number === 8962)!;
+    const eslint = pr.checks.find((c) => c.name.includes('ESLint'))!;
+    expect(eslint.regressed).toBe(true);
+    expect(eslint.regression).toMatchObject({ priorP50Secs: 120, recentP50Secs: 600 });
+    expect(eslint.regression!.sinceApprox).toBeTruthy();
+    const other = pr.checks.find((c) => !c.name.includes('ESLint'))!;
+    expect(other.regressed).toBe(false);
+    expect(other.regression).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 import { Fragment } from 'react';
 import type { CheckView } from './types';
-import { formatDur } from './format';
+import { formatDur, formatSince } from './format';
 
 type RowKind = 'done' | 'running' | 'overdue' | 'failed' | 'queued' | 'skipped';
 
@@ -25,6 +25,14 @@ function rowKind(c: CheckView): RowKind {
 /** Flake-radar annotation for a failing check (issue #37). */
 function flakeText(c: CheckView): string {
   return ` · ⚐ flakes ${Math.round(c.flakeRatePct ?? 0)}% — likely flake, consider re-run`;
+}
+
+/** Hover text for the duration-regression ↑ badge (issue #41). */
+function regressTitle(c: CheckView): string {
+  const r = c.regression;
+  if (!r) return 'duration regression';
+  return `duration regression: p50 ${formatDur(r.priorP50Secs)} → ${formatDur(r.recentP50Secs)}`
+    + ` since ${formatSince(r.sinceApprox)}`;
 }
 
 function timeText(c: CheckView, kind: RowKind): string {
@@ -86,6 +94,10 @@ function GanttRow({ c, scale }: { c: CheckView; scale: number }) {
         {c.url
           ? <a href={c.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{c.name}</a>
           : <span>{c.name}</span>}
+        {c.regressed && (
+          <span className="g-regress" role="img" aria-label="duration regression"
+            title={regressTitle(c)}>↑</span>
+        )}
       </span>
       <span className="g-bar" title={barTitle}>
         {hasBand && (() => {

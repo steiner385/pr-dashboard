@@ -424,3 +424,35 @@ describe('CheckGantt — flake radar annotation (issue #37)', () => {
     expect(container.querySelector('.g-t')!.textContent).toBe('2m ✓');
   });
 });
+
+describe('CheckGantt — duration-regression badge (issue #41)', () => {
+  const REG = { priorP50Secs: 240, recentP50Secs: 600, ratio: 2.5,
+    sinceApprox: '2026-06-10T14:00:00Z' };
+
+  it('renders the ↑ marker with the p50 step + onset in the title', () => {
+    const { container } = render(<CheckGantt stage="ci" checks={[
+      check({ name: 'build-test', regressed: true, regression: REG }),
+    ]} />);
+    const badge = container.querySelector('.g-regress') as HTMLElement;
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toBe('↑');
+    expect(badge.title).toContain('duration regression: p50 4m → 10m');
+    expect(badge.title).toContain('since ');
+  });
+
+  it('no marker on non-regressed checks (and on pre-upgrade payloads without the field)', () => {
+    const { container } = render(<CheckGantt stage="ci" checks={[
+      check({ name: 'plain', regressed: false, regression: null }),
+      check({ name: 'pre-upgrade' }), // fields absent entirely
+    ]} />);
+    expect(container.querySelector('.g-regress')).toBeNull();
+  });
+
+  it('falls back to a generic title when the detail object is missing', () => {
+    const { container } = render(<CheckGantt stage="ci" checks={[
+      check({ name: 'build-test', regressed: true }),
+    ]} />);
+    const badge = container.querySelector('.g-regress') as HTMLElement;
+    expect(badge.title).toBe('duration regression');
+  });
+});
