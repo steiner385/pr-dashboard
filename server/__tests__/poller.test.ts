@@ -135,6 +135,53 @@ describe('Poller', () => {
     expect(history.getMeta('lastSweep')).toBe(NOW.toISOString());
   });
 
+  it('calibrated range (issue #35): an optimistic-history stage gets a widened display range', async () => {
+    // 10 accuracy samples at ratio 1.5 → calibrationFactor('ci') = 1.5 > 1.15
+    for (let i = 0; i < 10; i++) {
+      history.recordEtaAccuracy('acme/widgets', 'ci', 100, 150, `2026-06-09T10:${String(i).padStart(2, '0')}:00Z`);
+    }
+    const p = new Poller({ router: asRouter(fakeClient()), history, deploy: noDeploy(),
+      config: CONFIG, now: () => NOW });
+    await p.sweepOnce();
+    await p.detailOnce();
+    const pr = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!.prs
+      .find((x) => x.number === 8962)!;
+    expect(pr.stage.stage).toBe('ci');
+    const eta = pr.stage.etaSeconds!;
+    expect(eta).not.toBeNull();
+    expect(pr.stage.etaRangeSeconds).toEqual([eta, Math.round(eta * 1.5)]);
+  });
+
+  it('calibrated range stays off under 10 samples (no factor yet)', async () => {
+    for (let i = 0; i < 9; i++) {
+      history.recordEtaAccuracy('acme/widgets', 'ci', 100, 150, `2026-06-09T10:${String(i).padStart(2, '0')}:00Z`);
+    }
+    const p = new Poller({ router: asRouter(fakeClient()), history, deploy: noDeploy(),
+      config: CONFIG, now: () => NOW });
+    await p.sweepOnce();
+    await p.detailOnce();
+    const pr = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!.prs
+      .find((x) => x.number === 8962)!;
+    expect(pr.stage.etaSeconds).not.toBeNull();
+    expect(pr.stage.etaRangeSeconds).toBeNull();
+  });
+
+  it('calibrated range stays off for benign factors (≤ 1.15 — no display churn)', async () => {
+    // 10 samples at ratio 1.05 → factor exists but sits below the churn threshold
+    for (let i = 0; i < 10; i++) {
+      history.recordEtaAccuracy('acme/widgets', 'ci', 100, 105, `2026-06-09T10:${String(i).padStart(2, '0')}:00Z`);
+    }
+    expect(history.calibrationFactor('acme/widgets', 'ci')).toBeCloseTo(1.05, 10);
+    const p = new Poller({ router: asRouter(fakeClient()), history, deploy: noDeploy(),
+      config: CONFIG, now: () => NOW });
+    await p.sweepOnce();
+    await p.detailOnce();
+    const pr = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!.prs
+      .find((x) => x.number === 8962)!;
+    expect(pr.stage.etaSeconds).not.toBeNull();
+    expect(pr.stage.etaRangeSeconds).toBeNull();
+  });
+
   it('merged PR is persisted and classified through deploy stages (qa live, prod not → awaiting-prod)', async () => {
     const deploy = fakeDeploy(
       { 'https://qa.widgets.example.com/health': 'deployedSha-qa', 'https://widgets.example.com/health': 'oldSha-prod' },

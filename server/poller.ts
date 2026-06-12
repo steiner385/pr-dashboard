@@ -15,6 +15,7 @@ import { buildSweepQuery, buildMergedPageQuery, buildOpenPageQuery, buildDetailQ
 import { mapPrNode, mapQueueEntries, mapRollupContexts } from './map';
 import { familyDisplayName } from './normalize';
 import { computeProgress } from './estimator/progress';
+import { applyEtaCalibration, CALIBRATED_STAGES } from './estimator/calibrate';
 import { classify, requiredChecks, matchesRequiredPrefix, matchingPrefix, workflowScopeAllows, type DeployInfo } from './estimator/classify';
 import { queueStage, type GroupProgress, type QueueStageResult } from './estimator/queue';
 import { classifyWait, extractRunnerWaits, type NeedActivePredicate } from './estimator/waits';
@@ -142,8 +143,10 @@ const MAX_OPEN_PAGES = 5;
 /** Re-derive required-check prefixes from a deploy repo's ci.yml at most this often. */
 const PREFIX_DERIVE_INTERVAL_MS = 24 * 3600_000;
 
-/** Stages whose first ETA prediction is scored against the actual stage duration. */
-const ETA_TRACKED_STAGES = new Set(['ci', 'queue', 'qa-deploy']);
+/** Stages whose first ETA prediction is scored against the actual stage duration —
+ *  the same set the conformal-lite range calibration applies to (single source
+ *  of truth in estimator/calibrate.ts). */
+const ETA_TRACKED_STAGES = CALIBRATED_STAGES;
 
 /** Force an SSE emission (bypassing the unchanged-signature skip) when this long
  *  has passed since the last actual emission — keeps clients' generatedAt fresh. */
@@ -1370,13 +1373,14 @@ export class Poller extends EventEmitter {
         coveringGroupOid: coveringOid });
     }
     const prevStage = this.stages.get(key) ?? null;
-    const stage = classify({
+    const rawStage = classify({
       pr, prev: prevStage, ciProgress, queueProgress,
       deploy: { hasDeploy: pr.repo in this.effectiveDeploy(), qaLive: null, prodLive: null, propagating: false, deployProgress: null },
       retentionDays: config.retentionDays, now, requiredCheckPrefixes: prefixes,
       rollupWorkflowName: rollupWf,
     });
-    if (!stage) return null;
+    if (!rawStage) return null;
+    const stage = this.calibrateStage(pr.repo, rawStage);
     this.stages.set(key, stage);
     this.deps.notifier?.observe({ repo: pr.repo, prNumber: pr.number, title: pr.title,
       prev: prevStage, next: stage,
@@ -1423,14 +1427,15 @@ export class Poller extends EventEmitter {
         overdue: elapsed > 1.5 * gap,
       };
     }
-    const stage = classify({
+    const rawStage = classify({
       pr: { repo: rec.repo, number: rec.number, title: rec.title, url: rec.url, headSha: '',
         isDraft: false, mergeStateStatus: null, createdAt: rec.createdAt, mergedAt: rec.mergedAt,
         mergeCommitSha: rec.mergeCommitSha, autoMergeArmed: false, queue: null, checks: [] },
       prev: null, ciProgress: null, queueProgress: null, deploy,
       retentionDays: config.retentionDays, now,
     });
-    if (!stage) return null;
+    if (!rawStage) return null;
+    const stage = this.calibrateStage(rec.repo, rawStage);
     // merged PRs share the key space — captures qa-deploy ETA accuracy too
     const key = `${rec.repo}#${rec.number}`;
     this.trackStageEta(key, rec.repo, stage, now);
@@ -1486,6 +1491,18 @@ export class Poller extends EventEmitter {
           ? this.expectedRunnerWaitFor(repo, c.name, c.event) : null,
       };
     });
+  }
+
+  /**
+   * Conformal-lite range calibration (issue #35, part 2): when (repo, stage)
+   * has ≥10 accuracy samples and their p90 actual/predicted ratio exceeds the
+   * churn threshold, widen/set the displayed ETA range to what history says
+   * the stage actually takes. Stages without an ETA, non-tracked stages, and
+   * thin/benign factors pass through unchanged (heuristic range kept).
+   */
+  private calibrateStage(repo: string, stage: StageResult): StageResult {
+    if (!CALIBRATED_STAGES.has(stage.stage) || stage.etaSeconds == null) return stage;
+    return applyEtaCalibration(stage, this.deps.history.calibrationFactor(repo, stage.stage));
   }
 
   /** Learned pickup-wait estimate: name-level median, falling back to the event pool. */
