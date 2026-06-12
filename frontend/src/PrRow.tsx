@@ -64,10 +64,12 @@ function subLine(pr: PrView, queueCulprit: number | null): string | null {
   return stageLabel(s.stage, s.substate);
 }
 
-export function PrRow({ pr, hasDeploy, queueCulprit = null }: {
+export function PrRow({ pr, hasDeploy, queueCulprit = null, expandable = true }: {
   pr: PrView; hasDeploy: boolean;
   /** Repo-level RepoQueueView.unmergeableCulprit (queue-blocked sub line). */
   queueCulprit?: number | null;
+  /** false in kiosk mode (issue #20): row is read-only — no expand-on-click. */
+  expandable?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const s = pr.stage;
@@ -76,7 +78,7 @@ export function PrRow({ pr, hasDeploy, queueCulprit = null }: {
   const sub = subLine(pr, queueCulprit);
   return (
     <div id={`pr-${pr.number}`} className={`pr-row ${parked ? `parked ${s.substate ?? ''}` : ''}`}>
-      <div className="pr-main" onClick={() => setOpen(!open)}>
+      <div className="pr-main" onClick={expandable ? () => setOpen(!open) : undefined}>
         <div className="pr-head">
           <span className="pr-num">#{pr.number}</span>
           <a className="pr-title" href={pr.url} target="_blank" rel="noreferrer"

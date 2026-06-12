@@ -1,5 +1,6 @@
 import type { RepoQueueView, QueueGroupView } from './types';
 import { formatDur } from './format';
+import { scrollBehavior } from './motion';
 
 const MAX_NUMBERS_PER_CAR = 6;
 
@@ -9,10 +10,7 @@ function prLabel(n: number) {
 
 function handlePrLinkClick(e: React.MouseEvent<HTMLAnchorElement>, n: number) {
   e.preventDefault();
-  const reduced = typeof window.matchMedia === 'function'
-    ? !window.matchMedia('(prefers-reduced-motion: no-preference)').matches
-    : true;
-  document.getElementById(`pr-${n}`)?.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth' });
+  document.getElementById(`pr-${n}`)?.scrollIntoView({ behavior: scrollBehavior() });
 }
 
 /** Render up to MAX_NUMBERS_PER_CAR links with +N overflow. */

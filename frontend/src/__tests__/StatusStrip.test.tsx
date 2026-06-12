@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { StatusStrip, bucketPr, type Bucket } from '../StatusStrip';
 import type { PrView } from '../types';
 
@@ -160,5 +160,28 @@ describe('StatusStrip', () => {
         'Ready, draft, conflicting, or recently merged — nothing running',
       ]);
     });
+  });
+});
+
+// ---- kiosk mode (issue #20): non-interactive strip ----
+
+describe('StatusStrip interactive=false (kiosk)', () => {
+  it('renders tiles as plain divs — no buttons, counts and labels intact', () => {
+    render(<StatusStrip prs={[pr('ci'), pr('queue')]} activeFilter={null}
+      onFilter={vi.fn()} interactive={false} />);
+    const strip = screen.getByRole('group', { name: 'Status overview' });
+    expect(within(strip).queryAllByRole('button')).toHaveLength(0);
+    expect(within(strip).getByText('CI running')).toBeInTheDocument();
+    expect(within(strip).getByText('In queue')).toBeInTheDocument();
+    // both non-empty buckets show their count of 1
+    expect(within(strip).getAllByText('1')).toHaveLength(2);
+  });
+
+  it('clicking a non-interactive tile never calls onFilter', () => {
+    const onFilter = vi.fn();
+    render(<StatusStrip prs={[pr('ci')]} activeFilter={null}
+      onFilter={onFilter} interactive={false} />);
+    fireEvent.click(screen.getByText('CI running'));
+    expect(onFilter).not.toHaveBeenCalled();
   });
 });

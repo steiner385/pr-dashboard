@@ -138,6 +138,8 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
   display: flex; flex-direction: column; align-items: center; gap: 2px;
 }
 .status-tile:disabled { opacity: 0.45; cursor: default; }
+/* non-interactive (kiosk) tile with an empty bucket — mirror the disabled look */
+.status-tile.zero { opacity: 0.45; }
 .status-tile:not(:disabled):hover { opacity: 0.88; }
 .status-tile.active { box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--tile-c); }
 .status-tile b { display: block; font-size: 26px; line-height: 1.1; }
@@ -432,3 +434,24 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
 .legend-train .car { min-width: 88px; }
 .legend-swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block;
   flex-shrink: 0; }
+
+/* --- Kiosk mode (issue #20): read-only wall display, larger type --- */
+/* base font bump cascades into everything that uses relative sizing; the
+   fixed-px hotspots below are bumped individually for at-a-distance reading */
+.app.kiosk { max-width: 1400px; padding: 12px 24px 40px; font-size: 17px; }
+.kiosk header h1 { font-size: 28px; }
+.kiosk .generated, .kiosk .stale { font-size: 15px; }
+.kiosk section h2 { font-size: 18px; margin: 16px 0 8px; }
+.kiosk .pr-num { font-size: 16px; }
+.kiosk .pr-title { font-size: 17px; }
+.kiosk .eta { font-size: 15px; }
+.kiosk .sub { font-size: 14px; }
+.kiosk .node-label { font-size: 11px; }
+.kiosk .node-eta { font-size: 11px; }
+.kiosk .status-tile b { font-size: 34px; }
+.kiosk .status-tile span { font-size: 12px; }
+/* rows and tiles are non-interactive in kiosk — no click/hover affordance */
+.kiosk .pr-main { cursor: default; }
+.kiosk .status-tile { cursor: default; }
+.kiosk .status-tile:hover { opacity: 1; }
+.kiosk .status-tile.zero, .kiosk .status-tile.zero:hover { opacity: 0.45; }

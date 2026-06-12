@@ -1,5 +1,7 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDashboard } from './useDashboard';
+import { readKioskConfig } from './kiosk';
+import { scrollBehavior } from './motion';
 import { PrRow } from './PrRow';
 import { StatusStrip, bucketPr, type Bucket } from './StatusStrip';
 import { QueueTrain } from './QueueTrain';
@@ -63,6 +65,36 @@ export function App() {
   const legendRef = useRef<HTMLButtonElement>(null);
   const handleLegendClose = useCallback(() => setLegendOpen(false), []);
 
+  // ---- kiosk mode (issue #20): read-only wall-display view + auto-cycle ----
+  // URL params are read once at mount; a wall display reloads to change them.
+  const [{ kiosk, cycleSeconds }] = useState(readKioskConfig);
+  const [cycleTick, setCycleTick] = useState(0);
+  const repoCount = state?.repos.length ?? 0;
+
+  useEffect(() => {
+    if (!kiosk) return;
+    const id = window.setInterval(() => {
+      if (document.hidden) return; // paused while the tab is not visible
+      setCycleTick((t) => t + 1);
+    }, cycleSeconds * 1000);
+    return () => window.clearInterval(id);
+  }, [kiosk, cycleSeconds]);
+
+  // Views: one per repo section (scrolled to its top), then the Metrics tab.
+  useEffect(() => {
+    if (!kiosk || repoCount === 0) return;
+    const view = cycleTick % (repoCount + 1);
+    if (view < repoCount) {
+      setTab('pipeline');
+      document.getElementById(`repo-section-${view}`)
+        ?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
+    } else {
+      setMetricsVisited(true);
+      setTab('metrics');
+      window.scrollTo({ top: 0, behavior: scrollBehavior() });
+    }
+  }, [kiosk, cycleTick, repoCount]);
+
   if (!state) return <main className="app"><p className="loading">Loading…</p></main>;
 
   // Collect all PrViews for the strip bucket counts.
@@ -82,7 +114,7 @@ export function App() {
   };
 
   return (
-    <main className="app">
+    <main className={kiosk ? 'app kiosk' : 'app'}>
       <header>
         <h1>PR Pipeline</h1>
         {!connected && (
@@ -97,6 +129,8 @@ export function App() {
              actually live. The server keepalive re-emits at least every 60s. */
           <span className="generated">live · updated {new Date(state.generatedAt).toLocaleTimeString()}</span>
         )}
+        {!kiosk && (
+        <>
         <button
           type="button"
           ref={legendRef}
@@ -133,7 +167,11 @@ export function App() {
         >
           <span aria-hidden="true">⚙</span>
         </button>
+        </>
+        )}
       </header>
+      {!kiosk && (
+      <>
       <SettingsPanel
         open={settingsOpen}
         onClose={handleSettingsClose}
@@ -159,15 +197,21 @@ export function App() {
           Metrics
         </button>
       </nav>
-      <div role="tabpanel" id="tabpanel-metrics" aria-labelledby="tab-metrics"
-        hidden={tab !== 'metrics'}>
+      </>
+      )}
+      {/* in kiosk the tab bar is gone, so the panels drop the tabpanel role —
+          every aria-labelledby/aria-controls must resolve to a real node */}
+      <div id="tabpanel-metrics" hidden={tab !== 'metrics'}
+        {...(kiosk ? {} : { role: 'tabpanel', 'aria-labelledby': 'tab-metrics' })}>
         {metricsVisited && <MetricsView />}
       </div>
-      <div role="tabpanel" id="tabpanel-pipeline" aria-labelledby="tab-pipeline"
-        hidden={tab !== 'pipeline'}>
-      <StatusStrip prs={allPrs} activeFilter={activeFilter} onFilter={setActiveFilter} />
-      {state.repos.map((r) => {
-        const isCollapsed = collapsedRepos.has(r.repo);
+      <div id="tabpanel-pipeline" hidden={tab !== 'pipeline'}
+        {...(kiosk ? {} : { role: 'tabpanel', 'aria-labelledby': 'tab-pipeline' })}>
+      <StatusStrip prs={allPrs} activeFilter={activeFilter} onFilter={setActiveFilter}
+        interactive={!kiosk} />
+      {state.repos.map((r, i) => {
+        // kiosk ignores persisted collapse — a wall display must show rows
+        const isCollapsed = !kiosk && collapsedRepos.has(r.repo);
         const visiblePrs = activeFilter
           ? r.prs.filter((pr) => bucketPr(pr) === activeFilter)
           : r.prs;
@@ -178,7 +222,10 @@ export function App() {
         const failedCount = r.prs.filter(isFailed).length;
 
         return (
-          <section key={r.repo}>
+          <section key={r.repo} id={`repo-section-${i}`}>
+            {kiosk ? (
+              <h2>{r.repo}</h2>
+            ) : (
             <button
               type="button"
               className="repo-header-btn"
@@ -204,13 +251,15 @@ export function App() {
                 </span>
               )}
             </button>
+            )}
             {!isCollapsed && (
               <>
                 <QueueTrain queue={r.queue} />
                 {visiblePrs.length === 0 && hiddenCount === 0 && <p className="empty">no active PRs</p>}
                 {visiblePrs.map((pr) => (
                   <PrRow key={pr.number} pr={pr} hasDeploy={r.hasDeploy}
-                    queueCulprit={r.queue?.unmergeableCulprit ?? null} />
+                    queueCulprit={r.queue?.unmergeableCulprit ?? null}
+                    expandable={!kiosk} />
                 ))}
               </>
             )}

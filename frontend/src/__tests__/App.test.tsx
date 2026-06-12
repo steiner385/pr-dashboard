@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, within, act } from '@testing-library/react';
 import { App } from '../App';
 import { useDashboard } from '../useDashboard';
 import type { DashboardHook } from '../useDashboard';
@@ -215,6 +215,133 @@ describe('App tab bar', () => {
       expect(screen.queryByRole('heading', { name: 'Legend' })).not.toBeInTheDocument();
       expect(document.activeElement).toBe(btn);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Kiosk mode (issue #20): ?kiosk=1 read-only wall-display view + auto-cycling
+// ---------------------------------------------------------------------------
+
+describe('App kiosk mode (issue #20)', () => {
+  const setUrl = (search: string) => window.history.replaceState(null, '', `/${search}`);
+  type ScrollIntoViewFn = (arg?: boolean | ScrollIntoViewOptions) => void;
+  let scrollIntoView: ReturnType<typeof vi.fn<ScrollIntoViewFn>>;
+
+  beforeEach(() => {
+    scrollIntoView = vi.fn<ScrollIntoViewFn>();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    window.scrollTo = vi.fn();
+  });
+
+  afterEach(() => {
+    setUrl('');
+    delete (document as { hidden?: boolean }).hidden;
+    localStorage.removeItem('prdash.collapsed');
+    vi.useRealTimers();
+  });
+
+  it('?kiosk=1 hides the gear, legend, bell, and tab bar; status strip stays', () => {
+    setUrl('?kiosk=1');
+    render(<App />);
+    expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Legend' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Browser notifications' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    // the glanceable summary strip stays
+    expect(screen.getByRole('group', { name: 'Status overview' })).toBeInTheDocument();
+  });
+
+  it('adds the kiosk class to the app root', () => {
+    setUrl('?kiosk=1');
+    const { container } = render(<App />);
+    expect(container.querySelector('main.app')!.className).toContain('kiosk');
+  });
+
+  it('non-kiosk root has no kiosk class', () => {
+    const { container } = render(<App />);
+    expect(container.querySelector('main.app')!.className).not.toContain('kiosk');
+  });
+
+  it('status tiles are non-interactive in kiosk (no buttons in the strip)', () => {
+    setUrl('?kiosk=1');
+    render(<App />);
+    const strip = screen.getByRole('group', { name: 'Status overview' });
+    expect(within(strip).queryAllByRole('button')).toHaveLength(0);
+    // counts/labels still render
+    expect(within(strip).getByText('CI running')).toBeInTheDocument();
+  });
+
+  it('PR rows are non-expandable in kiosk (click does not open the check panel)', () => {
+    setUrl('?kiosk=1');
+    const checkedPr: PrView = { ...prView(1), checks: [
+      { name: 'fast-checks / ESLint', status: 'COMPLETED', conclusion: 'SUCCESS', isRequired: true,
+        workflowName: null, elapsedSeconds: 180, expectedSeconds: 200, url: null,
+        expectedLowSeconds: null, expectedHighSeconds: null,
+        waitKind: null, blockedOn: null, waitingSeconds: null, expectedRunnerWaitSeconds: null },
+    ] };
+    mockUseDashboard.mockReturnValue(hook({ state: { ...STATE, repos: [
+      { repo: 'acme/widgets', hasDeploy: true, prs: [checkedPr], queue: null },
+    ] } }));
+    render(<App />);
+    fireEvent.click(screen.getByText('#1'));
+    expect(screen.queryByText('fast-checks / ESLint')).not.toBeInTheDocument();
+  });
+
+  it('repo headers are plain headings (not collapse buttons) and persisted collapse is ignored', () => {
+    localStorage.setItem('prdash.collapsed', JSON.stringify(['acme/widgets']));
+    setUrl('?kiosk=1');
+    render(<App />);
+    expect(screen.queryByRole('button', { name: /acme\/widgets/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'acme/widgets' })).toBeInTheDocument();
+    // collapsed state from localStorage must not hide rows on a wall display
+    expect(screen.getByText('#1')).toBeInTheDocument();
+  });
+
+  it('cycles repo → repo → metrics on the cycle timer, then wraps to the first repo', () => {
+    setUrl('?kiosk=1&cycle=10');
+    vi.useFakeTimers();
+    render(<App />);
+    // initial view = first repo section (scrolled into view on mount)
+    expect((scrollIntoView.mock.contexts.at(-1) as HTMLElement).id).toBe('repo-section-0');
+
+    act(() => { vi.advanceTimersByTime(10_000); });
+    expect((scrollIntoView.mock.contexts.at(-1) as HTMLElement).id).toBe('repo-section-1');
+    expect(document.getElementById('tabpanel-pipeline')).not.toHaveAttribute('hidden');
+
+    act(() => { vi.advanceTimersByTime(10_000); });
+    // final view = Metrics (trends panel visible)
+    expect(screen.getByTestId('metrics-view-stub')).toBeInTheDocument();
+    expect(document.getElementById('tabpanel-pipeline')).toHaveAttribute('hidden');
+    expect(document.getElementById('tabpanel-metrics')).not.toHaveAttribute('hidden');
+
+    act(() => { vi.advanceTimersByTime(10_000); });
+    // wraps back to the pipeline / first repo
+    expect(document.getElementById('tabpanel-pipeline')).not.toHaveAttribute('hidden');
+    expect((scrollIntoView.mock.contexts.at(-1) as HTMLElement).id).toBe('repo-section-0');
+  });
+
+  it('pauses cycling while document.hidden, resumes when visible', () => {
+    setUrl('?kiosk=1&cycle=10');
+    vi.useFakeTimers();
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+    render(<App />);
+    const callsAfterMount = scrollIntoView.mock.calls.length;
+    act(() => { vi.advanceTimersByTime(30_000); });
+    // no advancement while hidden
+    expect(scrollIntoView.mock.calls.length).toBe(callsAfterMount);
+    expect(document.getElementById('tabpanel-pipeline')).not.toHaveAttribute('hidden');
+    // tab becomes visible again → next tick advances
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+    act(() => { vi.advanceTimersByTime(10_000); });
+    expect((scrollIntoView.mock.contexts.at(-1) as HTMLElement).id).toBe('repo-section-1');
+  });
+
+  it('does not run a cycle timer outside kiosk mode', () => {
+    vi.useFakeTimers();
+    render(<App />);
+    act(() => { vi.advanceTimersByTime(120_000); });
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(document.getElementById('tabpanel-pipeline')).not.toHaveAttribute('hidden');
   });
 });
 

@@ -263,6 +263,31 @@ command); the per-type `events` toggles apply to both sinks.
 (backgrounded is fine) to receive browser notifications. For tab-independent
 delivery, use the command sink.
 
+## Kiosk mode (wall displays)
+
+Append `?kiosk=1` to the dashboard URL for a read-only, at-a-distance view
+intended for wall-mounted displays (e.g. a Raspberry Pi running Chromium in
+kiosk mode):
+
+```
+http://127.0.0.1:4400/?kiosk=1            # 30s per view (default)
+http://127.0.0.1:4400/?kiosk=1&cycle=20   # 20s per view (minimum 10)
+```
+
+- **Read-only chrome** — the settings gear, legend, and notification bell are
+  hidden, the Pipeline/Metrics tab bar is gone, status tiles are plain
+  (non-filtering) summaries, and PR rows don't expand on click. The status
+  strip stays: it's the glanceable summary.
+- **Larger type** for readability across the room.
+- **Auto-cycling** — the view rotates every `cycle` seconds: each repo section
+  is scrolled to the top of the viewport in turn, then the Metrics trends view
+  shows, then the cycle wraps. Cycling pauses while the tab is hidden and
+  honors `prefers-reduced-motion` (instant jumps instead of smooth scrolling).
+- **Live updates unchanged** — the same SSE stream (keepalive + auto-reconnect)
+  feeds the kiosk view, so it never needs a manual refresh.
+
+Params are read once at page load; change the URL and reload to adjust.
+
 ## In-repo `.pr-dashboard.yml`
 
 Any watched repo can carry its own dashboard settings in a `.pr-dashboard.yml`

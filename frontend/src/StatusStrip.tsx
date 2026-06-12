@@ -45,9 +45,12 @@ interface StatusStripProps {
   prs: PrView[];
   activeFilter: Bucket | null;
   onFilter: (bucket: Bucket | null) => void;
+  /** false in kiosk mode (issue #20): tiles render as plain glanceable divs
+   *  instead of filter buttons. */
+  interactive?: boolean;
 }
 
-export function StatusStrip({ prs, activeFilter, onFilter }: StatusStripProps) {
+export function StatusStrip({ prs, activeFilter, onFilter, interactive = true }: StatusStripProps) {
   const counts = new Map<Bucket, number>();
   for (const p of prs) {
     const b = bucketPr(p);
@@ -58,6 +61,18 @@ export function StatusStrip({ prs, activeFilter, onFilter }: StatusStripProps) {
     <div className="status-strip" role="group" aria-label="Status overview">
       {TILES.map(({ bucket, label, cssClass, title }) => {
         const count = counts.get(bucket) ?? 0;
+        if (!interactive) {
+          // read-only tile: same look, no filter affordance (empty buckets
+          // dim via .zero, mirroring the disabled button state)
+          return (
+            <div key={bucket}
+              className={`status-tile ${cssClass}${count === 0 ? ' zero' : ''}`}
+              title={title}>
+              <b>{count}</b>
+              <span>{label}</span>
+            </div>
+          );
+        }
         const isActive = activeFilter === bucket;
         const disabled = count === 0 && !isActive;
         return (

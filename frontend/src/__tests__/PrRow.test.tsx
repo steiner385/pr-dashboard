@@ -90,6 +90,12 @@ describe('PrRow', () => {
     expect(screen.queryByText('fast-checks / ESLint')).not.toBeInTheDocument();
   });
 
+  it('expandable=false (kiosk): clicking the row does not open the check panel', () => {
+    render(<PrRow pr={pr({})} hasDeploy expandable={false} />);
+    fireEvent.click(screen.getByText('#8962'));
+    expect(screen.queryByText('fast-checks / ESLint')).not.toBeInTheDocument();
+  });
+
   it('shows "behind 9" in the sub line when stage=queue and queueAheadCount=9', () => {
     render(<PrRow pr={pr({
       stage: { stage: 'queue', substate: null, percent: null, etaSeconds: 600, etaRangeSeconds: null, overdue: false },
