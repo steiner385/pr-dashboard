@@ -1006,3 +1006,113 @@ describe('computeMetrics: concurrency demand (issue #47)', () => {
     expect(computeMetrics(h, '24h', 'hour', NOW, [REPO]).concurrency).toEqual([]);
   });
 });
+
+// ---- CI cost attribution (issue #43) ----------------------------------------
+
+describe('computeMetrics: CI cost attribution (issue #43)', () => {
+  /** unit-tests/build → spot; e2e → a runs-on ternary (composite pool);
+   *  mystery → unmappable (null). */
+  const poolsFor = (_repo: string, name: string): string[] | null =>
+    name.startsWith('e2e') ? ['spot', 'ondemand']
+      : name === 'mystery' ? null
+        : ['spot'];
+
+  const costMetrics = (cpm: Record<string, number> | null = null,
+    exclude: string[] = [], window: '24h' | '3d' = '24h') =>
+    computeMetrics(h, window, 'hour', NOW, exclude, () => 1, new Map(), new Map(),
+      [], poolsFor, [], cpm).cost;
+
+  /** One job run: started at `startISO`, ran `secs`, any conclusion counts. */
+  const job = (name: string, startISO: string, secs: number,
+    attempt: number | null = 1, conclusion = 'SUCCESS'): void => {
+    const start = new Date(startISO);
+    const end = new Date(start.getTime() + secs * 1000);
+    h.recordCheckDuration(REPO, name, 'pull_request', start.toISOString(),
+      end.toISOString(), conclusion, 'sha-cost', attempt);
+  };
+
+  it('buckets runner-minutes by pool from started_at→duration; composite and unknown pools attribute honestly', () => {
+    job('unit-tests', '2026-06-11T10:05:00Z', 300);       // spot, 5 min
+    job('build', '2026-06-11T11:05:00Z', 300);            // spot, 5 min
+    job('e2e shard 1', '2026-06-11T10:10:00Z', 120);      // spot|ondemand, 2 min
+    job('mystery', '2026-06-11T10:15:00Z', 60);           // unknown, 1 min
+    const [c] = costMetrics();
+    expect(c!.repo).toBe(REPO);
+    expect(c!.totalMinutes).toBeCloseTo(13);
+    // pools sorted by minutes desc
+    expect(c!.pools.map((p) => [p.pool, p.minutes])).toEqual([
+      ['spot', 10], ['spot|ondemand', 2], ['unknown', 1]]);
+    expect(c!.pools[0]!.buckets).toEqual([
+      { bucket: '2026-06-11T10', minutes: 5 },
+      { bucket: '2026-06-11T11', minutes: 5 }]);
+  });
+
+  it('every conclusion counts — a cancelled job burned its runner-minutes too', () => {
+    job('unit-tests', '2026-06-11T10:00:00Z', 600, 1, 'CANCELLED');
+    const [c] = costMetrics();
+    expect(c!.totalMinutes).toBeCloseTo(10);
+  });
+
+  it('without a costPerMinute map: minutes report, every dollar figure is null', () => {
+    job('unit-tests', '2026-06-11T10:00:00Z', 600);
+    job('unit-tests', '2026-06-11T10:20:00Z', 600, 2); // retry
+    const [c] = costMetrics(null);
+    expect(c!.totalMinutes).toBeCloseTo(20);
+    expect(c!.totalDollars).toBeNull();
+    expect(c!.retryDollars).toBeNull();
+    expect(c!.pools.every((p) => p.dollars === null)).toBe(true);
+  });
+
+  it('maps minutes to dollars per pool; composite/unknown labels fall back to the default key', () => {
+    job('unit-tests', '2026-06-11T10:05:00Z', 600);   // spot: 10 min × 0.01 = $0.10
+    job('e2e shard 1', '2026-06-11T10:10:00Z', 300);  // spot|ondemand → default: 5 × 0.02
+    job('mystery', '2026-06-11T10:15:00Z', 300);      // unknown → default: 5 × 0.02
+    const [c] = costMetrics({ spot: 0.01, default: 0.02 });
+    expect(c!.pools.find((p) => p.pool === 'spot')!.dollars).toBeCloseTo(0.1);
+    expect(c!.pools.find((p) => p.pool === 'spot|ondemand')!.dollars).toBeCloseTo(0.1);
+    expect(c!.pools.find((p) => p.pool === 'unknown')!.dollars).toBeCloseTo(0.1);
+    expect(c!.totalDollars).toBeCloseTo(0.3);
+  });
+
+  it('a pool with no rate and no default carries null dollars and stays out of the $ total', () => {
+    job('unit-tests', '2026-06-11T10:05:00Z', 600);   // spot priced
+    job('mystery', '2026-06-11T10:15:00Z', 300);      // unknown, unpriced
+    const [c] = costMetrics({ spot: 0.01 });
+    expect(c!.pools.find((p) => p.pool === 'unknown')!.dollars).toBeNull();
+    expect(c!.totalDollars).toBeCloseTo(0.1); // priced pools only — documented undercount
+  });
+
+  it('retry burden: minutes (and $) on run_attempt > 1 samples only', () => {
+    job('unit-tests', '2026-06-11T10:00:00Z', 600, 1);
+    job('unit-tests', '2026-06-11T10:20:00Z', 300, 2);  // re-run
+    job('build', '2026-06-11T10:30:00Z', 300, 3);       // re-run of a re-run
+    job('mystery', '2026-06-11T10:40:00Z', 300, null);  // attempt unknown — not a retry
+    const [c] = costMetrics({ default: 0.01 });
+    expect(c!.retryMinutes).toBeCloseTo(10);
+    expect(c!.retryDollars).toBeCloseTo(0.1);
+    expect(c!.totalMinutes).toBeCloseTo(25);
+  });
+
+  it('minutes per merged PR divides by window merges; null at zero merges', () => {
+    job('unit-tests', '2026-06-11T10:00:00Z', 600);
+    expect(costMetrics()[0]!.minutesPerMergedPr).toBeNull();
+    h.upsertMergedPr({ repo: REPO, number: 1, title: 'a', url: 'u',
+      mergedAt: '2026-06-11T10:30:00Z', mergeCommitSha: 'm1' });
+    h.upsertMergedPr({ repo: REPO, number: 2, title: 'b', url: 'u',
+      mergedAt: '2026-06-11T11:00:00Z', mergeCommitSha: 'm2' });
+    const [c] = costMetrics();
+    expect(c!.mergesInWindow).toBe(2);
+    expect(c!.minutesPerMergedPr).toBeCloseTo(5);
+  });
+
+  it('respects exclude and the window (started_at must be in-window); empty repos omitted', () => {
+    job('unit-tests', '2026-06-11T10:00:00Z', 600);
+    job('unit-tests', '2026-06-09T10:00:00Z', 600);     // outside 24h window
+    expect(costMetrics(null, [REPO])).toEqual([]);
+    const [c] = costMetrics();
+    expect(c!.totalMinutes).toBeCloseTo(10);            // old row not counted
+    expect(costMetrics(null, [], '3d')[0]!.totalMinutes).toBeCloseTo(20);
+    // no rows at all → section empty
+    expect(computeMetrics(new HistoryStore(':memory:'), '24h', 'hour', NOW).cost).toEqual([]);
+  });
+});

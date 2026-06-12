@@ -1166,3 +1166,37 @@ describe('fleet-telemetry migrations (issues #45/#47): pre-existing DBs', () => 
       .toBe('2026-06-10T11:00:00Z');
   });
 });
+
+describe('costRowsSince (issue #43 cost attribution)', () => {
+  it('returns every conclusion with name, startedAt, duration and run_attempt', () => {
+    h.recordCheckDuration(REPO, 'unit-tests', 'pull_request',
+      '2026-06-10T10:00:00Z', '2026-06-10T10:05:00Z', 'SUCCESS', 'sha1', 1);
+    h.recordCheckDuration(REPO, 'e2e', 'merge_group',
+      '2026-06-10T10:01:00Z', '2026-06-10T10:02:30Z', 'CANCELLED', 'sha1', 2);
+    const rows = h.costRowsSince('2026-06-10T00:00:00Z');
+    expect(rows).toHaveLength(2);
+    expect(rows.find((r) => r.name === 'unit-tests')).toEqual({
+      repo: REPO, name: 'unit-tests', startedAt: '2026-06-10T10:00:00Z',
+      durationSecs: 300, runAttempt: 1 });
+    expect(rows.find((r) => r.name === 'e2e')).toEqual({
+      repo: REPO, name: 'e2e', startedAt: '2026-06-10T10:01:00Z',
+      durationSecs: 90, runAttempt: 2 });
+  });
+
+  it('rows without run_attempt carry null; pre-#47 rows derive startedAt', () => {
+    h.recordCheckDuration(REPO, 'legacy', 'pull_request',
+      '2026-06-10T10:00:00Z', '2026-06-10T10:10:00Z', 'SUCCESS');
+    // simulate a pre-#47 row: null started_at on disk
+    (h as unknown as { db: { exec(sql: string): void } }).db
+      .exec("UPDATE check_durations SET started_at = NULL WHERE check_name = 'legacy'");
+    const rows = h.costRowsSince('2026-06-10T00:00:00Z');
+    expect(rows).toEqual([{ repo: REPO, name: 'legacy',
+      startedAt: '2026-06-10T10:00:00.000Z', durationSecs: 600, runAttempt: null }]);
+  });
+
+  it('the since filter applies to completed_at', () => {
+    h.recordCheckDuration(REPO, 'old', 'pull_request',
+      '2026-06-01T10:00:00Z', '2026-06-01T10:05:00Z', 'SUCCESS');
+    expect(h.costRowsSince('2026-06-09T00:00:00Z')).toEqual([]);
+  });
+});

@@ -493,7 +493,7 @@ describe('resolveOwners', () => {
 describe('validateConfigPatch', () => {
   it('exports the safe subset and read-only key lists the API advertises', () => {
     expect(SAFE_CONFIG_KEYS).toEqual(['owners', 'exclude', 'retentionDays', 'batchSize', 'intervals', 'notifications']);
-    expect(READ_ONLY_CONFIG_KEYS).toEqual(['tokenSource', 'apiUrl', 'port', 'app', 'ancestrySource']);
+    expect(READ_ONLY_CONFIG_KEYS).toEqual(['tokenSource', 'apiUrl', 'port', 'app', 'ancestrySource', 'costPerMinute']);
   });
 
   it('accepts the full safe subset and normalizes it', () => {
@@ -903,5 +903,50 @@ describe('notifications.webhookUrl + digest config (issue #51)', () => {
       notifications: Record<string, unknown> };
     expect(onDisk.notifications.webhookUrl).toBe('https://hooks.example.com/x');
     expect(onDisk.notifications.digest).toEqual({ enabled: true, hourLocal: 7 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #43: costPerMinute (runner-minute → dollars map) — file-only config
+// ---------------------------------------------------------------------------
+
+describe('costPerMinute config (issue #43)', () => {
+  it('absent by default (cost section reports minutes only)', () => {
+    const cfg = loadConfig('/nonexistent/config.json');
+    expect(cfg.costPerMinute).toBeUndefined();
+  });
+
+  it('accepts a pool-label → $/min map, including a default key and composite labels', () => {
+    const path = writeConfig({ costPerMinute: {
+      'kindash-runner': 0.008, 'kindash-ondemand': 0.034,
+      'kindash-runner|kindash-ondemand': 0.02, default: 0.01 } });
+    expect(loadConfig(path).costPerMinute).toEqual({
+      'kindash-runner': 0.008, 'kindash-ondemand': 0.034,
+      'kindash-runner|kindash-ondemand': 0.02, default: 0.01 });
+  });
+
+  it('accepts zero rates (free pools are a legitimate statement)', () => {
+    const path = writeConfig({ costPerMinute: { rocky: 0 } });
+    expect(loadConfig(path).costPerMinute).toEqual({ rocky: 0 });
+  });
+
+  it('rejects non-object shapes', () => {
+    for (const bad of [42, 'cheap', ['a'], null]) {
+      const path = writeConfig({ costPerMinute: bad });
+      expect(() => loadConfig(path)).toThrow(/costPerMinute/);
+    }
+  });
+
+  it('rejects negative, non-finite, and non-numeric rates', () => {
+    for (const bad of [-0.01, 'free', Infinity, NaN, null]) {
+      const path = writeConfig({ costPerMinute: { pool: bad } });
+      expect(() => loadConfig(path)).toThrow(/costPerMinute/);
+    }
+  });
+
+  it('is NOT PUT-writable (file-only, like other money/security keys)', () => {
+    const v = validateConfigPatch({ costPerMinute: { default: 0.01 } });
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.offendingKeys).toContain('costPerMinute');
   });
 });
