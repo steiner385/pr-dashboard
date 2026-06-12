@@ -7,6 +7,7 @@ import type {
   SettingSource,
   RepoSettingsReport,
 } from './types';
+import { SOURCE_DEFINITIONS } from './definitions';
 
 interface SettingsPanelProps {
   open: boolean;
@@ -67,15 +68,13 @@ function toPatch(f: FormModel, initialNotifyEnabled: boolean): ConfigPatch {
   };
 }
 
-const SOURCE_LABEL: Record<SettingSource, string> = {
-  override: 'override',
-  'in-repo': 'in-repo',
-  derived: 'derived',
-  default: 'default',
-};
-
 function SourceTag({ source }: { source: SettingSource }) {
-  return <span className={`source-tag source-${source}`}>{SOURCE_LABEL[source]}</span>;
+  const def = SOURCE_DEFINITIONS[source];
+  return (
+    <span className={`source-tag source-${source}`} title={def.text}>
+      {def.label}
+    </span>
+  );
 }
 
 // ---- chip list editor (owners / exclude) ----

@@ -97,7 +97,7 @@ export function Waterfall({ timeline }: { timeline: PrTimeline }) {
           const w = Math.max(x(s.endMs) - x(s.startMs), 2);
           return (
             <g key={s.id} data-testid={`waterfall-seg-${s.id}`}>
-              <title>{`${s.label}: ${formatDur(durSecs)} (${localTime(s.startMs)} → ${localTime(s.endMs)})`}</title>
+              <title>{`${s.label}: ${formatDur(durSecs)} (${localTime(s.startMs)} → ${localTime(s.endMs)}) — ${META.get(s.id)!.desc}`}</title>
               <text x={PAD_L - 8} y={y + ROW_H / 2 + FONT / 2 - 1} textAnchor="end"
                 fontSize={FONT} fill="var(--muted)">{s.label}</text>
               <rect x={x(s.startMs)} y={y + (ROW_H - BAR_H) / 2} width={w} height={BAR_H}

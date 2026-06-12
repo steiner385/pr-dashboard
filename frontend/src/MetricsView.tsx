@@ -6,6 +6,7 @@ import {
   type BandPoint, type ChartPoint, type LineSeries,
 } from './charts';
 import { formatDur, formatSince } from './format';
+import { CONTROL_DEFINITIONS, DEFS, defTitle, type Definition } from './definitions';
 
 const WINDOWS = ['24h', '3d', '7d', '14d', '30d'] as const;
 const WINDOW_DAYS: Record<MetricsWindow, number> = {
@@ -85,11 +86,14 @@ function Panel({ title, empty, emptyText = 'no data yet', children }: {
   );
 }
 
-function MetricStat({ label, value, delta }: {
+function MetricStat({ label, value, delta, def }: {
   label: string; value: string; delta?: string | null;
+  /** What this figure means / how it's computed (issue #66) — every headline
+   *  stat must carry one; rendered as the title tooltip. */
+  def: Definition;
 }) {
   return (
-    <div className="metric-stat">
+    <div className="metric-stat" title={defTitle(def)}>
       <b>{value}</b>
       <span>{label}</span>
       {delta != null && <em className="metric-delta">{delta}</em>}
@@ -132,10 +136,10 @@ function LeadTimeRepo({ lt }: { lt: MetricsPayload['leadTime'][number] }) {
     <div className="metric-repo">
       <h3>{lt.repo}</h3>
       <div className="metric-row">
-        <MetricStat label="deploy frequency (prod)"
+        <MetricStat label="deploy frequency (prod)" def={DEFS.deployFrequency}
           value={`${(Math.round(lt.deploysPerDay * 10) / 10).toString()}/day`}
           delta={`${lt.prodDeploys} prod deploy${lt.prodDeploys === 1 ? '' : 's'} in window`} />
-        <MetricStat label="lead time created → prod (p50)"
+        <MetricStat label="lead time created → prod (p50)" def={DEFS.leadTimeTotal}
           value={lt.totalP50Secs != null ? formatDur(lt.totalP50Secs) : '–'}
           delta={lt.totalN > 0 ? `n=${lt.totalN}` : 'no PR has both timestamps yet'} />
       </div>
@@ -154,7 +158,7 @@ function LeadTimeRepo({ lt }: { lt: MetricsPayload['leadTime'][number] }) {
         {lt.segments.map((s) => {
           const m = meta.get(s.id)!;
           return (
-            <span key={s.id} className="legend-item">
+            <span key={s.id} className="legend-item" title={`${m.label} — ${m.desc}`}>
               <i className="legend-chip" style={{ background: m.color }} aria-hidden="true" />
               {m.label}
               {s.medianSecs != null && <> {formatDur(s.medianSecs)} (n={s.n})</>}
@@ -207,6 +211,7 @@ export function MetricsView({ now }: {
       <div className="metrics-group" role="group" aria-label="Window">
         {WINDOWS.map((w) => (
           <button key={w} type="button" className="metrics-window-btn"
+            title={defTitle(CONTROL_DEFINITIONS.window)}
             aria-pressed={window === w} onClick={() => setWindow(w)}>
             {w}
           </button>
@@ -215,16 +220,20 @@ export function MetricsView({ now }: {
       <span className="metrics-sep" aria-hidden="true" />
       <div className="metrics-group" role="group" aria-label="Bucket size">
         <button type="button" className="metrics-window-btn" disabled={hourDisabled}
-          title={hourDisabled ? 'hourly buckets are available for windows up to 7d' : undefined}
+          title={hourDisabled
+            ? 'hourly disabled above 7d — long windows clamp to daily buckets'
+            : defTitle(CONTROL_DEFINITIONS.bucketHour)}
           aria-pressed={bucket === 'hour'} onClick={() => setBucketPref('hour')}>
           hourly
         </button>
         <button type="button" className="metrics-window-btn"
+          title={defTitle(CONTROL_DEFINITIONS.bucketDay)}
           aria-pressed={bucket === 'day'} onClick={() => setBucketPref('day')}>
           daily
         </button>
       </div>
       <button type="button" className="metrics-refresh" aria-label="Refresh metrics"
+        title={defTitle(CONTROL_DEFINITIONS.refresh)}
         onClick={() => setRefreshTick((t) => t + 1)}>
         ↻
       </button>
@@ -304,7 +313,8 @@ export function MetricsView({ now }: {
             <h3>{r.repo}</h3>
             <ul className="regression-strip">
               {r.checks.map((c) => (
-                <li key={`${c.check}/${c.event}`} className="regression-chip">
+                <li key={`${c.check}/${c.event}`} className="regression-chip"
+                  title={defTitle(DEFS.regressionRule)}>
                   <span className="regression-arrow" aria-hidden="true">↑</span>
                   <span className="metric-job-name">{c.check}</span>
                   <span className="regression-step">
@@ -340,7 +350,8 @@ export function MetricsView({ now }: {
               <h3>{t.repo}</h3>
               <div className="metric-row">
                 {TREND_SERIES.map((s) => (
-                  <MetricStat key={s.key} label={s.key} value={String(latest[s.key])} />
+                  <MetricStat key={s.key} label={s.key} value={String(latest[s.key])}
+                    def={DEFS.trendCounts} />
                 ))}
               </div>
               <ChartBlock label={`PRs by state per ${noun}`}>
@@ -359,6 +370,7 @@ export function MetricsView({ now }: {
             <div className="metric-row">
               {tiers.map((tier) => (
                 <MetricStat key={tier.event} label={`${tier.event} p50 wait`}
+                  def={DEFS.runnerWaitP50}
                   value={tier.p50.value != null ? formatDur(tier.p50.value) : '–'}
                   delta={deltaText(tier.p50)} />
               ))}
@@ -382,6 +394,7 @@ export function MetricsView({ now }: {
             <div className="metric-row">
               {pools.map((rp) => (
                 <MetricStat key={rp.pool} label={`${rp.pool} p50 wait`}
+                  def={DEFS.poolWaitP50}
                   value={rp.p50.value != null ? formatDur(rp.p50.value) : '–'}
                   delta={deltaText(rp.p50)} />
               ))}
@@ -395,6 +408,7 @@ export function MetricsView({ now }: {
                 </ChartBlock>
                 {(rp.lastHourP90Secs != null || rp.baselineP90Secs != null) && (
                   <p className={rp.starving ? 'metric-note pool-starving' : 'metric-note'}
+                    title={defTitle(DEFS.starvationRule)}
                     data-testid={`pool-health-${repo}-${rp.pool}`}>
                     {rp.starving && <strong>⚠ STARVING — </strong>}
                     last-hour p90 {rp.lastHourP90Secs != null ? formatDur(rp.lastHourP90Secs) : '–'}
@@ -421,7 +435,7 @@ export function MetricsView({ now }: {
             <div className="metric-row">
               {pools.map((c) => (
                 <MetricStat key={c.pool} label={`${c.pool} window peak`}
-                  value={String(c.peak)} />
+                  def={DEFS.concurrencyPeak} value={String(c.peak)} />
               ))}
             </div>
             {pools.map((c) => (
@@ -445,12 +459,13 @@ export function MetricsView({ now }: {
           <div key={q.repo} className="metric-repo">
             <h3>{q.repo}</h3>
             <div className="metric-row">
-              <MetricStat label="merges" value={String(q.merges.value ?? 0)}
+              <MetricStat label="merges" def={DEFS.queueMerges}
+                value={String(q.merges.value ?? 0)}
                 delta={deltaText(q.merges)} />
-              <MetricStat label="time in queue (p50)"
+              <MetricStat label="time in queue (p50)" def={DEFS.queueWaitP50}
                 value={q.queueWaitP50.value != null ? formatDur(q.queueWaitP50.value) : '–'}
                 delta={deltaText(q.queueWaitP50)} />
-              <MetricStat label="group run (p50)"
+              <MetricStat label="group run (p50)" def={DEFS.groupRunP50}
                 value={q.groupRunP50.value != null ? formatDur(q.groupRunP50.value) : '–'}
                 delta={deltaText(q.groupRunP50)} />
             </div>
@@ -478,8 +493,12 @@ export function MetricsView({ now }: {
             <table className="metric-table">
               <thead>
                 <tr>
-                  <th>job</th><th>event</th><th>p50</th><th>p90</th>
-                  <th>p90/p50</th><th>n</th><th>trend (p50 + band)</th>
+                  <th>job</th><th>event</th>
+                  <th title={defTitle(DEFS.jobP50)}>p50</th>
+                  <th title={defTitle(DEFS.jobP90)}>p90</th>
+                  <th title={defTitle(DEFS.variability)}>p90/p50</th>
+                  <th title={defTitle(DEFS.sampleN)}>n</th>
+                  <th>trend (p50 + band)</th>
                 </tr>
               </thead>
               <tbody>
@@ -512,7 +531,9 @@ export function MetricsView({ now }: {
             <table className="metric-table">
               <thead>
                 <tr>
-                  <th>job</th><th>event</th><th>flake rate</th><th>events / runs</th>
+                  <th>job</th><th>event</th>
+                  <th title={defTitle(DEFS.flakeRate)}>flake rate</th>
+                  <th title={defTitle(DEFS.flakeRate)}>events / runs</th>
                   <th>trend (rate)</th>
                 </tr>
               </thead>
@@ -551,7 +572,8 @@ export function MetricsView({ now }: {
           <div key={r.repo} className="metric-repo">
             <h3>{r.repo}</h3>
             <div className="metric-row">
-              <MetricStat label="reclaim events" value={String(r.total)} />
+              <MetricStat label="reclaim events" def={DEFS.reclaimEvents}
+                value={String(r.total)} />
             </div>
             <ChartBlock label={`reclaims per ${noun}`}>
               <AreaSeries points={alignCounts(axis, r.perBucket)} kind={kind}
@@ -586,8 +608,10 @@ export function MetricsView({ now }: {
             <table className="metric-table">
               <thead>
                 <tr>
-                  <th>job</th><th>trains ejected</th><th>est. cost (train-hours)</th>
-                  <th>flake rate</th>
+                  <th>job</th>
+                  <th title={defTitle(DEFS.trainEjects)}>trains ejected</th>
+                  <th title={defTitle(DEFS.ejectCost)}>est. cost (train-hours)</th>
+                  <th title={defTitle(DEFS.flakeRate)}>flake rate</th>
                 </tr>
               </thead>
               <tbody>
@@ -623,11 +647,11 @@ export function MetricsView({ now }: {
               <div key={cp.event} className="metric-cp">
                 <div className="metric-row">
                   <MetricStat label={`${cp.event} end-to-end (p50)`}
-                    value={formatDur(cp.endToEndP50Secs)} />
+                    def={DEFS.cpEndToEnd} value={formatDur(cp.endToEndP50Secs)} />
                 </div>
                 <ol className="cp-chain" aria-label={`${repo} ${cp.event} critical path`}>
                   {cp.path.map((step) => (
-                    <li key={step.name} className="cp-step">
+                    <li key={step.name} className="cp-step" title={defTitle(DEFS.cpStep)}>
                       <span className="cp-name">{step.name}</span>
                       <span className="cp-times">
                         {step.waitP50 > 0
@@ -640,7 +664,7 @@ export function MetricsView({ now }: {
                 {cp.offPath.length > 0 && (
                   <ul className="cp-offpath">
                     {cp.offPath.map((o) => (
-                      <li key={o.name}>
+                      <li key={o.name} title={defTitle(DEFS.cpSlack)}>
                         <span className="metric-job-name">{o.name}</span>
                         {' '}could grow {formatDur(o.slackSecs)} before mattering
                       </li>
@@ -665,7 +689,9 @@ export function MetricsView({ now }: {
             <table className="metric-table">
               <thead>
                 <tr>
-                  <th>severity</th><th>job</th><th>finding</th><th>p99</th><th>timeout</th>
+                  <th>severity</th><th>job</th><th>finding</th>
+                  <th title={defTitle(DEFS.lintP99)}>p99</th>
+                  <th title={defTitle(DEFS.lintTimeout)}>timeout</th>
                 </tr>
               </thead>
               <tbody>
@@ -694,12 +720,13 @@ export function MetricsView({ now }: {
           <div key={v.repo} className="metric-repo">
             <h3>{v.repo}</h3>
             <div className="metric-row">
-              <MetricStat label="merged" value={String(v.merged.value ?? 0)}
+              <MetricStat label="merged" def={DEFS.velocityMerged}
+                value={String(v.merged.value ?? 0)}
                 delta={deltaText(v.merged)} />
-              <MetricStat label="merge → QA (p50)"
+              <MetricStat label="merge → QA (p50)" def={DEFS.mergeToQa}
                 value={v.mergeToQaP50.value != null ? formatDur(v.mergeToQaP50.value) : '–'}
                 delta={deltaText(v.mergeToQaP50)} />
-              <MetricStat label="avg PR lifespan"
+              <MetricStat label="avg PR lifespan" def={DEFS.lifespan}
                 value={v.lifespanMeanHours.value != null ? fmtHours(v.lifespanMeanHours.value) : '–'}
                 delta={deltaText(v.lifespanMeanHours)} />
             </div>
@@ -727,9 +754,9 @@ export function MetricsView({ now }: {
             {stages.map((c) => (
               <div key={c.stage} className="metric-calibration-stage">
                 <div className="metric-row">
-                  <MetricStat label={`${c.stage} stage`}
+                  <MetricStat label={`${c.stage} stage`} def={DEFS.calibrationError}
                     value={calibrationHeadline(c.medianErrorPct, c.n)}
-                    delta={`p90 |error| ${Math.round(c.p90AbsErrorPct)}%`} />
+                    delta={`p90 |error| ${Math.round(c.p90AbsErrorPct)}% — ${DEFS.calibrationP90Abs.text}`} />
                 </div>
                 <ChartBlock label={`${c.stage} median ETA error per ${noun} (+ = ran over)`}>
                   <SignedLine points={align(axis, c.buckets, (b) => b.medianErrorPct)}
