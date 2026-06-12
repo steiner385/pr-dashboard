@@ -363,14 +363,16 @@ export class Poller extends EventEmitter {
       this.recordQueueWaitOnMerge(key, repo, node.mergedAt);
       this.recordEtaAccuracyOnMerge(key, repo, node.mergedAt);
       history.upsertMergedPr({ repo, number: node.number, title: node.title, url: node.url,
-        mergedAt: node.mergedAt, mergeCommitSha: node.mergeCommit?.oid ?? null });
+        mergedAt: node.mergedAt, mergeCommitSha: node.mergeCommit?.oid ?? null,
+        createdAt: node.createdAt ?? null });
       this.prs.delete(key); // no longer an open PR snapshot
     } else {
       seenOpen.add(key);
       if (!this.prs.has(key)) {
         // placeholder until detail fetch fills it in
         this.prs.set(key, { repo, number: node.number, title: node.title, url: node.url,
-          headSha: '', isDraft: !!node.isDraft, mergeStateStatus: null, mergedAt: null,
+          headSha: '', isDraft: !!node.isDraft, mergeStateStatus: null,
+          createdAt: node.createdAt ?? null, mergedAt: null,
           mergeCommitSha: null, autoMergeArmed: false, queue: null, checks: [] });
       }
     }
@@ -555,7 +557,8 @@ export class Poller extends EventEmitter {
           this.recordQueueWaitOnMerge(key, repo, snap.mergedAt);
           this.recordEtaAccuracyOnMerge(key, repo, snap.mergedAt);
           history.upsertMergedPr({ repo, number: snap.number, title: snap.title, url: snap.url,
-            mergedAt: snap.mergedAt, mergeCommitSha: snap.mergeCommitSha });
+            mergedAt: snap.mergedAt, mergeCommitSha: snap.mergeCommitSha,
+            createdAt: snap.createdAt });
           this.prs.delete(key);
         } else if (snap.queue) {
           // remember enqueuedAt while the PR sits in the queue — the merged detail
@@ -597,7 +600,8 @@ export class Poller extends EventEmitter {
         if (this.prs.has(key)) continue;
         this.prs.set(key, { repo, number: e.prNumber, title: '',
           url: `https://github.com/${repo}/pull/${e.prNumber}`, headSha: '',
-          isDraft: false, mergeStateStatus: null, mergedAt: null, mergeCommitSha: null,
+          isDraft: false, mergeStateStatus: null, createdAt: null,
+          mergedAt: null, mergeCommitSha: null,
           autoMergeArmed: false, queue: { position: e.position, state: e.state,
             enqueuedAt: e.enqueuedAt, groupHeadOid: e.headCommitOid }, checks: [] });
       }
@@ -1118,8 +1122,31 @@ export class Poller extends EventEmitter {
     return this.lastState ?? this.buildState();
   }
 
+  /**
+   * Metrics trends sampling (round 12): persist per-repo state counts on the
+   * existing emitUpdate path — no new timer. HistoryStore throttles to one row
+   * per 15 minutes per repo and prunes samples older than 90 days, so calling
+   * this on every cycle is cheap and safe.
+   */
+  private sampleState(state: DashboardState): void {
+    const OPEN_STAGES = new Set(['ci', 'ready', 'parked', 'queue']);
+    for (const r of state.repos) {
+      const counts = { open: 0, ci: 0, queue: 0, failed: 0 };
+      for (const pr of r.prs) {
+        const { stage, substate } = pr.stage;
+        if (OPEN_STAGES.has(stage)) counts.open++;
+        if (stage === 'ci') counts.ci++;
+        if (stage === 'queue') counts.queue++;
+        if ((stage === 'parked' && substate === 'ci-failed') ||
+            (stage === 'queue' && substate === 'group-failed')) counts.failed++;
+      }
+      this.deps.history.recordStateSample(r.repo, state.generatedAt, counts);
+    }
+  }
+
   private emitUpdate(): void {
     const state = this.buildState();
+    this.sampleState(state); // before the unchanged-signature skip: sampling has its own throttle
     // Compute a signature with generatedAt blanked so pure timestamp churn
     // (every tick changes generatedAt) doesn't trigger a spurious SSE frame.
     const sig = JSON.stringify({ ...state, generatedAt: '' });
@@ -1241,7 +1268,7 @@ export class Poller extends EventEmitter {
     }
     const stage = classify({
       pr: { repo: rec.repo, number: rec.number, title: rec.title, url: rec.url, headSha: '',
-        isDraft: false, mergeStateStatus: null, mergedAt: rec.mergedAt,
+        isDraft: false, mergeStateStatus: null, createdAt: rec.createdAt, mergedAt: rec.mergedAt,
         mergeCommitSha: rec.mergeCommitSha, autoMergeArmed: false, queue: null, checks: [] },
       prev: null, ciProgress: null, queueProgress: null, deploy,
       retentionDays: config.retentionDays, now,

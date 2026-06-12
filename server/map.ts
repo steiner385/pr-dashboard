@@ -42,6 +42,7 @@ export function mapPrNode(repo: string, node: any): PrSnapshot | null {
     headSha: node.headRefOid,
     isDraft: !!node.isDraft,
     mergeStateStatus: node.mergeStateStatus ?? null,
+    createdAt: node.createdAt ?? null,
     mergedAt: node.mergedAt ?? null,
     mergeCommitSha: node.mergeCommit?.oid ?? null,
     autoMergeArmed: !!node.autoMergeRequest,

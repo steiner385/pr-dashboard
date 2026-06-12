@@ -3447,3 +3447,34 @@ describe('Poller per-owner routing (multi-installation)', () => {
     expect(p.nextDelayMs('sweep')).toBe(300_000);     // sweep low-budget floor
   });
 });
+
+// ---------------------------------------------------------------------------
+// Round 12 (metrics tab): state sampling on the emitUpdate path
+// ---------------------------------------------------------------------------
+
+describe('state sampling (metrics trends)', () => {
+  const samplesFor = (repo: string) =>
+    history.stateSamplesSince('2026-06-10T00:00:00Z').filter((r) => r.repo === repo);
+
+  it('records one throttled state sample per repo via emitUpdate — no new timer', async () => {
+    let now = new Date('2026-06-10T12:00:00Z');
+    const p = new Poller({ router: asRouter(fakeClient()), history, deploy: noDeploy(),
+      config: PREFIX_CONFIG, now: () => now });
+
+    await p.sweepOnce(); // first emitUpdate → one sample per repo with data
+    let acme = samplesFor('acme/widgets');
+    expect(acme).toHaveLength(1);
+    // open PR 8962 counts as open; merged 8951 (stage 'merged') does not
+    expect(acme[0]).toMatchObject({ open: 1, queue: 0, failed: 0 });
+
+    await p.detailOnce(); // second emitUpdate inside the 15-min window → throttled
+    expect(samplesFor('acme/widgets')).toHaveLength(1);
+
+    now = new Date('2026-06-10T12:16:00Z'); // past the throttle
+    await p.detailOnce();
+    acme = samplesFor('acme/widgets');
+    expect(acme).toHaveLength(2);
+    // detail classified 8962 as ci (one check still IN_PROGRESS)
+    expect(acme[1]).toMatchObject({ open: 1, ci: 1, queue: 0, failed: 0 });
+  });
+});

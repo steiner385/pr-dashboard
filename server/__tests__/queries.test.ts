@@ -123,3 +123,25 @@ describe('queue + rollup + backfill builders', () => {
     expect(buildBackfillQuery('acme', 'widgets', 'CUR')).toContain('after: "CUR"');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Round 12 (metrics tab): createdAt flows through every PR-bearing query
+// ---------------------------------------------------------------------------
+
+describe('createdAt selection (PR lifespan metric)', () => {
+  it('PrCore fragment carries createdAt (sweep + open/merged page queries share it)', () => {
+    for (const q of [
+      buildSweepQuery(['acme'], '2026-06-10T12:00:00Z'),
+      buildMergedPageQuery('acme', '2026-06-10T12:00:00Z', 'CUR'),
+      buildOpenPageQuery('acme', 'CUR'),
+    ]) {
+      const fragment = q.split('fragment PrCore on PullRequest')[1]!;
+      expect(fragment).toContain('createdAt');
+    }
+  });
+
+  it('detail query selects createdAt too (detail fetch also upserts merged PRs)', () => {
+    const q = buildDetailQuery([{ owner: 'acme', name: 'widgets', number: 8962 }]);
+    expect(q).toContain('createdAt');
+  });
+});

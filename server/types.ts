@@ -24,6 +24,8 @@ export interface PrSnapshot {
   headSha: string;
   isDraft: boolean;
   mergeStateStatus: string | null; // BLOCKED|BEHIND|DIRTY|UNSTABLE|CLEAN|UNKNOWN
+  /** PR creation time (lifespan metric); null on placeholder snapshots/old data. */
+  createdAt: string | null;
   mergedAt: string | null;
   mergeCommitSha: string | null;
   autoMergeArmed: boolean;

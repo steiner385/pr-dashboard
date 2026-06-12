@@ -102,3 +102,20 @@ describe('mapQueueEntries', () => {
     ]);
   });
 });
+
+describe('mapPrNode createdAt (Round 12 metrics)', () => {
+  const BASE = {
+    number: 1, title: 't', url: 'u', isDraft: false, mergeStateStatus: 'CLEAN',
+    mergedAt: null, headRefOid: 'h', autoMergeRequest: null, mergeCommit: null,
+    mergeQueueEntry: null, commits: { nodes: [] },
+  };
+
+  it('maps createdAt when present', () => {
+    expect(mapPrNode('acme/widgets', { ...BASE, createdAt: '2026-06-09T10:00:00Z' })!.createdAt)
+      .toBe('2026-06-09T10:00:00Z');
+  });
+
+  it('defaults createdAt to null when the node omits it', () => {
+    expect(mapPrNode('acme/widgets', BASE)!.createdAt).toBeNull();
+  });
+});

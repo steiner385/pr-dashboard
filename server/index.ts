@@ -10,6 +10,7 @@ import { DeployWatcher } from './deploy-watcher';
 import { Poller, describeError } from './poller';
 import { deriveCiGraph } from './required-checks';
 import { backfillRepo } from './backfill';
+import { computeMetrics } from './metrics';
 import { createApp } from './api';
 import { loadWebhookSecret } from './webhooks';
 import { dataDir, staticDir, configPath } from './paths';
@@ -168,6 +169,7 @@ async function main() {
         poller.reconfigure(next);
       },
     },
+    metrics: (windowDays) => computeMetrics(history, windowDays),
     webhooks: webhookSecret != null ? {
       path: config.webhooks.path,
       secret: webhookSecret,

@@ -20,7 +20,7 @@ export function buildViewerQuery(): string {
 
 const PR_CORE_FRAGMENT = `
 fragment PrCore on PullRequest {
-  number title url isDraft mergedAt
+  number title url isDraft createdAt mergedAt
   repository { nameWithOwner }
   mergeCommit { oid }
 }`;
@@ -80,7 +80,7 @@ export function buildBlobQuery(owner: string, name: string, expression: string):
 }
 
 function prDetailSelection(n: number): string {
-  return `number title url isDraft mergeStateStatus mergedAt headRefOid
+  return `number title url isDraft mergeStateStatus createdAt mergedAt headRefOid
     autoMergeRequest { mergeMethod }
     mergeCommit { oid }
     mergeQueueEntry { position state enqueuedAt headCommit { oid } }

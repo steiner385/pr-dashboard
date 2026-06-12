@@ -11,7 +11,7 @@ const run = (over: Partial<CheckRun>): CheckRun => ({
 });
 const pr = (over: Partial<PrSnapshot>): PrSnapshot => ({
   repo: 'acme/widgets', number: 1, title: 't', url: 'u', headSha: 'h',
-  isDraft: false, mergeStateStatus: 'CLEAN', mergedAt: null, mergeCommitSha: null,
+  isDraft: false, mergeStateStatus: 'CLEAN', createdAt: null, mergedAt: null, mergeCommitSha: null,
   autoMergeArmed: false, queue: null, checks: [run({})], ...over,
 });
 const input = (over: Partial<ClassifyInput>): ClassifyInput => ({
