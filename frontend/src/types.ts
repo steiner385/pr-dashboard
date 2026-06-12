@@ -252,4 +252,15 @@ export interface MetricsPayload {
   trainKillers: { repo: string; batchSize: number; medianGroupRunSecs: number | null;
     checks: { name: string; ejects: number; estCostTrainHours: number | null;
       flakeRatePct: number | null }[] }[];
+  /** Critical path (issue #42): static expected longest chain per repo×event
+   *  (node weight = median wait + median duration); offPath = 10 lowest-slack
+   *  jobs. Window-independent (last-N medians) — label it as such. */
+  criticalPath: { repo: string; event: string; endToEndP50Secs: number;
+    path: { name: string; durationP50: number; waitP50: number }[];
+    offPath: { name: string; slackSecs: number }[] }[];
+  /** Workflow lint (issue #48 rule 1 — timeout calibration). observed /
+   *  configured are seconds; configured null = timeout-minutes unset (360m
+   *  GitHub default). Repos with zero findings are omitted. */
+  lint: { repo: string; findings: { rule: 'timeout'; severity: 'warn' | 'info';
+    job: string; message: string; observed: number; configured: number | null }[] }[];
 }

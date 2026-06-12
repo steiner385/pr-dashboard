@@ -827,3 +827,38 @@ describe('queue ops rollups (issues #39/#40)', () => {
     expect(h.countGroupEjects('other/repo', '2026-06-11T00:00:00Z')).toBe(0);
   });
 });
+
+describe('durationP99 (issue #48 timeout lint — last-50 SUCCESS p99)', () => {
+  it('returns the p99 (≈max) over recent SUCCESS samples with the sample count', () => {
+    // durations 60..600 in steps of 60 (completed 10:01..10:10)
+    for (let i = 1; i <= 10; i++) {
+      h.recordCheckDuration(REPO, 'CI', 'pull_request', '2026-06-10T10:00:00Z',
+        `2026-06-10T10:${String(i).padStart(2, '0')}:00Z`, 'SUCCESS'); // i*60 secs
+    }
+    const r = h.durationP99(REPO, 'CI', 'pull_request');
+    expect(r).toEqual({ p99Secs: 600, n: 10 });
+  });
+
+  it('windows to the most recent 50 samples (old outliers age out)', () => {
+    // one huge ancient sample, then 50 recent small ones — the p99 must not see the outlier
+    h.recordCheckDuration(REPO, 'CI', 'pull_request',
+      '2026-06-01T00:00:00Z', '2026-06-01T10:00:00Z', 'SUCCESS'); // 36000s, oldest
+    for (let i = 0; i < 50; i++) {
+      const m = String(Math.floor(i / 10)).padStart(2, '0');
+      const s = String((i % 10) * 6).padStart(2, '0');
+      h.recordCheckDuration(REPO, 'CI', 'pull_request',
+        `2026-06-10T10:${m}:${s}Z`, `2026-06-10T11:${m}:${s}Z`, 'SUCCESS'); // 3600s each
+    }
+    const r = h.durationP99(REPO, 'CI', 'pull_request');
+    expect(r).toEqual({ p99Secs: 3600, n: 50 });
+  });
+
+  it('ignores non-SUCCESS conclusions and other events; null when no samples', () => {
+    h.recordCheckDuration(REPO, 'CI', 'pull_request',
+      '2026-06-10T10:00:00Z', '2026-06-10T12:00:00Z', 'FAILURE');
+    h.recordCheckDuration(REPO, 'CI', 'merge_group',
+      '2026-06-10T10:00:00Z', '2026-06-10T10:01:00Z', 'SUCCESS');
+    expect(h.durationP99(REPO, 'CI', 'pull_request')).toBeNull();
+    expect(h.durationP99(REPO, 'CI', 'merge_group')).toEqual({ p99Secs: 60, n: 1 });
+  });
+});

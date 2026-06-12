@@ -1235,7 +1235,8 @@ describe('Poller derived required-check prefixes', () => {
 
 /** Build an all-events derived-graph node map from a plain needs adjacency. */
 const nodeMap = (m: Map<string, string[]>) =>
-  new Map([...m].map(([k, needs]) => [k, { needs, activity: { mode: 'all' as const }, runsOn: null }]));
+  new Map([...m].map(([k, needs]) =>
+    [k, { needs, activity: { mode: 'all' as const }, runsOn: null, timeoutMinutes: null }]));
 
 describe('Poller derived needs graph (W1)', () => {
   const WIDGETS_NEEDS = new Map<string, string[]>([
@@ -1293,8 +1294,8 @@ describe('Poller derived needs graph (W1)', () => {
     // unknown repo/graph → true (never prune on missing knowledge)
     expect(p.needActiveFor('acme/widgets', 'android-smoke /', 'pull_request')).toBe(true);
     p.setDerivedGraph('acme/widgets', new Map([
-      ['android-smoke /', { needs: [], activity: { mode: 'only', events: ['merge_group'] }, runsOn: null }],
-      ['build', { needs: [], activity: { mode: 'all' }, runsOn: null }],
+      ['android-smoke /', { needs: [], activity: { mode: 'only', events: ['merge_group'] }, runsOn: null, timeoutMinutes: null }],
+      ['build', { needs: [], activity: { mode: 'all' }, runsOn: null, timeoutMinutes: null }],
     ]));
     expect(p.needActiveFor('acme/widgets', 'android-smoke /', 'merge_group')).toBe(true);
     expect(p.needActiveFor('acme/widgets', 'android-smoke /', 'pull_request')).toBe(false);
@@ -1438,10 +1439,10 @@ describe('Poller runner waits (W2)', () => {
       { ...CHECK_DONE, name: 'ci', status: 'QUEUED', conclusion: null, startedAt: null, completedAt: null },
     ]))), history, deploy: noDeploy(), config: CONFIG, now: () => NOW });
     p.setDerivedGraph('acme/widgets', new Map([
-      ['ci', { needs: ['fast-checks /', 'android-smoke /'], activity: { mode: 'all' }, runsOn: null }],
-      ['fast-checks /', { needs: [PREPARE], activity: { mode: 'all' }, runsOn: null }],
-      ['android-smoke /', { needs: [], activity: { mode: 'only', events: ['merge_group'] }, runsOn: null }],
-      [PREPARE, { needs: [], activity: { mode: 'all' }, runsOn: null }],
+      ['ci', { needs: ['fast-checks /', 'android-smoke /'], activity: { mode: 'all' }, runsOn: null, timeoutMinutes: null }],
+      ['fast-checks /', { needs: [PREPARE], activity: { mode: 'all' }, runsOn: null, timeoutMinutes: null }],
+      ['android-smoke /', { needs: [], activity: { mode: 'only', events: ['merge_group'] }, runsOn: null, timeoutMinutes: null }],
+      [PREPARE, { needs: [], activity: { mode: 'all' }, runsOn: null, timeoutMinutes: null }],
     ]));
     await p.sweepOnce();
     await p.detailOnce();
@@ -4344,8 +4345,8 @@ describe('Poller queue ops console (#39) + merge ETA simulation (#40)', () => {
     const p = new Poller({ router: asRouter(client), history, deploy: noDeploy(),
       config: CONFIG, now: () => NOW, notifier });
     p.setDerivedGraph('acme/widgets', new Map([
-      ['ci', { needs: ['lint'], activity: { mode: 'all' as const }, runsOn: null }],
-      ['lint', { needs: [], activity: { mode: 'all' as const }, runsOn: null }],
+      ['ci', { needs: ['lint'], activity: { mode: 'all' as const }, runsOn: null, timeoutMinutes: null }],
+      ['lint', { needs: [], activity: { mode: 'all' as const }, runsOn: null, timeoutMinutes: null }],
     ]));
     const events: NotificationEvent[] = [];
     p.on('notification', (ev: NotificationEvent) => events.push(ev));

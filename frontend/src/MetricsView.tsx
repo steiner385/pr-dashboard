@@ -73,13 +73,13 @@ function calibrationHeadline(medianErrorPct: number, n: number): string {
   return `p50 ETAs run ${pct}% ${medianErrorPct > 0 ? 'optimistic' : 'pessimistic'} (n=${n})`;
 }
 
-function Panel({ title, empty, children }: {
-  title: string; empty: boolean; children: ReactNode;
+function Panel({ title, empty, emptyText = 'no data yet', children }: {
+  title: string; empty: boolean; emptyText?: string; children: ReactNode;
 }) {
   return (
     <section className="metric-panel">
       <h2>{title}</h2>
-      {empty ? <p className="metric-empty">no data yet</p> : children}
+      {empty ? <p className="metric-empty">{emptyText}</p> : children}
     </section>
   );
 }
@@ -210,6 +210,12 @@ export function MetricsView({ now }: {
   }
   const flakeRepos = payload.flakiness.filter((f) => f.checks.length);
   const killerRepos = payload.trainKillers.filter((t) => t.checks.length);
+  const cpByRepo = new Map<string, typeof payload.criticalPath>();
+  for (const cp of payload.criticalPath) {
+    if (!cp.path.length) continue;
+    cpByRepo.set(cp.repo, [...(cpByRepo.get(cp.repo) ?? []), cp]);
+  }
+  const lintRepos = payload.lint.filter((l) => l.findings.length);
 
   return (
     <div className="metrics">
@@ -397,6 +403,80 @@ export function MetricsView({ now }: {
               {t.medianGroupRunSecs != null ? ` (${formatDur(t.medianGroupRunSecs)})` : ''} ×
               batch size ({t.batchSize}) — an approximation of wasted train-hours;
               amber rows are train killers that are ALSO flaky (fix-list top)
+            </p>
+          </div>
+        ))}
+      </Panel>
+
+      <Panel title="Critical path" empty={cpByRepo.size === 0}>
+        {[...cpByRepo.entries()].map(([repo, entries]) => (
+          <div key={repo} className="metric-repo">
+            <h3>{repo}</h3>
+            {entries.map((cp) => (
+              <div key={cp.event} className="metric-cp">
+                <div className="metric-row">
+                  <MetricStat label={`${cp.event} end-to-end (p50)`}
+                    value={formatDur(cp.endToEndP50Secs)} />
+                </div>
+                <ol className="cp-chain" aria-label={`${repo} ${cp.event} critical path`}>
+                  {cp.path.map((step) => (
+                    <li key={step.name} className="cp-step">
+                      <span className="cp-name">{step.name}</span>
+                      <span className="cp-times">
+                        {step.waitP50 > 0
+                          ? `wait ${formatDur(step.waitP50)} + ${formatDur(step.durationP50)}`
+                          : formatDur(step.durationP50)}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+                {cp.offPath.length > 0 && (
+                  <ul className="cp-offpath">
+                    {cp.offPath.map((o) => (
+                      <li key={o.name}>
+                        <span className="metric-job-name">{o.name}</span>
+                        {' '}could grow {formatDur(o.slackSecs)} before mattering
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
+            <p className="metric-note">
+              expected path from last-20 run medians (wait + duration per job) —
+              ignores the window selector; off-path slack = how much a job could
+              grow before it starts gating the end-to-end time
+            </p>
+          </div>
+        ))}
+      </Panel>
+
+      <Panel title="Workflow lint" empty={lintRepos.length === 0} emptyText="no findings">
+        {lintRepos.map((l) => (
+          <div key={l.repo} className="metric-repo">
+            <h3>{l.repo}</h3>
+            <table className="metric-table">
+              <thead>
+                <tr>
+                  <th>severity</th><th>job</th><th>finding</th><th>p99</th><th>timeout</th>
+                </tr>
+              </thead>
+              <tbody>
+                {l.findings.map((f) => (
+                  <tr key={`${f.rule}/${f.job}`}>
+                    <td><span className={`lint-badge lint-${f.severity}`}>{f.severity}</span></td>
+                    <td className="metric-job-name">{f.job}</td>
+                    <td>{f.message}</td>
+                    <td>{formatDur(f.observed)}</td>
+                    <td>{f.configured != null ? formatDur(f.configured) : '– (default 6h)'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="metric-note">
+              timeout calibration: warn = timeout under observed p99 × 1.2 (will
+              timeout-cancel a slow-but-normal run); info = explicit timeout over
+              p99 × 10 (hung runs burn the runner before failing)
             </p>
           </div>
         ))}

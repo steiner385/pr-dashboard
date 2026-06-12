@@ -1018,6 +1018,13 @@ export class Poller extends EventEmitter {
     this.derivedGraph.set(repo, nodes);
   }
 
+  /** Every repo's derived graph nodes — the static side of the metrics
+   *  critical-path (#42) and workflow-lint (#48) joins. Live reference (the
+   *  metrics pass only reads). */
+  allDerivedGraphs(): Map<string, Map<string, CiGraphNode>> {
+    return this.derivedGraph;
+  }
+
   /** Cache the ci.yml-derived rollup workflow display name (YAML top-level `name:`). */
   setRollupWorkflowName(repo: string, name: string | null): void {
     this.derivedWorkflowName.set(repo, name);

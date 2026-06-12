@@ -93,6 +93,7 @@ export class HistoryStore {
   // ── Prepared statements (cached for performance) ──────────────────────────
   private readonly stmtInsertDuration: Database.Statement;
   private readonly stmtSelectDurations: Database.Statement;
+  private readonly stmtSelectDurationsP99: Database.Statement;
   private readonly stmtSelectExpectedSet: Database.Statement;
   private readonly stmtUpsertPr: Database.Statement;
   private readonly stmtMarkQaLive: Database.Statement;
@@ -209,6 +210,13 @@ export class HistoryStore {
       `SELECT duration_secs FROM check_durations
        WHERE repo=? AND check_name=? AND event=? AND conclusion='SUCCESS'
        ORDER BY completed_at DESC LIMIT 20`
+    );
+    // Timeout lint (issue #48): p99 wants a wider sample window than the
+    // expected-duration p50/p90 (LIMIT 20) — tails need more history.
+    this.stmtSelectDurationsP99 = this.db.prepare(
+      `SELECT duration_secs FROM check_durations
+       WHERE repo=? AND check_name=? AND event=? AND conclusion='SUCCESS'
+       ORDER BY completed_at DESC LIMIT 50`
     );
     this.stmtSelectExpectedSet = this.db.prepare(
       `SELECT DISTINCT check_name FROM check_durations
@@ -365,6 +373,16 @@ export class HistoryStore {
       p10: percentile(sorted, 0.1), p50: percentile(sorted, 0.5), p90: percentile(sorted, 0.9),
       n: sorted.length,
     };
+  }
+
+  /** p99 duration over the last 50 SUCCESS samples for (repo, check, event) —
+   *  the observed-tail side of the timeout-calibration lint (issue #48).
+   *  Null when no samples; `n` lets callers gate on sample depth. */
+  durationP99(repo: string, name: string, event: string): { p99Secs: number; n: number } | null {
+    const rows = this.stmtSelectDurationsP99.all(repo, name, event) as { duration_secs: number }[];
+    if (rows.length === 0) return null;
+    const sorted = rows.map((r) => r.duration_secs).sort((a, b) => a - b);
+    return { p99Secs: percentile(sorted, 0.99), n: sorted.length };
   }
 
   /** Raw last-20 SUCCESS duration samples for (repo, check, event), newest first. */

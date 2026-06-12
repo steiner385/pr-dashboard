@@ -195,7 +195,7 @@ jobs:
     for (const text of ['jobs:\n  other: {}\n', 'name: CI\non: push\n']) {
       const g = deriveCiGraph(text)!;
       expect(g.prefixes).toEqual(['ci']);
-      expect(g.nodes).toEqual(new Map([['ci', { needs: [], activity: { mode: 'all' }, runsOn: null }]]));
+      expect(g.nodes).toEqual(new Map([['ci', { needs: [], activity: { mode: 'all' }, runsOn: null, timeoutMinutes: null }]]));
     }
   });
 });
@@ -358,7 +358,8 @@ jobs:
   it('accepts a minimal valid value — a legacy node without runsOn decodes to runsOn: null', () => {
     const g = ciGraphFromJson({ prefixes: ['ci'],
       nodes: { ci: { needs: [], activity: { mode: 'all' } } }, workflowName: null });
-    expect(g!.nodes.get('ci')).toEqual({ needs: [], activity: { mode: 'all' }, runsOn: null });
+    expect(g!.nodes.get('ci')).toEqual({ needs: [], activity: { mode: 'all' }, runsOn: null,
+      timeoutMinutes: null });
   });
 
   it('round-trips runsOn candidates and coerces a garbage runsOn to null', () => {
@@ -476,5 +477,85 @@ jobs:
   ci:
     needs: [build-pr, build-mg]
 `, 'build')).toEqual(['kindash-runner', 'kindash-ondemand']);
+  });
+});
+
+describe('deriveCiGraph timeout-minutes extraction (issue #48 rule 1)', () => {
+  const timeoutOf = (yaml: string, prefix: string): number | null =>
+    deriveCiGraph(yaml)!.nodes.get(prefix)!.timeoutMinutes;
+
+  it('numeric timeout-minutes is captured per job', () => {
+    expect(timeoutOf(`
+jobs:
+  build:
+    runs-on: x
+    timeout-minutes: 30
+  ci:
+    needs: [build]
+`, 'build')).toBe(30);
+  });
+
+  it('absent timeout-minutes → null (GitHub applies its 360-minute default at runtime)', () => {
+    expect(timeoutOf('jobs:\n  build: {}\n  ci:\n    needs: [build]\n', 'build')).toBeNull();
+    expect(timeoutOf('jobs:\n  ci: {}\n', 'ci')).toBeNull();
+  });
+
+  it('expression / non-numeric / non-positive timeout-minutes → null (unknowable)', () => {
+    for (const v of ["${{ inputs.timeout }}", "'15'", '0', '-3', '[5]']) {
+      expect(timeoutOf(`
+jobs:
+  build:
+    timeout-minutes: ${v}
+  ci:
+    needs: [build]
+`, 'build')).toBeNull();
+    }
+  });
+
+  it('degraded rollup-only graph → null', () => {
+    expect(deriveCiGraph('jobs:\n  other: {}\n')!.nodes.get('ci')!.timeoutMinutes).toBeNull();
+  });
+
+  it('two job keys sharing a display name keep the MINIMUM timeout (the one that cancels first)', () => {
+    expect(timeoutOf(`
+jobs:
+  build-pr:
+    name: build
+    timeout-minutes: 30
+  build-mg:
+    name: build
+    timeout-minutes: 10
+  ci:
+    needs: [build-pr, build-mg]
+`, 'build')).toBe(10);
+    // set + absent → the set one
+    expect(timeoutOf(`
+jobs:
+  build-pr:
+    name: build
+    timeout-minutes: 30
+  build-mg:
+    name: build
+  ci:
+    needs: [build-pr, build-mg]
+`, 'build')).toBe(30);
+  });
+
+  it('round-trips through ciGraphToJson/FromJson; legacy/corrupt values coerce to null', () => {
+    const g = deriveCiGraph(`
+jobs:
+  build:
+    timeout-minutes: 15
+  ci:
+    needs: [build]
+`)!;
+    const back = ciGraphFromJson(JSON.parse(JSON.stringify(ciGraphToJson(g))))!;
+    expect(back.nodes.get('build')!.timeoutMinutes).toBe(15);
+    expect(back.nodes.get('ci')!.timeoutMinutes).toBeNull();
+    // tolerant on the new field only — corrupt timeoutMinutes must not reject the row
+    const coerced = ciGraphFromJson({ prefixes: ['ci'],
+      nodes: { ci: { needs: [], activity: { mode: 'all' }, timeoutMinutes: 'soon' } },
+      workflowName: null });
+    expect(coerced!.nodes.get('ci')!.timeoutMinutes).toBeNull();
   });
 });

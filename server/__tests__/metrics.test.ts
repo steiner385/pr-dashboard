@@ -295,7 +295,7 @@ describe('computeMetrics: empty history', () => {
     expect(computeMetrics(h, '3d', 'hour', NOW)).toEqual({
       window: '3d', bucket: 'hour',
       runnerWaits: [], queue: [], slowestJobs: [], velocity: [], trends: [], calibration: [],
-      flakiness: [], trainKillers: [],
+      flakiness: [], trainKillers: [], criticalPath: [], lint: [],
     });
   });
 });
@@ -496,5 +496,166 @@ describe('computeMetrics: train killers (issue #38)', () => {
     const tk = computeMetrics(h, '24h', 'hour', NOW, ['acme/dropped']).trainKillers;
     expect(tk.map((r) => r.repo)).toEqual([REPO]);
     expect(tk[0]!.checks.map((c) => c.name)).toEqual(['unit']);
+  });
+});
+
+// ---- critical path (#42) + workflow lint (#48 rule 1) ----------------------
+
+import type { CiGraphNode } from '../required-checks';
+
+const gnode = (needs: string[], opts: Partial<CiGraphNode> = {}): CiGraphNode =>
+  ({ needs, activity: { mode: 'all' }, runsOn: null, timeoutMinutes: null, ...opts });
+
+/** Seed `count` SUCCESS duration samples of `secs` for (name, event), spread
+ *  over distinct timestamps near NOW (well inside the 14-day expectedSet window). */
+function seedDurations(name: string, event: string, secs: number, count = 5,
+  dayOffset = 0): void {
+  for (let i = 0; i < count; i++) {
+    const end = new Date(NOW.getTime() - dayOffset * 86400_000 - i * 3600_000);
+    const start = new Date(end.getTime() - secs * 1000);
+    h.recordCheckDuration(REPO, name, event, start.toISOString(), end.toISOString(), 'SUCCESS');
+  }
+}
+
+function seedWaits(name: string, event: string, secs: number, count = 3): void {
+  for (let i = 0; i < count; i++) {
+    h.recordRunnerWait(REPO, name, event, secs,
+      new Date(NOW.getTime() - i * 3600_000).toISOString());
+  }
+}
+
+/** Diamond: ci ← {unit-tests, bats-tests} ← build; bats is merge_group-only. */
+function diamondGraph(): Map<string, Map<string, CiGraphNode>> {
+  return new Map([[REPO, new Map([
+    ['build', gnode([], { timeoutMinutes: 1 })],
+    ['unit-tests', gnode(['build'], { timeoutMinutes: 600 })],
+    ['bats-tests', gnode(['build'], { activity: { mode: 'only', events: ['merge_group'] } })],
+    ['ci', gnode(['build', 'unit-tests', 'bats-tests'])],
+  ])]]);
+}
+
+function seedDiamond(): void {
+  seedDurations('build', 'pull_request', 100);
+  seedDurations('unit-tests', 'pull_request', 600);
+  seedDurations('ci', 'pull_request', 10);
+  seedWaits('build', 'pull_request', 20);
+  seedWaits('unit-tests', 'pull_request', 30);
+  seedWaits('ci', 'pull_request', 5);
+  // merge_group: bats dominates; no waits recorded at all (wait reads as 0)
+  seedDurations('build', 'merge_group', 100);
+  seedDurations('unit-tests', 'merge_group', 200);
+  seedDurations('bats-tests', 'merge_group', 900);
+  seedDurations('ci', 'merge_group', 10);
+}
+
+describe('computeMetrics: critical path (issue #42)', () => {
+  it('emits per repo×event static expected paths from last-N medians', () => {
+    seedDiamond();
+    const m = computeMetrics(h, '3d', 'hour', NOW, [], () => 1, diamondGraph());
+
+    const pr = m.criticalPath.find((c) => c.event === 'pull_request')!;
+    expect(pr.repo).toBe(REPO);
+    // bats-tests is merge_group-only → excluded from the pull_request DAG entirely
+    expect(pr.path.map((s) => s.name)).toEqual(['build', 'unit-tests', 'ci']);
+    expect(pr.endToEndP50Secs).toBe(120 + 630 + 15); // (wait+dur) summed down the path
+    expect(pr.path[1]).toEqual({ name: 'unit-tests', durationP50: 600, waitP50: 30 });
+    expect(pr.offPath).toEqual([]);
+
+    const mg = m.criticalPath.find((c) => c.event === 'merge_group')!;
+    expect(mg.path.map((s) => s.name)).toEqual(['build', 'bats-tests', 'ci']);
+    expect(mg.endToEndP50Secs).toBe(100 + 900 + 10); // no waits recorded → 0
+    // unit-tests sits off-path with slack = 900 − 200
+    expect(mg.offPath).toEqual([{ name: 'unit-tests', slackSecs: 700 }]);
+  });
+
+  it('matches check names to graph nodes by longest prefix (reusable-workflow inner checks)', () => {
+    seedDurations('static-checks / TypeScript', 'pull_request', 300);
+    seedDurations('static-checks / ESLint', 'pull_request', 500);
+    seedDurations('ci', 'pull_request', 10);
+    const graphs = new Map([[REPO, new Map([
+      ['static-checks /', gnode([])],
+      ['ci', gnode(['static-checks /'])],
+    ])]]);
+    const m = computeMetrics(h, '3d', 'hour', NOW, [], () => 1, graphs);
+    const pr = m.criticalPath.find((c) => c.event === 'pull_request')!;
+    // node duration = the slowest inner check (they run in parallel inside the call)
+    expect(pr.path.map((s) => s.name)).toEqual(['static-checks /', 'ci']);
+    expect(pr.path[0]!.durationP50).toBe(500);
+    expect(pr.endToEndP50Secs).toBe(510);
+  });
+
+  it('ignores the metrics window selector (last-N medians, 14-day name discovery)', () => {
+    // samples 3 days old, window 24h — the section must still populate
+    seedDurations('build', 'pull_request', 100, 5, 3);
+    seedDurations('ci', 'pull_request', 10, 5, 3);
+    const graphs = new Map([[REPO, new Map([
+      ['build', gnode([])], ['ci', gnode(['build'])],
+    ])]]);
+    const m = computeMetrics(h, '24h', 'hour', NOW, [], () => 1, graphs);
+    expect(m.criticalPath.find((c) => c.event === 'pull_request')!.endToEndP50Secs).toBe(110);
+  });
+
+  it('omits repo×event entries with no observed durations and respects exclude', () => {
+    const graphs = diamondGraph();
+    // no history at all → no entries
+    expect(computeMetrics(h, '3d', 'hour', NOW, [], () => 1, graphs).criticalPath).toEqual([]);
+    seedDiamond();
+    // excluded repo → no entries either
+    expect(computeMetrics(h, '3d', 'hour', NOW, [REPO], () => 1, graphs).criticalPath).toEqual([]);
+    // no graphs → empty section
+    expect(computeMetrics(h, '3d', 'hour', NOW).criticalPath).toEqual([]);
+  });
+
+  it('caps offPath at the 10 lowest-slack jobs', () => {
+    const nodes = new Map<string, CiGraphNode>([['long', gnode([])]]);
+    seedDurations('long', 'pull_request', 10_000);
+    const needs: string[] = ['long'];
+    for (let i = 0; i < 12; i++) {
+      const name = `par-${String(i).padStart(2, '0')}`;
+      nodes.set(name, gnode([]));
+      needs.push(name);
+      seedDurations(name, 'pull_request', 100 + i);
+    }
+    nodes.set('ci', gnode(needs));
+    seedDurations('ci', 'pull_request', 10);
+    const m = computeMetrics(h, '3d', 'hour', NOW, [], () => 1, new Map([[REPO, nodes]]));
+    const pr = m.criticalPath.find((c) => c.event === 'pull_request')!;
+    expect(pr.offPath).toHaveLength(10);
+    // lowest slack first = the SLOWEST parallel jobs (closest to mattering)
+    expect(pr.offPath[0]!.name).toBe('par-11');
+  });
+});
+
+describe('computeMetrics: workflow lint (issue #48 rule 1 — timeout calibration)', () => {
+  it('flags timeout-vs-p99 misconfigurations per repo (warn under 1.2×, info over 10×)', () => {
+    seedDiamond();
+    const m = computeMetrics(h, '3d', 'hour', NOW, [], () => 1, diamondGraph());
+    expect(m.lint).toHaveLength(1);
+    const { repo, findings } = m.lint[0]!;
+    expect(repo).toBe(REPO);
+    // build: timeout 1m=60s < p99 100s × 1.2 → warn
+    // unit-tests: timeout 600m=36000s > p99 600s × 10 → info
+    // ci/bats: no explicit timeout, p99 far under the 360m default → nothing
+    expect(findings).toHaveLength(2);
+    expect(findings[0]).toMatchObject({
+      rule: 'timeout', severity: 'warn', job: 'build', observed: 100, configured: 60 });
+    expect(findings[1]).toMatchObject({
+      rule: 'timeout', severity: 'info', job: 'unit-tests', observed: 600, configured: 36_000 });
+  });
+
+  it('requires ≥5 recent runs before linting a job (thin p99s are noise)', () => {
+    const graphs = new Map([[REPO, new Map([
+      ['build', gnode([], { timeoutMinutes: 1 })],
+      ['ci', gnode(['build'])],
+    ])]]);
+    seedDurations('build', 'pull_request', 600, 4); // would warn, but only 4 runs
+    seedDurations('ci', 'pull_request', 10, 5);
+    expect(computeMetrics(h, '3d', 'hour', NOW, [], () => 1, graphs).lint).toEqual([]);
+  });
+
+  it('omits repos with no findings and respects exclude', () => {
+    seedDiamond();
+    expect(computeMetrics(h, '3d', 'hour', NOW, [REPO], () => 1, diamondGraph()).lint).toEqual([]);
+    expect(computeMetrics(h, '3d', 'hour', NOW).lint).toEqual([]);
   });
 });

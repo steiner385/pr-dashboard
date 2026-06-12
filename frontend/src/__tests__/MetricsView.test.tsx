@@ -6,7 +6,7 @@ import type { MetricsBucket, MetricsPayload, MetricsWindow } from '../types';
 const EMPTY: MetricsPayload = {
   window: '3d', bucket: 'hour',
   runnerWaits: [], queue: [], slowestJobs: [], velocity: [], trends: [], calibration: [],
-  flakiness: [], trainKillers: [],
+  flakiness: [], trainKillers: [], criticalPath: [], lint: [],
 };
 
 const H = (h: number): string => `2026-06-11T${String(h).padStart(2, '0')}`;
@@ -105,6 +105,32 @@ const PAYLOAD: MetricsPayload = {
     { repo: 'acme/widgets', batchSize: 6, medianGroupRunSecs: 1800, checks: [
       { name: 'merge-group e2e', ejects: 7, estCostTrainHours: 21, flakeRatePct: 90 },
       { name: 'db-migrations', ejects: 2, estCostTrainHours: 6, flakeRatePct: null },
+    ] },
+  ],
+  criticalPath: [
+    { repo: 'acme/widgets', event: 'pull_request', endToEndP50Secs: 765,
+      path: [
+        { name: 'build', durationP50: 100, waitP50: 20 },
+        { name: 'unit-tests', durationP50: 600, waitP50: 30 },
+        { name: 'rollup-ci', durationP50: 10, waitP50: 5 },
+      ],
+      offPath: [{ name: 'bats-tests', slackSecs: 660 }] },
+    { repo: 'acme/widgets', event: 'merge_group', endToEndP50Secs: 1010,
+      path: [
+        { name: 'build', durationP50: 100, waitP50: 0 },
+        { name: 'integration-suite', durationP50: 900, waitP50: 0 },
+        { name: 'rollup-ci', durationP50: 10, waitP50: 0 },
+      ],
+      offPath: [] },
+  ],
+  lint: [
+    { repo: 'acme/widgets', findings: [
+      { rule: 'timeout', severity: 'warn', job: 'unit-tests',
+        message: 'timeout 11m vs p99 10m — will timeout-cancel on a slow run',
+        observed: 600, configured: 660 },
+      { rule: 'timeout', severity: 'info', job: 'build',
+        message: 'timeout 60m vs p99 4m — tighten to fail fast',
+        observed: 240, configured: 3600 },
     ] },
   ],
 };
@@ -207,11 +233,12 @@ describe('MetricsView', () => {
     await waitFor(() => expect(screen.getByText(/metrics fetch failed/i)).toBeInTheDocument());
   });
 
-  it('renders "no data yet" per empty panel', async () => {
+  it('renders "no data yet" per empty panel (workflow lint says "no findings" instead)', async () => {
     mockFetchOk(EMPTY);
     render(<MetricsView now={NOW} />);
     await screen.findByRole('heading', { name: 'Trends' });
-    expect(screen.getAllByText('no data yet')).toHaveLength(8);
+    expect(screen.getAllByText('no data yet')).toHaveLength(9);
+    expect(screen.getByText('no findings')).toBeInTheDocument();
   });
 
   it('trends panel: one multi-line chart per repo with a legend and latest headline stats', async () => {
@@ -422,5 +449,92 @@ describe('MetricsView — train killers panel (issue #38)', () => {
     await screen.findByRole('heading', { name: 'Train killers' });
     const panel = screen.getByRole('heading', { name: 'Train killers' }).closest('section')!;
     expect(within(panel).getByText('no data yet')).toBeInTheDocument();
+  });
+});
+
+describe('MetricsView — critical path panel (issue #42)', () => {
+  it('renders the expected path as an ordered chain with wait + duration per step', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    const heading = await screen.findByRole('heading', { name: 'Critical path' });
+    const panel = heading.closest('section')! as HTMLElement;
+    const prChain = within(panel).getByRole('list',
+      { name: 'acme/widgets pull_request critical path' });
+    const steps = within(prChain as HTMLElement).getAllByRole('listitem');
+    expect(steps.map((s) => s.querySelector('.cp-name')!.textContent))
+      .toEqual(['build', 'unit-tests', 'rollup-ci']);
+    // wait + duration split visible on a step (20s wait + 100s run)
+    expect(steps[0]!.textContent).toContain('wait 20s');
+    expect(steps[0]!.textContent).toContain('+ 2m');
+  });
+
+  it('shows the end-to-end p50 headline per event', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    const heading = await screen.findByRole('heading', { name: 'Critical path' });
+    const panel = heading.closest('section')! as HTMLElement;
+    const pr = within(panel).getByText('pull_request end-to-end (p50)')
+      .closest('.metric-stat')! as HTMLElement;
+    expect(pr.querySelector('b')!.textContent).toBe('13m'); // formatDur(765)
+    expect(within(panel).getByText('merge_group end-to-end (p50)')).toBeInTheDocument();
+  });
+
+  it('lists off-path jobs with their slack in plain language', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    const heading = await screen.findByRole('heading', { name: 'Critical path' });
+    const panel = heading.closest('section')! as HTMLElement;
+    const off = within(panel).getByText('bats-tests').closest('li')!;
+    expect(off.textContent).toContain('could grow 11m before mattering'); // formatDur(660)
+  });
+
+  it('documents that the section ignores the window selector', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    const heading = await screen.findByRole('heading', { name: 'Critical path' });
+    const panel = heading.closest('section')! as HTMLElement;
+    expect(within(panel).getByText(/ignores the window selector/)).toBeInTheDocument();
+  });
+
+  it('shows the empty placeholder without critical-path data', async () => {
+    mockFetchOk(EMPTY);
+    render(<MetricsView now={NOW} />);
+    const heading = await screen.findByRole('heading', { name: 'Critical path' });
+    const panel = heading.closest('section')! as HTMLElement;
+    expect(within(panel).getByText('no data yet')).toBeInTheDocument();
+  });
+});
+
+describe('MetricsView — workflow lint panel (issue #48 rule 1)', () => {
+  it('lists findings with severity, job, observed p99 and configured timeout', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    const heading = await screen.findByRole('heading', { name: 'Workflow lint' });
+    const panel = heading.closest('section')! as HTMLElement;
+    const warnRow = within(panel).getByText('unit-tests').closest('tr')!;
+    expect(within(warnRow).getByText('warn')).toBeInTheDocument();
+    expect(within(warnRow).getByText(/will timeout-cancel on a slow run/)).toBeInTheDocument();
+    expect(within(warnRow).getByText('10m')).toBeInTheDocument();  // observed p99 600s
+    expect(within(warnRow).getByText('11m')).toBeInTheDocument();  // configured 660s
+    const infoRow = within(panel).getByText('build').closest('tr')!;
+    expect(within(infoRow).getByText('info')).toBeInTheDocument();
+    expect(within(infoRow).getByText(/tighten to fail fast/)).toBeInTheDocument();
+  });
+
+  it('severity badges carry distinct classes for styling', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    const heading = await screen.findByRole('heading', { name: 'Workflow lint' });
+    const panel = heading.closest('section')! as HTMLElement;
+    expect(within(panel).getByText('warn').className).toContain('lint-warn');
+    expect(within(panel).getByText('info').className).toContain('lint-info');
+  });
+
+  it("empty state says 'no findings' (a clean bill of health, not missing data)", async () => {
+    mockFetchOk(EMPTY);
+    render(<MetricsView now={NOW} />);
+    const heading = await screen.findByRole('heading', { name: 'Workflow lint' });
+    const panel = heading.closest('section')! as HTMLElement;
+    expect(within(panel).getByText('no findings')).toBeInTheDocument();
   });
 });

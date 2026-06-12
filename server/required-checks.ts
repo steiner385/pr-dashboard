@@ -7,6 +7,7 @@ interface JobDef {
   if?: unknown;
   'runs-on'?: unknown;
   with?: unknown;
+  'timeout-minutes'?: unknown;
 }
 
 /**
@@ -34,6 +35,12 @@ export interface CiGraphNode {
    *  branches are listed. Null when unknowable (no `runs-on`; reusable-workflow
    *  job without an outer label input) or on rows persisted before #34. */
   runsOn: string[] | null;
+  /** Job-level `timeout-minutes` (issue #48 timeout lint). Null when absent
+   *  (GitHub applies its 360-minute default at runtime — see
+   *  GITHUB_DEFAULT_TIMEOUT_MINUTES in estimator/workflow-lint.ts), when set to
+   *  an expression/non-positive value (unknowable from this parse), or on rows
+   *  persisted before #48. */
+  timeoutMinutes: number | null;
 }
 
 export interface CiGraph {
@@ -65,6 +72,10 @@ export function ciGraphToJson(g: CiGraph): CiGraphJson {
 const isStringArray = (v: unknown): v is string[] =>
   Array.isArray(v) && v.every((s) => typeof s === 'string');
 
+/** Valid persisted/derived timeoutMinutes: a finite positive number. */
+const isTimeout = (v: unknown): v is number =>
+  typeof v === 'number' && Number.isFinite(v) && v > 0;
+
 function isActivity(v: unknown): v is EventActivity {
   if (!v || typeof v !== 'object') return false;
   const a = v as { mode?: unknown; events?: unknown };
@@ -83,12 +94,15 @@ export function ciGraphFromJson(raw: unknown): CiGraph | null {
   if (!g.nodes || typeof g.nodes !== 'object' || Array.isArray(g.nodes)) return null;
   const nodes = new Map<string, CiGraphNode>();
   for (const [prefix, node] of Object.entries(g.nodes)) {
-    const n = node as { needs?: unknown; activity?: unknown; runsOn?: unknown } | null;
+    const n = node as { needs?: unknown; activity?: unknown; runsOn?: unknown;
+      timeoutMinutes?: unknown } | null;
     if (!n || typeof n !== 'object' || !isStringArray(n.needs) || !isActivity(n.activity)) return null;
-    // runsOn is tolerant by design: rows persisted before issue #34 lack it,
-    // and a corrupt value must not reject an otherwise-valid graph → null.
+    // runsOn/timeoutMinutes are tolerant by design: rows persisted before
+    // issues #34/#48 lack them, and a corrupt value must not reject an
+    // otherwise-valid graph → null.
     const runsOn = isStringArray(n.runsOn) ? n.runsOn : null;
-    nodes.set(prefix, { needs: n.needs, activity: n.activity, runsOn });
+    const timeoutMinutes = isTimeout(n.timeoutMinutes) ? n.timeoutMinutes : null;
+    nodes.set(prefix, { needs: n.needs, activity: n.activity, runsOn, timeoutMinutes });
   }
   return { prefixes: g.prefixes, nodes, workflowName: g.workflowName ?? null };
 }
@@ -190,6 +204,22 @@ function mergeRunsOn(a: string[] | null, b: string[] | null): string[] | null {
   return [...new Set([...a, ...b])];
 }
 
+/** A job's `timeout-minutes` when knowable: YAML numbers pass; expressions,
+ *  strings, and non-positive values are unknowable from a static parse → null. */
+function extractTimeout(job: JobDef): number | null {
+  const t = job['timeout-minutes'];
+  return isTimeout(t) ? t : null;
+}
+
+/** Two job keys sharing a display name keep the MINIMUM timeout — the stricter
+ *  one cancels first, which is what the timeout lint must reason about.
+ *  Null = unset yields the other (set beats unknown). */
+function mergeTimeout(a: number | null, b: number | null): number | null {
+  if (a == null) return b;
+  if (b == null) return a;
+  return Math.min(a, b);
+}
+
 /** Union of two activities (two job keys sharing a display name → one node). */
 function mergeActivity(a: EventActivity, b: EventActivity): EventActivity {
   if (a.mode === 'only' && b.mode === 'only') {
@@ -236,7 +266,7 @@ export function deriveCiGraph(ciYamlText: string, rollupJobId = 'ci'): CiGraph |
   const workflowName = typeof rawName === 'string' && rawName ? rawName : null;
   const jobs = (doc as { jobs?: unknown } | null)?.jobs;
   const rollupOnly = (): CiGraph =>
-    ({ prefixes: [rollupJobId], nodes: new Map([[rollupJobId, { needs: [], activity: ALL, runsOn: null }]]), workflowName });
+    ({ prefixes: [rollupJobId], nodes: new Map([[rollupJobId, { needs: [], activity: ALL, runsOn: null, timeoutMinutes: null }]]), workflowName });
   if (!jobs || typeof jobs !== 'object') return rollupOnly();
   const jobMap = jobs as Record<string, JobDef | null>;
   if (!(rollupJobId in jobMap)) return rollupOnly();
@@ -269,10 +299,12 @@ export function deriveCiGraph(ciYamlText: string, rollupJobId = 'ci'): CiGraph |
     }
     const activity = extractActivity(job.if);
     const runsOn = extractRunsOn(job);
+    const timeoutMinutes = extractTimeout(job);
     nodes.set(prefix, {
       needs: neededPrefixes,
       activity: existing ? mergeActivity(existing.activity, activity) : activity,
       runsOn: existing ? mergeRunsOn(existing.runsOn, runsOn) : runsOn,
+      timeoutMinutes: existing ? mergeTimeout(existing.timeoutMinutes, timeoutMinutes) : timeoutMinutes,
     });
     for (const k of neededKeys) {
       if (visited.has(k)) continue;

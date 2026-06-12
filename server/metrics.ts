@@ -1,5 +1,9 @@
 import { FLAKE_MIN_RUNS, type HistoryStore } from './history';
 import { percentile } from './math';
+import { activeForEvent, type CiGraphNode } from './required-checks';
+import { matchingPrefix } from './estimator/classify';
+import { computeCriticalPath, type CriticalPathNodeInput } from './estimator/critical-path';
+import { lintTimeouts, type LintFinding, type TimeoutLintInput } from './estimator/workflow-lint';
 
 /**
  * Metrics tab payload (metrics-readability revision). This interface is the
@@ -78,6 +82,23 @@ export interface MetricsPayload {
   trainKillers: { repo: string; batchSize: number; medianGroupRunSecs: number | null;
     checks: { name: string; ejects: number; estCostTrainHours: number | null;
       flakeRatePct: number | null }[] }[];
+  /** Critical path (issue #42): per repo×event (pull_request / merge_group),
+   *  the STATIC expected longest chain through the derived needs DAG where
+   *  node weight = median pickup wait + median duration. `offPath` lists the
+   *  10 lowest-slack off-path jobs (slack = seconds the job could grow before
+   *  joining the path). DELIBERATELY window-independent: built from last-N
+   *  per-check medians (last 20) + 14-day name discovery, NOT the selected
+   *  metrics window — the UI labels this. Per-run path attribution is v2. */
+  criticalPath: { repo: string; event: string; endToEndP50Secs: number;
+    path: { name: string; durationP50: number; waitP50: number }[];
+    offPath: { name: string; slackSecs: number }[] }[];
+  /** Workflow lint (issue #48, rule 1 — timeout calibration): per repo,
+   *  findings from joining each derived job's `timeout-minutes` with its
+   *  observed p99 duration (last 50 runs, ≥ LINT_MIN_RUNS samples; max across
+   *  events). `observed`/`configured` are seconds; configured null = unset
+   *  (GitHub's 360m default). Window-independent, like criticalPath. Repos
+   *  with zero findings are omitted (the UI's empty state reads 'no findings'). */
+  lint: { repo: string; findings: LintFinding[] }[];
 }
 
 /**
@@ -178,6 +199,16 @@ const FLAKINESS_CAP = 10;
 /** Scatter-point cap for the calibration panel (most recent rows win). */
 const CALIBRATION_POINTS_CAP = 200;
 
+/** Events the critical-path section is computed for (issue #42). */
+const CRITICAL_PATH_EVENTS = ['pull_request', 'merge_group'] as const;
+
+/** Off-path jobs reported per repo×event (lowest slack first). */
+const OFF_PATH_CAP = 10;
+
+/** Minimum last-50 samples behind a p99 before the timeout lint trusts it —
+ *  a thin tail reads as noise, not calibration evidence (issue #48). */
+export const LINT_MIN_RUNS = 5;
+
 /**
  * Compute the full metrics payload for one (window, bucket) pair — a single
  * pass over the local SQLite history per section, computed on request (no
@@ -186,7 +217,8 @@ const CALIBRATION_POINTS_CAP = 200;
  */
 export function computeMetrics(history: HistoryStore, window: MetricsWindow,
   bucket: MetricsBucket, now: Date = new Date(), exclude: string[] = [],
-  batchSizeFor: (repo: string) => number = () => 1): MetricsPayload {
+  batchSizeFor: (repo: string) => number = () => 1,
+  ciGraphs: Map<string, Map<string, CiGraphNode>> = new Map()): MetricsPayload {
   const dropped = new Set(exclude);
   const keep = <T extends { repo: string }>(rows: T[]): T[] =>
     dropped.size ? rows.filter((r) => !dropped.has(r.repo)) : rows;
@@ -398,6 +430,71 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
       return { repo, batchSize, medianGroupRunSecs, checks };
     });
 
+  // 9. Critical path (issue #42) + 10. workflow lint (issue #48 rule 1): both
+  // join the derived needs DAG with observed history. Window-independent BY
+  // DESIGN (documented on the payload fields): node medians come from the
+  // last-20 samples per (check, event), p99s from the last-50, and check-name
+  // discovery from the 14-day expectedSet — the window selector never applies.
+  const criticalPath: MetricsPayload['criticalPath'] = [];
+  const lint: MetricsPayload['lint'] = [];
+  for (const [repo, graph] of [...ciGraphs].sort(([a], [b]) => a.localeCompare(b))) {
+    if (dropped.has(repo)) continue;
+    const allKeys = [...graph.keys()];
+    // node → lint input; the worst (max) p99 across events wins per node
+    const lintInputs = new Map<string, TimeoutLintInput>();
+    for (const event of CRITICAL_PATH_EVENTS) {
+      const names = history.expectedSet(repo, event, now);
+      // nodes provably inactive for this event leave the DAG entirely (their
+      // needs-edges are dropped by computeCriticalPath's unknown-name rule)
+      const active = [...graph].filter(([, node]) => activeForEvent(node.activity, event));
+      const activeKeys = active.map(([k]) => k);
+      const eventWait = history.expectedRunnerWaitForEvent(repo, event);
+      const namesByNode = new Map<string, string[]>();
+      for (const name of names) {
+        const nodeKey = matchingPrefix(name, activeKeys);
+        if (nodeKey != null) namesByNode.set(nodeKey, [...(namesByNode.get(nodeKey) ?? []), name]);
+        // lint joins against EVERY node (event activity doesn't gate a timeout)
+        const lintKey = matchingPrefix(name, allKeys);
+        if (lintKey != null) {
+          const p99 = history.durationP99(repo, name, event);
+          if (p99 != null && p99.n >= LINT_MIN_RUNS) {
+            const prior = lintInputs.get(lintKey);
+            if (!prior || p99.p99Secs > prior.p99Secs) {
+              lintInputs.set(lintKey, { job: lintKey,
+                timeoutMinutes: graph.get(lintKey)!.timeoutMinutes, p99Secs: p99.p99Secs });
+            }
+          }
+        }
+      }
+      // node weight = the slowest matched check (a reusable-workflow node's
+      // inner checks run in parallel — the longest one carries the node)
+      let sawDuration = false;
+      const inputs: CriticalPathNodeInput[] = active.map(([key, node]) => {
+        let durationP50: number | null = null;
+        let waitP50: number | null = null;
+        for (const name of namesByNode.get(key) ?? []) {
+          const p50 = history.expected(repo, name, event)?.p50;
+          if (p50 == null) continue;
+          const wait = history.expectedRunnerWait(repo, name, event) ?? eventWait;
+          if (durationP50 == null || p50 + (wait ?? 0) > durationP50 + (waitP50 ?? 0)) {
+            durationP50 = p50;
+            waitP50 = wait;
+          }
+        }
+        if (durationP50 != null) sawDuration = true;
+        return { name: key, needs: node.needs, durationP50, waitP50 };
+      });
+      // a graph with zero observed durations renders nothing useful — omit
+      if (!sawDuration) continue;
+      const result = computeCriticalPath(inputs);
+      if (result == null) continue; // empty/cyclic (corrupt persisted graph)
+      criticalPath.push({ repo, event, endToEndP50Secs: result.endToEndP50Secs,
+        path: result.path, offPath: result.offPath.slice(0, OFF_PATH_CAP) });
+    }
+    const findings = lintTimeouts([...lintInputs.values()]);
+    if (findings.length > 0) lint.push({ repo, findings });
+  }
+
   return { window, bucket, runnerWaits, queue, slowestJobs, velocity, trends, calibration,
-    flakiness, trainKillers };
+    flakiness, trainKillers, criticalPath, lint };
 }
