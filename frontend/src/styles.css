@@ -134,6 +134,13 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
 .check-sections { border-top: 1px solid var(--border); }
 /* per-PR waterfall (issue #50): 'where did the time go' expanded panel */
 .waterfall { padding: 4px 14px 8px; }
+/* workflow-change impact (issue #49): amber row badge + expanded summary card */
+.ci-change-badge { color: var(--amber); border: 1px solid currentColor;
+  border-radius: 10px; padding: 0 7px; font-size: 11px; font-weight: 600;
+  white-space: nowrap; flex: none; }
+.workflow-impact-lines { list-style: none; margin: 2px 0 6px; padding: 2px 14px;
+  font-size: 12px; color: var(--text); }
+.workflow-impact-lines li { padding: 1px 0; font-variant-numeric: tabular-nums; }
 .loading { color: var(--muted); }
 
 /* --- Status overview strip (V2) --- */

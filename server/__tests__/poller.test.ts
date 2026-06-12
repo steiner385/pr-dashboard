@@ -5100,3 +5100,136 @@ describe('PrView.timeline (issue #50)', () => {
     expect(pr.timeline).toBeNull();
   });
 });
+
+// ---- workflow-change impact annotation (issue #49) ----
+describe('workflow-change impact (issue #49)', () => {
+  const BASE_YML = `
+name: CI
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+  ci:
+    needs: [build]
+    runs-on: ubuntu-latest
+`;
+  const HEAD_YML = `
+name: CI
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+  android-smoke:
+    runs-on: ubuntu-latest
+  ci:
+    needs: [build, android-smoke]
+    runs-on: ubuntu-latest
+`;
+  const detailWithFiles = (paths: string[]) => ({
+    r0: { nameWithOwner: 'acme/widgets', pr8962: {
+      number: 8962, title: 'ci: workflow change', url: 'u8962', isDraft: false,
+      mergeStateStatus: 'BLOCKED', mergedAt: null, headRefOid: 'head8962',
+      autoMergeRequest: null, mergeCommit: null, mergeQueueEntry: null,
+      files: { nodes: paths.map((path) => ({ path })) },
+      commits: { nodes: [{ commit: { statusCheckRollup: { state: 'PENDING',
+        contexts: { pageInfo: { hasNextPage: false }, nodes: [CHECK_DONE] } } } }] },
+    } },
+  });
+
+  function blobClient(detail: Record<string, unknown>, headYml: string | null) {
+    return {
+      remaining: 4000, resetAt: null,
+      graphql: vi.fn(async (q: string) => {
+        if (q.includes('open0: search')) return SWEEP_RESPONSE;
+        if (q.includes('head8962:')) return { repository: {
+          defaultBranchRef: { name: 'main' },
+          object: headYml != null ? { text: headYml } : null } };
+        if (q.includes('pr8962: pullRequest')) return detail;
+        throw new Error(`unexpected query: ${q.slice(0, 80)}`);
+      }),
+    };
+  }
+  const blobCalls = (c: { graphql: { mock: { calls: unknown[][] } } }) =>
+    c.graphql.mock.calls.filter(([q]) => (q as string).includes('head8962:')).length;
+
+  it('flagged PR + derived graph → diff computed at detail time and threaded onto the view', async () => {
+    const c = blobClient(detailWithFiles(['.github/workflows/ci.yml']), HEAD_YML);
+    const p = new Poller({ router: asRouter(c), history, deploy: noDeploy(),
+      config: CONFIG, now: () => NOW });
+    p.adoptDerivedGraph('acme/widgets', deriveCiGraph(BASE_YML)!);
+    await p.sweepOnce();
+    await p.detailOnce();
+    const pr = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!.prs
+      .find((x) => x.number === 8962)!;
+    expect(pr.touchesWorkflows).toBe(true);
+    expect(pr.workflowImpact!.summary).toEqual([
+      '+ android-smoke joins the merge_group gate',
+      'required-check set grows by 1: 2 → 3 checks',
+    ]);
+  });
+
+  it('diff is cached per head sha — a second detail cycle refetches no blob', async () => {
+    const c = blobClient(detailWithFiles(['.github/workflows/ci.yml']), HEAD_YML);
+    const p = new Poller({ router: asRouter(c), history, deploy: noDeploy(),
+      config: CONFIG, now: () => NOW });
+    p.adoptDerivedGraph('acme/widgets', deriveCiGraph(BASE_YML)!);
+    await p.sweepOnce();
+    await p.detailOnce();
+    expect(blobCalls(c)).toBe(1);
+    await p.detailOnce();
+    expect(blobCalls(c)).toBe(1);
+  });
+
+  it('identical head workflow → workflowImpact null (no-change), flag still true, null cached', async () => {
+    const c = blobClient(detailWithFiles(['.github/workflows/ci.yml']), BASE_YML);
+    const p = new Poller({ router: asRouter(c), history, deploy: noDeploy(),
+      config: CONFIG, now: () => NOW });
+    p.adoptDerivedGraph('acme/widgets', deriveCiGraph(BASE_YML)!);
+    await p.sweepOnce();
+    await p.detailOnce();
+    await p.detailOnce();
+    const pr = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!.prs
+      .find((x) => x.number === 8962)!;
+    expect(pr.touchesWorkflows).toBe(true);
+    expect(pr.workflowImpact).toBeNull();
+    expect(blobCalls(c)).toBe(1); // the null verdict is cached too
+  });
+
+  it('non-workflow file list → flag false, no blob fetch, impact null', async () => {
+    const c = blobClient(detailWithFiles(['src/index.ts', 'README.md']), HEAD_YML);
+    const p = new Poller({ router: asRouter(c), history, deploy: noDeploy(),
+      config: CONFIG, now: () => NOW });
+    p.adoptDerivedGraph('acme/widgets', deriveCiGraph(BASE_YML)!);
+    await p.sweepOnce();
+    await p.detailOnce();
+    const pr = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!.prs
+      .find((x) => x.number === 8962)!;
+    expect(pr.touchesWorkflows).toBe(false);
+    expect(pr.workflowImpact).toBeNull();
+    expect(blobCalls(c)).toBe(0);
+  });
+
+  it('no derived graph for the repo → badge flag true, no blob fetch, impact null', async () => {
+    const c = blobClient(detailWithFiles(['.github/workflows/ci.yml']), HEAD_YML);
+    const p = new Poller({ router: asRouter(c), history, deploy: noDeploy(),
+      config: CONFIG, now: () => NOW });
+    await p.sweepOnce();
+    await p.detailOnce();
+    const pr = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!.prs
+      .find((x) => x.number === 8962)!;
+    expect(pr.touchesWorkflows).toBe(true);
+    expect(pr.workflowImpact).toBeNull();
+    expect(blobCalls(c)).toBe(0);
+  });
+
+  it('merged PR views never carry the flag or an impact', () => {
+    history.upsertMergedPr({ repo: 'acme/widgets', number: 9003, title: 't', url: 'u',
+      mergedAt: '2026-06-10T10:00:00Z', mergeCommitSha: null });
+    const p = new Poller({ router: asRouter(fakeClient()), history, deploy: noDeploy(),
+      config: CONFIG, now: () => NOW });
+    const pr = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!.prs
+      .find((x) => x.number === 9003)!;
+    expect(pr.touchesWorkflows).toBe(false);
+    expect(pr.workflowImpact).toBeNull();
+  });
+});

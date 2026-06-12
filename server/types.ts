@@ -40,6 +40,10 @@ export interface PrSnapshot {
   mergedAt: string | null;
   mergeCommitSha: string | null;
   autoMergeArmed: boolean;
+  /** Workflow-change flag (issue #49): true when the PR's file list (detail
+   *  query, first 50 paths) contains any path under `.github/workflows/`.
+   *  False on placeholder snapshots until the detail fetch fills them in. */
+  touchesWorkflows: boolean;
   queue: { position: number; state: string; enqueuedAt: string | null; groupHeadOid: string | null } | null;
   checks: CheckRun[];
 }

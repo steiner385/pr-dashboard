@@ -152,3 +152,28 @@ describe('mapRollupContexts runCreatedAt (issue #39 — dispatch-stall telemetry
     expect(out[0]!.runCreatedAt).toBe('2026-06-10T11:50:00Z');
   });
 });
+
+describe('mapPrNode touchesWorkflows (issue #49)', () => {
+  const BASE = {
+    number: 1, title: 't', url: 'u', isDraft: false, mergeStateStatus: 'CLEAN',
+    mergedAt: null, headRefOid: 'h', autoMergeRequest: null, mergeCommit: null,
+    mergeQueueEntry: null, commits: { nodes: [] },
+  };
+
+  it('true when any changed path is under .github/workflows/', () => {
+    expect(mapPrNode('a/b', { ...BASE, files: { nodes: [
+      { path: 'src/index.ts' }, { path: '.github/workflows/ci.yml' },
+    ] } })!.touchesWorkflows).toBe(true);
+  });
+
+  it('false for non-workflow paths (including nested look-alikes)', () => {
+    expect(mapPrNode('a/b', { ...BASE, files: { nodes: [
+      { path: 'src/index.ts' }, { path: 'docs/.github/workflows/x.yml' },
+      { path: '.github/dependabot.yml' },
+    ] } })!.touchesWorkflows).toBe(false);
+  });
+
+  it('false when the node omits files entirely (old payloads)', () => {
+    expect(mapPrNode('a/b', BASE)!.touchesWorkflows).toBe(false);
+  });
+});

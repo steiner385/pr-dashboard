@@ -361,3 +361,50 @@ describe('PrRow waterfall (issue #50)', () => {
     expect(container.querySelector('.waterfall')).not.toBeNull();
   });
 });
+
+// ---- workflow-change impact annotation (issue #49) ----
+describe('PrRow CI-change badge + impact card (issue #49)', () => {
+  const IMPACT = { summary: [
+    '+ android-smoke joins the merge_group gate',
+    'required-check set grows by 1: 2 → 3 checks',
+  ] };
+
+  it('renders the ⚙ CI change badge when the PR touches workflows', () => {
+    render(<PrRow pr={pr({ touchesWorkflows: true, workflowImpact: IMPACT })} hasDeploy />);
+    const badge = screen.getByText('⚙ CI change');
+    expect(badge).toBeInTheDocument();
+    // summary lines ride the title tooltip
+    expect(badge).toHaveAttribute('title', IMPACT.summary.join('\n'));
+  });
+
+  it('badge falls back to a generic tooltip without a computed diff', () => {
+    render(<PrRow pr={pr({ touchesWorkflows: true, workflowImpact: null })} hasDeploy />);
+    expect(screen.getByText('⚙ CI change')).toHaveAttribute('title',
+      'touches .github/workflows — CI behavior may change');
+  });
+
+  it('no badge when the PR does not touch workflows (or on pre-upgrade payloads)', () => {
+    render(<PrRow pr={pr({})} hasDeploy />);
+    expect(screen.queryByText('⚙ CI change')).toBeNull();
+  });
+
+  it('expanding shows the impact card above the gantt with one line per summary entry', () => {
+    const { container } = render(<PrRow pr={pr({ touchesWorkflows: true, workflowImpact: IMPACT })} hasDeploy />);
+    expect(screen.queryByTestId('workflow-impact')).toBeNull(); // collapsed
+    fireEvent.click(screen.getByText('#8962'));
+    const card = screen.getByTestId('workflow-impact');
+    expect(card).toBeInTheDocument();
+    expect(screen.getByText('CI workflow change')).toBeInTheDocument();
+    expect(card.querySelectorAll('li')).toHaveLength(2);
+    expect(screen.getByText('+ android-smoke joins the merge_group gate')).toBeInTheDocument();
+    // card precedes the check gantt in document order
+    const gantt = container.querySelector('.checks.gantt')!;
+    expect(card.compareDocumentPosition(gantt) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('no impact card when the diff is null or empty — badge only', () => {
+    render(<PrRow pr={pr({ touchesWorkflows: true, workflowImpact: null })} hasDeploy />);
+    fireEvent.click(screen.getByText('#8962'));
+    expect(screen.queryByTestId('workflow-impact')).toBeNull();
+  });
+});

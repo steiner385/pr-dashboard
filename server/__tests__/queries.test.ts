@@ -146,3 +146,14 @@ describe('createdAt selection (PR lifespan metric)', () => {
     expect(q).toContain('createdAt');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Workflow-change impact (issue #49): the detail query carries the file list
+// ---------------------------------------------------------------------------
+
+describe('PR file list selection (issue #49)', () => {
+  it('detail query selects files(first: 50) paths — the touchesWorkflows source', () => {
+    const q = buildDetailQuery([{ owner: 'acme', name: 'widgets', number: 8962 }]);
+    expect(q).toContain('files(first: 50) { nodes { path } }');
+  });
+});

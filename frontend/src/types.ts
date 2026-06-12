@@ -64,6 +64,13 @@ export interface PrView {
   /** Per-PR waterfall spine (issue #50) — merged PRs only; null for open PRs.
    *  Optional to tolerate pre-upgrade payloads. */
   timeline?: PrTimeline | null;
+  /** Workflow-change flag (issue #49): the PR touches `.github/workflows/**` —
+   *  render the '⚙ CI change' badge. Optional for pre-upgrade payloads. */
+  touchesWorkflows?: boolean;
+  /** Mirror of server workflow-impact.ts WorkflowImpact (issue #49): derived
+   *  CI-graph diff summary lines vs main. Null/absent = no diff available
+   *  (no graph, not computed yet) or no change. */
+  workflowImpact?: { summary: string[] } | null;
   /** Queued PRs only: the merge-group build's checks (drives the queue stage ETA);
    *  null when not queued or the group rollup hasn't been fetched yet. */
   groupChecks: CheckView[] | null;

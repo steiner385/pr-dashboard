@@ -88,6 +88,15 @@ export function PrRow({ pr, hasDeploy, queueCulprit = null, expandable = true }:
           <span className="pr-num">#{pr.number}</span>
           <a className="pr-title" href={pr.url} target="_blank" rel="noreferrer"
             onClick={(e) => e.stopPropagation()}>{pr.title}</a>
+          {pr.touchesWorkflows && (
+            /* workflow-change badge (issue #49): the PR edits .github/workflows/** —
+               summary lines (when a derived-graph diff exists) ride the tooltip */
+            <span className="ci-change-badge"
+              title={pr.workflowImpact?.summary.join('\n')
+                ?? 'touches .github/workflows — CI behavior may change'}>
+              ⚙ CI change
+            </span>
+          )}
           {sim ? (
             <span className="eta eta-sim"
               title={`merges in ~${formatDur(sim.p50Secs)} (p50) / ~${formatDur(sim.p90Secs)} (p90${sim.assumesEjects ? ', assumes ≤1 eject' : ''}); ${sim.trainsAhead} train${sim.trainsAhead === 1 ? '' : 's'} ahead`}>
@@ -100,6 +109,16 @@ export function PrRow({ pr, hasDeploy, queueCulprit = null, expandable = true }:
         <MetroTrack stage={s} hasDeploy={hasDeploy} />
         {sub && <div className="sub">{sub}</div>}
       </div>
+      {/* workflow-change impact card (issue #49): derived-graph diff summary,
+          above the gantt in the expanded panel. */}
+      {open && pr.workflowImpact && pr.workflowImpact.summary.length > 0 && (
+        <div className="check-sections workflow-impact" data-testid="workflow-impact">
+          <div className="panel-label">CI workflow change</div>
+          <ul className="workflow-impact-lines">
+            {pr.workflowImpact.summary.map((line, i) => <li key={i}>{line}</li>)}
+          </ul>
+        </div>
+      )}
       {/* per-PR waterfall (issue #50): merged PRs carry the spine timeline —
           rendered above any check panels; omitted when no segment has both
           endpoint timestamps (Waterfall itself returns null then, but the

@@ -24,6 +24,7 @@ import { measureDurationStep, flagsRegression, holdsRegression, regressionDetail
   REGRESSION_MIN_SAMPLES } from './estimator/regression';
 import { evaluateStarvation, nextStarving, starvationDetail } from './estimator/starvation';
 import { countMergeTrains } from './trains';
+import { diffCiGraphs, type WorkflowImpact } from './workflow-impact';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -91,6 +92,14 @@ export interface PrView {
   /** Per-PR "where did the time go" waterfall (issue #50) — merged PRs within
    *  the retention window only; null for open PRs. */
   timeline: PrTimeline | null;
+  /** Workflow-change flag (issue #49): the PR's file list touches
+   *  `.github/workflows/**` — the row gets the '⚙ CI change' badge. */
+  touchesWorkflows: boolean;
+  /** Derived-graph diff vs the current main graph (issue #49) for flagged PRs:
+   *  human summary lines for the expanded panel. Null when the PR doesn't
+   *  touch workflows, the repo has no derived graph, the head blob hasn't
+   *  been fetched/derived yet, or the graphs are identical. */
+  workflowImpact: WorkflowImpact | null;
   /** Queued PRs only: the merge-group build's checks (the run driving the queue
    *  stage ETA), so the UI can label it separately from head-commit PR checks.
    *  Null when not queued or the group rollup hasn't been fetched yet. */
@@ -444,6 +453,7 @@ export class Poller extends EventEmitter {
   private flakeRateCache = new Map<string, { at: number; rates: Map<string, number> }>(); // repo → name\0event → ratePct (#37)
   private durationRegressions = new Map<string, Map<string, DurationRegressionView>>(); // repo → name\0event → active step (#41)
   private poolStarvation = new Map<string, Map<string, PoolHealthView>>(); // repo → pool → live health (#45)
+  private workflowImpactCache = new Map<string, WorkflowImpact | null>(); // repo\0headSha → derived-graph diff (#49)
   private lastHourlyScanAt = 0;                           // epoch ms of the last hourly scan pass (#41/#45)
   private warnedAncestryFallback = new Set<string>();    // repos whose api→clone ancestry fallback was logged (log once)
   private ancestryViaApiLogged = new Set<string>();      // repos whose first compare-API ancestry answer was logged (log once)
@@ -604,7 +614,8 @@ export class Poller extends EventEmitter {
         this.prs.set(key, { repo, number: node.number, title: node.title, url: node.url,
           headSha: '', isDraft: !!node.isDraft, mergeStateStatus: null,
           createdAt: node.createdAt ?? null, mergedAt: null,
-          mergeCommitSha: null, autoMergeArmed: false, queue: null, checks: [] });
+          mergeCommitSha: null, autoMergeArmed: false, touchesWorkflows: false,
+          queue: null, checks: [] });
       }
     }
   }
@@ -687,6 +698,13 @@ export class Poller extends EventEmitter {
     }
     for (const key of this.firstGreenAt.keys()) {
       if (!openKeys.has(key)) this.firstGreenAt.delete(key);
+    }
+    // workflow-impact diffs (issue #49) are keyed repo\0headSha — keep only
+    // entries whose sha is a live open-PR head (new pushes age old shas out)
+    const liveShaKeys = new Set([...this.prs.values()]
+      .filter((p) => p.headSha).map((p) => `${p.repo}\u0000${p.headSha}`));
+    for (const key of this.workflowImpactCache.keys()) {
+      if (!liveShaKeys.has(key)) this.workflowImpactCache.delete(key);
     }
     // notifier debounce state lives per PR key — same lifecycle as `stages`
     this.deps.notifier?.prune(new Set([...openKeys, ...tracked]));
@@ -811,8 +829,52 @@ export class Poller extends EventEmitter {
           (p, e) => this.needActiveFor(repo, p, e), this.graphKeysFor(repo),
           this.rollupWorkflowFor(repo), snap.headSha || null,
           (n) => this.timeoutMinutesFor(repo, n), (n) => this.poolsFor(repo, n));
+        // workflow-change impact (issue #49): flagged open PRs only, and only
+        // when the repo has a main-derived graph to diff against; cached per
+        // head sha so re-polls cost nothing.
+        if (!snap.mergedAt && snap.touchesWorkflows && snap.headSha) {
+          await this.computeWorkflowImpact(client, repo, snap.headSha);
+        }
       }
     }
+  }
+
+  /**
+   * Derived-graph diff for a workflow-touching PR head (issue #49): fetch the
+   * head blob of the repo's rollup workflow, derive it, and diff against the
+   * current main-derived graph. Runs at detail-fetch time only for flagged
+   * PRs; the result (including null = no change) is cached per (repo, head
+   * sha). A transport failure caches nothing — the next detail cycle retries.
+   */
+  private async computeWorkflowImpact(client: GithubClient, repo: string, headSha: string): Promise<void> {
+    const cacheKey = `${repo}\u0000${headSha}`;
+    if (this.workflowImpactCache.has(cacheKey)) return;
+    const baseNodes = this.derivedGraph.get(repo);
+    const basePrefixes = this.derivedPrefixes.get(repo);
+    if (!baseNodes || !basePrefixes) return; // no derived graph — nothing to diff against
+    const settings = this.settingsFor(repo);
+    const [owner, name] = repo.split('/');
+    let text: unknown;
+    try {
+      const data = await client.graphql<{ repository?: { object?: { text?: unknown } | null } | null }>(
+        buildBlobQuery(owner ?? '', name ?? '', `${headSha}:${settings.workflowPath}`));
+      if (data?.repository == null) {
+        this.noteInaccessibleRepo(repo);
+        return; // partial-errors shape — treat as transient, retry next cycle
+      }
+      text = data.repository.object?.text;
+    } catch (e) {
+      if (e instanceof RateLimitError) this.notePause(e.retryAfterSeconds);
+      console.warn(`[workflow-impact] ${repo}@${headSha.slice(0, 9)}: head ${settings.workflowPath} fetch failed — will retry: ${describeError(e)}`);
+      return;
+    }
+    // From here every outcome is deterministic for this sha — cache it.
+    // Missing file at head (renamed/deleted) or unparseable YAML: nothing to
+    // diff, the badge alone signals "CI change, inspect manually".
+    const headGraph = typeof text === 'string' ? deriveCiGraph(text, settings.rollupJobId) : null;
+    const base: CiGraph = { prefixes: basePrefixes, nodes: baseNodes,
+      workflowName: this.rollupWorkflowFor(repo) };
+    this.workflowImpactCache.set(cacheKey, headGraph ? diffCiGraphs(base, headGraph) : null);
   }
 
   async queueOnce(): Promise<void> {
@@ -843,7 +905,8 @@ export class Poller extends EventEmitter {
           url: `https://github.com/${repo}/pull/${e.prNumber}`, headSha: '',
           isDraft: false, mergeStateStatus: null, createdAt: null,
           mergedAt: null, mergeCommitSha: null,
-          autoMergeArmed: false, queue: { position: e.position, state: e.state,
+          autoMergeArmed: false, touchesWorkflows: false,
+          queue: { position: e.position, state: e.state,
             enqueuedAt: e.enqueuedAt, groupHeadOid: e.headCommitOid }, checks: [] });
       }
       const oids = entries.map((e) => e.headCommitOid).filter((o): o is string => !!o)
@@ -1827,6 +1890,10 @@ export class Poller extends EventEmitter {
       queueAheadCount,
       checks: this.checkViews(pr, now, prefixes),
       timeline: null,
+      touchesWorkflows: pr.touchesWorkflows,
+      workflowImpact: pr.touchesWorkflows && pr.headSha
+        ? this.workflowImpactCache.get(`${pr.repo}\u0000${pr.headSha}`) ?? null
+        : null,
       groupChecks, mergeEtaSim };
   }
 
@@ -1855,7 +1922,8 @@ export class Poller extends EventEmitter {
     const rawStage = classify({
       pr: { repo: rec.repo, number: rec.number, title: rec.title, url: rec.url, headSha: '',
         isDraft: false, mergeStateStatus: null, createdAt: rec.createdAt, mergedAt: rec.mergedAt,
-        mergeCommitSha: rec.mergeCommitSha, autoMergeArmed: false, queue: null, checks: [] },
+        mergeCommitSha: rec.mergeCommitSha, autoMergeArmed: false, touchesWorkflows: false,
+        queue: null, checks: [] },
       prev: null, ciProgress: null, queueProgress: null, deploy,
       retentionDays: config.retentionDays, now,
     });
@@ -1877,6 +1945,7 @@ export class Poller extends EventEmitter {
       timeline: { createdAt: rec.createdAt, firstGreenAt: rec.firstGreenAt,
         enqueuedAt: rec.enqueuedAt, mergedAt: rec.mergedAt,
         qaLiveAt: rec.qaLiveAt, prodLiveAt: rec.prodLiveAt },
+      touchesWorkflows: false, workflowImpact: null,
       groupChecks: null, mergeEtaSim: null };
   }
 

@@ -80,9 +80,14 @@ export function buildBlobQuery(owner: string, name: string, expression: string):
 }
 
 function prDetailSelection(n: number): string {
+  // files(first: 50): only the paths matter — the workflow-change flag
+  // (issue #49) needs any path under .github/workflows/. Cost-aware cap at 50;
+  // truncation is acceptable (a >50-file PR that buries its workflow change
+  // past the cap just misses the advisory badge).
   return `number title url isDraft mergeStateStatus createdAt mergedAt headRefOid
     autoMergeRequest { mergeMethod }
     mergeCommit { oid }
+    files(first: 50) { nodes { path } }
     mergeQueueEntry { position state enqueuedAt headCommit { oid } }
     commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) {
       pageInfo { hasNextPage }

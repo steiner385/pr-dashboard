@@ -48,6 +48,9 @@ export function mapPrNode(repo: string, node: any): PrSnapshot | null {
     mergedAt: node.mergedAt ?? null,
     mergeCommitSha: node.mergeCommit?.oid ?? null,
     autoMergeArmed: !!node.autoMergeRequest,
+    // workflow-change flag (issue #49): any changed path under .github/workflows/
+    touchesWorkflows: (node.files?.nodes ?? []).some((f: any) =>
+      typeof f?.path === 'string' && f.path.startsWith('.github/workflows/')),
     queue: mq ? {
       position: mq.position, state: mq.state,
       enqueuedAt: mq.enqueuedAt ?? null, groupHeadOid: mq.headCommit?.oid ?? null,
