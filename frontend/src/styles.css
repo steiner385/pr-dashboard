@@ -198,13 +198,16 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
   font-variant-numeric: tabular-nums; }
 
 /* --- Settings slide-over (Z3) --- */
-.settings-gear {
-  margin-left: auto; background: none; border: 1px solid var(--border);
+.settings-gear, .legend-btn {
+  background: none; border: 1px solid var(--border);
   border-radius: 6px; cursor: pointer; font-size: 16px; line-height: 1;
   padding: 6px 9px; color: var(--text);
 }
-.settings-gear:hover { background: var(--bg); border-color: var(--accent); }
-.settings-gear:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.legend-btn { margin-left: auto; font-weight: 700; min-width: 30px; }
+.settings-gear:hover, .legend-btn:hover { background: var(--bg); border-color: var(--accent); }
+.settings-gear:focus-visible, .legend-btn:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
 
 .settings-overlay {
   position: fixed; inset: 0; background: rgba(0, 0, 0, 0.32);
@@ -399,3 +402,32 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
   white-space: nowrap; }
 .metric-trend-cell { width: 124px; }
 .var-high { color: var(--amber); font-weight: 700; }
+
+/* --- Legend slide-over (reuses the settings overlay/panel shell) --- */
+/* the legend's example "active" node must not pulse — the slide-in is the
+   only animation the panel adds (and it is reduced-motion gated already) */
+.legend-panel .node.active .c { animation: none; }
+.legend-row { display: flex; align-items: center; gap: 12px; margin: 8px 0; }
+.legend-ex { flex-shrink: 0; display: flex; align-items: center; min-width: 30px;
+  justify-content: center; }
+.legend-ex .node { width: auto; }
+.legend-track-segs { display: flex; align-items: center; gap: 0; }
+.legend-track-segs .seg { flex: none; width: 26px; margin-top: 0; }
+.legend-text { font-size: 12px; color: var(--muted); }
+.legend-text b { color: var(--text); font-weight: 600; }
+.legend-text code { font-size: 11px; color: var(--text); }
+.legend-dl { margin: 0; }
+.legend-dl-row { display: grid; grid-template-columns: minmax(110px, auto) 1fr;
+  gap: 2px 12px; margin: 6px 0; font-size: 12px; }
+.legend-dl dt { color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; display: flex; align-items: center; gap: 5px; }
+.legend-dl dd { margin: 0; color: var(--muted); }
+.legend-gantt { border-top: none; padding: 0; }
+.legend-gantt .g-row { grid-template-columns: 90px 1fr 120px; }
+.legend-caption { font-size: 11px; color: var(--muted); margin: 6px 0 0; line-height: 1.5; }
+.legend-caption b { color: var(--text); }
+.legend-caption code { font-size: 10px; color: var(--text); }
+.legend-train { margin-bottom: 4px; flex-wrap: wrap; overflow-x: visible; }
+.legend-train .car { min-width: 88px; }
+.legend-swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block;
+  flex-shrink: 0; }

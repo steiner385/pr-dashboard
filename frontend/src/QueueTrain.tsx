@@ -36,7 +36,10 @@ function BuildingCar({ g }: { g: QueueGroupView }) {
   const pct = g.percent;
   const eta = g.etaSeconds != null ? formatDur(g.etaSeconds) : null;
   const progressText = pct != null ? (eta ? `${pct}% · ~${eta}` : `${pct}%`) : null;
-  const tooltip = g.prNumbers.map(prLabel).join(' ');
+  const nums = g.prNumbers.map(prLabel).join(' ');
+  const tooltip = g.failed
+    ? `merge group build failed — the queue re-batches without the culprit: ${nums}`
+    : `merge group building — speculative merge of these PRs is running the full CI suite: ${nums}`;
   return (
     <div
       className={`car building${g.failed ? ' failed' : ''}`}
@@ -66,12 +69,14 @@ function WaitingCars({ waiting, batchSize }: { waiting: { prNumber: number; posi
 
   return (
     <>
-      <div className="car queued" title={nextBatch.map((w) => prLabel(w.prNumber)).join(' ')}>
+      <div className="car queued"
+        title={`waiting — next batch to start building when a slot frees: ${nextBatch.map((w) => prLabel(w.prNumber)).join(' ')}`}>
         <div className="car-header">next batch</div>
         <PrLinks numbers={nextBatch.map((w) => w.prNumber)} className="car-numbers" />
       </div>
       {rest.length > 0 && (
-        <div className="car queued" title={rest.map((w) => prLabel(w.prNumber)).join(' ')}>
+        <div className="car queued"
+          title={`waiting further back in the queue: ${rest.map((w) => prLabel(w.prNumber)).join(' ')}`}>
           <div className="car-header">then</div>
           <span className="car-numbers car-count">{rest.length} more</span>
         </div>
@@ -86,7 +91,8 @@ function WaitingCars({ waiting, batchSize }: { waiting: { prNumber: number; posi
 function UnmergeableCar({ numbers }: { numbers: number[] }) {
   if (numbers.length === 0) return null;
   return (
-    <div className="car unmergeable" title={numbers.map(prLabel).join(' ')}>
+    <div className="car unmergeable"
+      title={`conflicts with the base branch — needs a rebase, facing ejection from the queue: ${numbers.map(prLabel).join(' ')}`}>
       <div className="car-header">✗ unmergeable</div>
       <PrLinks numbers={numbers} className="car-numbers" />
     </div>
@@ -99,9 +105,10 @@ function UnmergeableCar({ numbers }: { numbers: number[] }) {
  *  advice; they revalidate once the culprit is ejected. */
 function QueueBlockedCar({ numbers, culprit }: { numbers: number[]; culprit: number | null }) {
   if (numbers.length === 0) return null;
-  const blockedOn = culprit != null ? ` — blocked behind ${prLabel(culprit)}` : '';
+  const blockedOn = culprit != null ? ` (${prLabel(culprit)})` : '';
   return (
-    <div className="car queue-blocked" title={`${numbers.map(prLabel).join(' ')}${blockedOn}`}>
+    <div className="car queue-blocked"
+      title={`blocked behind a conflicting entry ahead${blockedOn} — not conflicting themselves; they revalidate once it is ejected: ${numbers.map(prLabel).join(' ')}`}>
       <div className="car-header">⊘ blocked behind conflict</div>
       <PrLinks numbers={numbers} className="car-numbers" />
     </div>

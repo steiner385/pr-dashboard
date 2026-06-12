@@ -191,4 +191,28 @@ describe('App tab bar', () => {
     // metrics stays mounted (no refetch churn) but hidden
     expect(document.getElementById('tabpanel-metrics')).toHaveAttribute('hidden');
   });
+
+  // ---- legend (? button + slide-over) ----
+
+  describe('legend', () => {
+    it('header has a ? button labelled Legend that opens the legend dialog', () => {
+      render(<App />);
+      const btn = screen.getByRole('button', { name: 'Legend' });
+      expect(btn).toHaveAttribute('aria-haspopup', 'dialog');
+      expect(btn).toHaveAttribute('aria-expanded', 'false');
+      fireEvent.click(btn);
+      expect(btn).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByRole('heading', { name: 'Legend' })).toBeInTheDocument();
+    });
+
+    it('Esc closes the legend and focus returns to the ? button', () => {
+      render(<App />);
+      const btn = screen.getByRole('button', { name: 'Legend' });
+      fireEvent.click(btn);
+      expect(screen.getByRole('heading', { name: 'Legend' })).toBeInTheDocument();
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(screen.queryByRole('heading', { name: 'Legend' })).not.toBeInTheDocument();
+      expect(document.activeElement).toBe(btn);
+    });
+  });
 });

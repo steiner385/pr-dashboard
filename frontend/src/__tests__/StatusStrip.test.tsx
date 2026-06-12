@@ -144,4 +144,21 @@ describe('StatusStrip', () => {
     fireEvent.click(runningBtn);
     expect(onFilter).toHaveBeenCalledWith(null);
   });
+
+  // ---- in-place tooltips (legend feature) ----
+
+  describe('tile title tooltips', () => {
+    it('every tile carries a one-line bucket definition', () => {
+      render(<StatusStrip prs={[pr('ci'), pr('queue'), pr('qa-deploy'),
+        pr('parked', 'ci-failed'), pr('ready')]} activeFilter={null} onFilter={() => {}} />);
+      const titles = screen.getAllByRole('button').map((b) => b.getAttribute('title'));
+      expect(titles).toEqual([
+        'CI running on the head commit',
+        'In the merge queue — building or waiting for a slot',
+        'Merged — deploying to QA or awaiting production deploy',
+        'CI failed or the merge-group build failed',
+        'Ready, draft, conflicting, or recently merged — nothing running',
+      ]);
+    });
+  });
 });

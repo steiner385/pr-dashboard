@@ -56,6 +56,28 @@ export function trackState(stage: StageResult, hasDeploy: boolean): TrackNode[] 
 
 const GLYPH: Partial<Record<NodeStatus, string>> = { done: '✓', fail: '✗', parked: '!' };
 
+/** Hover tooltip per node: states are generic except fail/parked, which carry
+ *  the concrete reason derived from the stage/substate that produced them. */
+export function nodeTitle(node: TrackNode, stage: StageResult): string {
+  switch (node.status) {
+    case 'done': return `${node.label} — complete`;
+    case 'active': return `${node.label} — in progress`;
+    case 'pending': return `${node.label} — not reached yet`;
+    case 'fail':
+      // fail renders at the CI node (parked/ci-failed) or the Queue node (queue/group-failed)
+      return node.label === 'Queue' ? 'merge group build failed' : 'CI failed on the head commit';
+    case 'parked':
+      if (stage.stage === 'queue') {
+        return stage.substate === 'unmergeable'
+          ? 'unmergeable — conflicts with the base; needs a rebase before it can merge'
+          : 'queue blocked — stuck behind a conflicting entry ahead; revalidates once it is ejected';
+      }
+      if (stage.substate === 'draft') return 'draft — parked until marked ready for review';
+      if (stage.substate === 'conflicting') return 'conflicting with the base branch — needs a rebase';
+      return stage.substate ? `parked — ${stage.substate}` : 'parked';
+  }
+}
+
 function segment(prev: TrackNode, percent: number | null, key: string) {
   if (prev.status === 'done') return <i key={key} className="seg done" />;
   if (prev.status === 'active' && percent != null && percent > 0) {
@@ -79,7 +101,7 @@ export function MetroTrack({ stage, hasDeploy }: { stage: StageResult; hasDeploy
       {nodes.map((n, i) => (
         <Fragment key={`${n.label}-${i}`}>
           {i > 0 && segment(nodes[i - 1]!, stage.percent, `seg-${i}`)}
-          <span className={`node ${n.status}`}>
+          <span className={`node ${n.status}`} title={nodeTitle(n, stage)}>
             <span className="c" aria-hidden="true">{GLYPH[n.status] ?? i + 1}</span>
             <span className="node-label">{n.label}</span>
             {n.status === 'active' && nodeEta && <span className="node-eta">{nodeEta}</span>}

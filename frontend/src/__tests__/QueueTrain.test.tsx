@@ -345,4 +345,55 @@ describe('QueueTrain', () => {
     expect(container.querySelector('.car.unmergeable')).not.toBeNull();
     expect(container.querySelector('.car.queue-blocked')).toBeNull();
   });
+
+  // ---- in-place tooltips (legend feature) ----
+
+  describe('car title tooltips explain the car type', () => {
+    it('building car explains the speculative merge-group build', () => {
+      const queue: RepoQueueView = {
+        groups: [group({ prNumbers: [9338] })], waiting: [],
+        unmergeable: [], queueBlocked: [], unmergeableCulprit: null, batchSize: 6,
+      };
+      const { container } = render(<QueueTrain queue={queue} />);
+      const title = container.querySelector('.car.building')!.getAttribute('title')!;
+      expect(title).toContain('merge group building');
+      expect(title).toContain('#9338');
+    });
+
+    it('failed building car says the group build failed', () => {
+      const queue: RepoQueueView = {
+        groups: [group({ prNumbers: [9338], failed: true })], waiting: [],
+        unmergeable: [], queueBlocked: [], unmergeableCulprit: null, batchSize: 6,
+      };
+      const { container } = render(<QueueTrain queue={queue} />);
+      expect(container.querySelector('.car.building.failed')!.getAttribute('title'))
+        .toContain('merge group build failed');
+    });
+
+    it('waiting cars explain next batch vs further back', () => {
+      const queue: RepoQueueView = {
+        groups: [], waiting: Array.from({ length: 8 }, (_, i) => ({ prNumber: 9000 + i, position: i + 1 })),
+        unmergeable: [], queueBlocked: [], unmergeableCulprit: null, batchSize: 6,
+      };
+      const { container } = render(<QueueTrain queue={queue} />);
+      const cars = container.querySelectorAll('.car.queued');
+      expect(cars[0]!.getAttribute('title')).toContain('next batch');
+      expect(cars[1]!.getAttribute('title')).toContain('further back');
+    });
+
+    it('unmergeable car advises a rebase; blocked car names the conflict ahead', () => {
+      const queue: RepoQueueView = {
+        groups: [], waiting: [],
+        unmergeable: [8878], queueBlocked: [9335], unmergeableCulprit: 8878, batchSize: 6,
+      };
+      const { container } = render(<QueueTrain queue={queue} />);
+      const red = container.querySelector('.car.unmergeable')!.getAttribute('title')!;
+      expect(red).toContain('needs a rebase');
+      expect(red).toContain('#8878');
+      const amber = container.querySelector('.car.queue-blocked')!.getAttribute('title')!;
+      expect(amber).toContain('blocked behind a conflicting entry');
+      expect(amber).toContain('#8878');
+      expect(amber).toContain('#9335');
+    });
+  });
 });

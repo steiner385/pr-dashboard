@@ -22,15 +22,24 @@ export function bucketPr(pr: PrView): Bucket {
   return 'idle';
 }
 
-interface TileConfig { bucket: Bucket; label: string; cssClass: string; }
+interface TileConfig { bucket: Bucket; label: string; cssClass: string; title: string; }
 
-const TILES: TileConfig[] = [
-  { bucket: 'running', label: 'CI running',     cssClass: 'tile-running' },
-  { bucket: 'queued',  label: 'In queue',        cssClass: 'tile-queued' },
-  { bucket: 'deploy',  label: 'Awaiting prod',   cssClass: 'tile-deploy' },
-  { bucket: 'failed',  label: 'Failed',          cssClass: 'tile-failed' },
-  { bucket: 'idle',    label: 'Ready / other',   cssClass: 'tile-idle'   },
+/** One-line bucket definitions — surfaced as the tile tooltip and reused by the
+ *  legend panel so the two can never drift apart. */
+export const TILE_DEFINITIONS: TileConfig[] = [
+  { bucket: 'running', label: 'CI running',     cssClass: 'tile-running',
+    title: 'CI running on the head commit' },
+  { bucket: 'queued',  label: 'In queue',        cssClass: 'tile-queued',
+    title: 'In the merge queue — building or waiting for a slot' },
+  { bucket: 'deploy',  label: 'Awaiting prod',   cssClass: 'tile-deploy',
+    title: 'Merged — deploying to QA or awaiting production deploy' },
+  { bucket: 'failed',  label: 'Failed',          cssClass: 'tile-failed',
+    title: 'CI failed or the merge-group build failed' },
+  { bucket: 'idle',    label: 'Ready / other',   cssClass: 'tile-idle',
+    title: 'Ready, draft, conflicting, or recently merged — nothing running' },
 ];
+
+const TILES = TILE_DEFINITIONS;
 
 interface StatusStripProps {
   prs: PrView[];
@@ -47,7 +56,7 @@ export function StatusStrip({ prs, activeFilter, onFilter }: StatusStripProps) {
 
   return (
     <div className="status-strip" role="group" aria-label="Status overview">
-      {TILES.map(({ bucket, label, cssClass }) => {
+      {TILES.map(({ bucket, label, cssClass, title }) => {
         const count = counts.get(bucket) ?? 0;
         const isActive = activeFilter === bucket;
         const disabled = count === 0 && !isActive;
@@ -56,6 +65,9 @@ export function StatusStrip({ prs, activeFilter, onFilter }: StatusStripProps) {
             key={bucket}
             type="button"
             className={`status-tile ${cssClass}${isActive ? ' active' : ''}`}
+            /* tooltip doubles as the accessible description; the visible
+               count + label stays the accessible name */
+            title={title}
             aria-pressed={isActive}
             disabled={disabled}
             onClick={() => onFilter(isActive ? null : bucket)}

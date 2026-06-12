@@ -4,6 +4,7 @@ import { PrRow } from './PrRow';
 import { StatusStrip, bucketPr, type Bucket } from './StatusStrip';
 import { QueueTrain } from './QueueTrain';
 import { SettingsPanel } from './SettingsPanel';
+import { LegendPanel } from './LegendPanel';
 import { MetricsView } from './MetricsView';
 import type { PrView } from './types';
 
@@ -58,6 +59,9 @@ export function App() {
   const [metricsVisited, setMetricsVisited] = useState(false);
   const gearRef = useRef<HTMLButtonElement>(null);
   const handleSettingsClose = useCallback(() => setSettingsOpen(false), []);
+  const [legendOpen, setLegendOpen] = useState(false);
+  const legendRef = useRef<HTMLButtonElement>(null);
+  const handleLegendClose = useCallback(() => setLegendOpen(false), []);
 
   if (!state) return <main className="app"><p className="loading">Loading…</p></main>;
 
@@ -95,6 +99,17 @@ export function App() {
         )}
         <button
           type="button"
+          ref={legendRef}
+          className="legend-btn"
+          aria-label="Legend"
+          aria-haspopup="dialog"
+          aria-expanded={legendOpen}
+          onClick={() => setLegendOpen(true)}
+        >
+          <span aria-hidden="true">?</span>
+        </button>
+        <button
+          type="button"
           ref={gearRef}
           className="settings-gear"
           aria-label="Settings"
@@ -110,6 +125,11 @@ export function App() {
         onClose={handleSettingsClose}
         returnFocusRef={gearRef}
         connected={connected}
+      />
+      <LegendPanel
+        open={legendOpen}
+        onClose={handleLegendClose}
+        returnFocusRef={legendRef}
       />
       <nav className="tab-bar" role="tablist" aria-label="Dashboard views">
         <button type="button" role="tab" id="tab-pipeline"

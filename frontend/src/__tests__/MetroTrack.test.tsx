@@ -187,4 +187,57 @@ describe('MetroTrack', () => {
     );
     expect(container.querySelector('.node-eta')).toBeNull();
   });
+
+  // ---- in-place tooltips (legend feature) ----
+
+  describe('node title tooltips', () => {
+    const titleOf = (el: Element | null) => el?.getAttribute('title');
+
+    it('done / active / pending nodes explain their state', () => {
+      const { container } = render(<MetroTrack stage={stage({ stage: 'queue' })} hasDeploy />);
+      expect(titleOf(container.querySelector('.node.done'))).toBe('CI — complete');
+      expect(titleOf(container.querySelector('.node.active'))).toBe('Queue — in progress');
+      expect(titleOf(container.querySelector('.node.pending'))).toBe('Merged — not reached yet');
+    });
+
+    it('fail node at CI explains a head-commit CI failure', () => {
+      const { container } = render(
+        <MetroTrack stage={stage({ stage: 'parked', substate: 'ci-failed' })} hasDeploy />,
+      );
+      expect(titleOf(container.querySelector('.node.fail'))).toBe('CI failed on the head commit');
+    });
+
+    it('fail node at Queue explains a merge-group build failure', () => {
+      const { container } = render(
+        <MetroTrack stage={stage({ stage: 'queue', substate: 'group-failed' })} hasDeploy />,
+      );
+      expect(titleOf(container.querySelector('.node.fail'))).toBe('merge group build failed');
+    });
+
+    it('parked nodes carry the substate reason', () => {
+      const draft = render(
+        <MetroTrack stage={stage({ stage: 'parked', substate: 'draft' })} hasDeploy />,
+      ).container;
+      expect(titleOf(draft.querySelector('.node.parked')))
+        .toBe('draft — parked until marked ready for review');
+
+      const conflicting = render(
+        <MetroTrack stage={stage({ stage: 'parked', substate: 'conflicting' })} hasDeploy />,
+      ).container;
+      expect(titleOf(conflicting.querySelector('.node.parked')))
+        .toBe('conflicting with the base branch — needs a rebase');
+
+      const unmergeable = render(
+        <MetroTrack stage={stage({ stage: 'queue', substate: 'unmergeable' })} hasDeploy />,
+      ).container;
+      expect(titleOf(unmergeable.querySelector('.node.parked')))
+        .toBe('unmergeable — conflicts with the base; needs a rebase before it can merge');
+
+      const blocked = render(
+        <MetroTrack stage={stage({ stage: 'queue', substate: 'queue-blocked' })} hasDeploy />,
+      ).container;
+      expect(titleOf(blocked.querySelector('.node.parked')))
+        .toBe('queue blocked — stuck behind a conflicting entry ahead; revalidates once it is ejected');
+    });
+  });
 });
