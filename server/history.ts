@@ -126,6 +126,7 @@ export class HistoryStore {
   private readonly stmtSelectQueueWaitsSince: Database.Statement;
   private readonly stmtSelectGroupRunsSince: Database.Statement;
   private readonly stmtSelectMergedSince: Database.Statement;
+  private readonly stmtSelectMergedTimestamps: Database.Statement;
   // Flake radar (#37) + train-killer leaderboard (#38)
   private readonly stmtSelectFlakeRows: Database.Statement;
   private readonly stmtInsertGroupFailure: Database.Statement;
@@ -332,6 +333,10 @@ export class HistoryStore {
     this.stmtSelectMergedSince = this.db.prepare(
       `SELECT repo, merged_at, created_at, qa_live_at
        FROM merged_prs WHERE merged_at >= ? ORDER BY repo, merged_at`
+    );
+    // Trains/hour (queue ops): per-repo merge timestamps for train clustering.
+    this.stmtSelectMergedTimestamps = this.db.prepare(
+      'SELECT merged_at FROM merged_prs WHERE repo=? AND merged_at >= ? ORDER BY merged_at'
     );
     // Flake detection (#37) needs every conclusion (not just SUCCESS) plus the
     // sha/attempt identity; rows without head_sha (pre-#34) can't participate.
@@ -713,6 +718,14 @@ export class HistoryStore {
     const rows = this.stmtSelectGroupRunsSince.all(since) as Record<string, unknown>[];
     return rows.map((r) => ({ repo: r.repo as string, at: r.at as string,
       durationSecs: r.duration_secs as number }));
+  }
+
+  /** Per-repo merge timestamps at/after `since`, ascending — the train-clustering
+   *  input for trains/hour (merged_prs is sweep-fed and durable, unlike group_runs
+   *  which only exists when a poll happens to observe a completed group). */
+  mergedTimestampsSince(repo: string, since: string): string[] {
+    const rows = this.stmtSelectMergedTimestamps.all(repo, since) as { merged_at: string }[];
+    return rows.map((r) => r.merged_at);
   }
 
   /** Merged PRs at/after `since` (full timestamps — bucketing happens in metrics). */

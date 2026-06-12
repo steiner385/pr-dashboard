@@ -148,8 +148,13 @@ describe('App', () => {
 // Round 12 (metrics tab): Pipeline | Metrics tab bar
 // ---------------------------------------------------------------------------
 
+// `metricsBomb.throws` lets the error-boundary tests crash MetricsView on demand.
+const metricsBomb = vi.hoisted(() => ({ throws: false }));
 vi.mock('../MetricsView', () => ({
-  MetricsView: () => <div data-testid="metrics-view-stub">metrics-view</div>,
+  MetricsView: () => {
+    if (metricsBomb.throws) throw new Error('metrics exploded');
+    return <div data-testid="metrics-view-stub">metrics-view</div>;
+  },
 }));
 
 describe('App tab bar', () => {
@@ -191,6 +196,38 @@ describe('App tab bar', () => {
     expect(screen.getByRole('group', { name: 'Status overview' })).toBeInTheDocument();
     // metrics stays mounted (no refetch churn) but hidden
     expect(document.getElementById('tabpanel-metrics')).toHaveAttribute('hidden');
+  });
+
+  // ---- per-tab error boundary ----
+
+  describe('per-tab error boundary', () => {
+    beforeEach(() => {
+      // React logs caught render errors — silence them for these tests only
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+    });
+    afterEach(() => {
+      metricsBomb.throws = false;
+      vi.restoreAllMocks();
+    });
+
+    it('a crash in the Metrics tab renders the inline fallback instead of white-screening', () => {
+      metricsBomb.throws = true;
+      render(<App />);
+      fireEvent.click(screen.getByRole('tab', { name: 'Metrics' }));
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'something broke rendering this tab — metrics exploded — try refresh');
+    });
+
+    it('the Pipeline tab still works after the Metrics tab crashed', () => {
+      metricsBomb.throws = true;
+      render(<App />);
+      fireEvent.click(screen.getByRole('tab', { name: 'Metrics' }));
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('tab', { name: 'Pipeline' }));
+      expect(document.getElementById('tabpanel-pipeline')).not.toHaveAttribute('hidden');
+      expect(screen.getByRole('group', { name: 'Status overview' })).toBeInTheDocument();
+      expect(screen.getAllByText(/pr \d/).length).toBeGreaterThan(0);
+    });
   });
 
   // ---- legend (? button + slide-over) ----

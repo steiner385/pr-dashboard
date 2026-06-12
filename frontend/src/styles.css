@@ -374,6 +374,12 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
 .metrics-refresh:hover, .metrics-window-btn:hover { border-color: var(--accent); color: var(--text); }
 .metrics-error { color: var(--fail); font-size: 13px; }
 
+/* per-tab error boundary fallback (a tab crash must not white-screen the SPA) */
+.tab-error {
+  background: var(--surface); border: 1px solid var(--fail); border-radius: 8px;
+  color: var(--fail); font-size: 13px; padding: 12px 14px; margin: 12px 0;
+}
+
 .metric-panel {
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
   padding: 12px 14px; margin-bottom: 12px;

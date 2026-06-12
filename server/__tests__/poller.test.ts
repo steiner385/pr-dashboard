@@ -4194,13 +4194,24 @@ describe('Poller queue ops console (#39) + merge ETA simulation (#40)', () => {
 
   /** Seed 4 clean trains (durations 600,600,600,1200 — p50=600, p90=1200) in
    *  the last 24h plus one ejected group: ejectProb = 1/5 = 0.2 (> 15% bump),
-   *  batch success 4/5 = 80%, trains/hr = 4/24. */
+   *  batch success 4/5 = 80%. Trains/hr now comes from merged_prs clustering
+   *  (group_runs is observation-biased), so also seed 5 merged PRs forming
+   *  3 trains: [pair 60s apart], [exact-90s pair], [singleton] → 3/24 ≈ 0.1. */
   function seedTrainHistory() {
     history.recordGroupRun('acme/widgets', 600, '2026-06-10T08:00:00Z');
     history.recordGroupRun('acme/widgets', 600, '2026-06-10T09:00:00Z');
     history.recordGroupRun('acme/widgets', 600, '2026-06-10T10:00:00Z');
     history.recordGroupRun('acme/widgets', 1200, '2026-06-10T11:00:00Z');
     history.recordGroupFailure('acme/widgets', 'e2e', 'oidEjected', '2026-06-10T07:00:00Z');
+    const merge = (n: number, mergedAt: string) =>
+      history.upsertMergedPr({ repo: 'acme/widgets', number: n, title: `pr${n}`,
+        url: `u${n}`, mergedAt, mergeCommitSha: null });
+    merge(9101, '2026-06-10T08:00:00Z');  // train 1
+    merge(9102, '2026-06-10T08:01:00Z');  // train 1 (60s gap)
+    merge(9103, '2026-06-10T09:00:00Z');  // train 2
+    merge(9104, '2026-06-10T09:01:30Z');  // train 2 (exact 90s boundary)
+    merge(9105, '2026-06-10T10:30:00Z');  // train 3 (singleton)
+    merge(9106, '2026-06-08T10:00:00Z');  // outside 24h window — ignored
   }
 
   // ---- waiting-only queue: healthy + full ops payload + sims ----
@@ -4230,7 +4241,8 @@ describe('Poller queue ops console (#39) + merge ETA simulation (#40)', () => {
       { prNumber: 9006, position: 1, waitSecs: 1800 },
       { prNumber: 9007, position: 2, waitSecs: 600 },
     ]);
-    expect(queue.trainsPerHour).toBeCloseTo(4 / 24);
+    // 3 merge clusters in 24h → round(3/24, 1dp) = 0.1; group_runs (4) is NOT the source
+    expect(queue.trainsPerHour).toBe(0.1);
     expect(queue.batchSuccessRatePct).toBe(80);
     expect(queue.ejects24h).toBe(1);
   });

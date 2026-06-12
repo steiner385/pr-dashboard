@@ -128,6 +128,20 @@ describe('merged PRs', () => {
       mergedAt: '2026-05-01T00:00:00Z', mergeCommitSha: 'x' });
     expect(h.listTrackedMerged(7, new Date('2026-06-11T00:00:00Z'))).toHaveLength(0);
   });
+
+  it('mergedTimestampsSince: per-repo merge timestamps at/after since, ascending', () => {
+    h.upsertMergedPr({ repo: REPO, number: 2, title: 't', url: 'u',
+      mergedAt: '2026-06-10T12:00:00Z', mergeCommitSha: null });
+    h.upsertMergedPr({ repo: REPO, number: 1, title: 't', url: 'u',
+      mergedAt: '2026-06-10T11:00:00Z', mergeCommitSha: null });
+    h.upsertMergedPr({ repo: REPO, number: 3, title: 'too old', url: 'u',
+      mergedAt: '2026-06-09T00:00:00Z', mergeCommitSha: null });
+    h.upsertMergedPr({ repo: 'other/repo', number: 4, title: 'other repo', url: 'u',
+      mergedAt: '2026-06-10T12:00:00Z', mergeCommitSha: null });
+    expect(h.mergedTimestampsSince(REPO, '2026-06-10T00:00:00Z'))
+      .toEqual(['2026-06-10T11:00:00Z', '2026-06-10T12:00:00Z']);
+    expect(h.mergedTimestampsSince('empty/repo', '2026-06-10T00:00:00Z')).toEqual([]);
+  });
 });
 
 describe('samples (raw last-20 SUCCESS durations)', () => {

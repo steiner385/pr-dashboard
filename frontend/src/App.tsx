@@ -8,6 +8,7 @@ import { QueueTrain } from './QueueTrain';
 import { SettingsPanel } from './SettingsPanel';
 import { LegendPanel } from './LegendPanel';
 import { MetricsView } from './MetricsView';
+import { ErrorBoundary } from './ErrorBoundary';
 import type { PrView } from './types';
 
 type TabId = 'pipeline' | 'metrics';
@@ -203,10 +204,15 @@ export function App() {
           every aria-labelledby/aria-controls must resolve to a real node */}
       <div id="tabpanel-metrics" hidden={tab !== 'metrics'}
         {...(kiosk ? {} : { role: 'tabpanel', 'aria-labelledby': 'tab-metrics' })}>
-        {metricsVisited && <MetricsView />}
+        {/* one boundary instance per tab: a render crash in one panel must
+            not white-screen the other */}
+        <ErrorBoundary>
+          {metricsVisited && <MetricsView />}
+        </ErrorBoundary>
       </div>
       <div id="tabpanel-pipeline" hidden={tab !== 'pipeline'}
         {...(kiosk ? {} : { role: 'tabpanel', 'aria-labelledby': 'tab-pipeline' })}>
+      <ErrorBoundary>
       <StatusStrip prs={allPrs} activeFilter={activeFilter} onFilter={setActiveFilter}
         interactive={!kiosk} />
       {state.repos.map((r, i) => {
@@ -266,6 +272,7 @@ export function App() {
           </section>
         );
       })}
+      </ErrorBoundary>
       </div>
     </main>
   );

@@ -20,6 +20,7 @@ import { classify, requiredChecks, matchesRequiredPrefix, matchingPrefix, workfl
 import { queueStage, simulateMergeEta, ejectProbability, type GroupProgress, type QueueStageResult, type MergeEtaSimulation } from './estimator/queue';
 import { classifyQueueHealth, type GroupBuildTelemetry, type QueueHealthState } from './estimator/queue-health';
 import { classifyWait, extractRunnerWaits, type NeedActivePredicate } from './estimator/waits';
+import { countMergeTrains } from './trains';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -1351,13 +1352,25 @@ export class Poller extends EventEmitter {
     const weekAgo = new Date(now.getTime() - 7 * 86400_000).toISOString();
     const runs7d = history.countGroupRuns(repo, weekAgo);
     const ejects7d = history.countGroupEjects(repo, weekAgo);
+    // Trains/hr from merged_prs (durable, sweep-fed): cluster the last 24h of
+    // merge timestamps — merges within 90s of each other are one train. The
+    // old source (group_runs) is observation-biased: a row only exists when a
+    // poll catches a group all-completed before it leaves the queue, so most
+    // trains were missed (user-reported 0.1/hr on a queue merging dozens/day).
+    const mergedTs24h = history.mergedTimestampsSince(repo, dayAgo)
+      .map((t) => Date.parse(t));
 
     return { groups: queueGroups, waiting, unmergeable, queueBlocked, unmergeableCulprit,
       batchSize: this.settingsFor(repo).batchSize,
       health: { ...classified, since },
       depth: entries.length,
       entriesWithWaitSecs,
-      trainsPerHour: history.countGroupRuns(repo, dayAgo) / 24,
+      trainsPerHour: Math.round((countMergeTrains(mergedTs24h) / 24) * 10) / 10,
+      // NOTE: still sourced from group_runs/group_failures, which carries the
+      // same observation bias as the old trains/hr (clean runs are only
+      // recorded when a poll catches the completed group, while ejects are
+      // durable) — so this skews pessimistic on busy queues. Follow-up
+      // candidate: derive successes from merged_prs train clusters instead.
       batchSuccessRatePct: runs7d + ejects7d > 0
         ? Math.round((runs7d / (runs7d + ejects7d)) * 100) : null,
       ejects24h: history.countGroupEjects(repo, dayAgo),
