@@ -33,13 +33,15 @@ describe('mapRollupContexts', () => {
     const cis = out.filter((c) => c.name === 'ci');
     expect(cis.map((c) => c.workflowName).sort()).toEqual(['Auto-merge PRs', 'CI']);
   });
-  it('dedupes by (canonical name, event) keeping latest startedAt', () => {
+  it('dedupes by (canonical name, event), aggregating the family timing', () => {
     const out = mapRollupContexts([
       CHECK,
       { ...CHECK, name: 'static-checks / Unit Tests (5/8)', startedAt: '2026-06-10T11:00:00Z' },
     ]);
     expect(out).toHaveLength(1);
-    expect(out[0].startedAt).toBe('2026-06-10T11:00:00Z');
+    // family aggregate: earliest start across shards, shardCount recorded
+    expect(out[0].startedAt).toBe(CHECK.startedAt);
+    expect(out[0].shardCount).toBe(2);
   });
 });
 

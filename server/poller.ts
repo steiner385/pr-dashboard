@@ -13,6 +13,7 @@ import { deriveCiGraph, activeForEvent, ciGraphToJson, ciGraphFromJson, type CiG
 import type { PrSnapshot, StageResult, QueueEntry, CheckRun } from './types';
 import { buildSweepQuery, buildMergedPageQuery, buildOpenPageQuery, buildDetailQuery, buildQueueQuery, buildOidRollupQuery, buildBlobQuery } from './queries';
 import { mapPrNode, mapQueueEntries, mapRollupContexts } from './map';
+import { familyDisplayName } from './normalize';
 import { computeProgress } from './estimator/progress';
 import { classify, requiredChecks, matchesRequiredPrefix, matchingPrefix, workflowScopeAllows, type DeployInfo } from './estimator/classify';
 import { queueStage, type GroupProgress, type QueueStageResult } from './estimator/queue';
@@ -1432,7 +1433,7 @@ export class Poller extends EventEmitter {
         (p, e) => this.needActiveFor(repo, p, e), graphKeys, rollupWf);
       const exp = this.deps.history.expected(repo, c.name, c.event);
       return {
-        name: c.rawName, status: c.status, conclusion: c.conclusion,
+        name: familyDisplayName(c), status: c.status, conclusion: c.conclusion,
         // same predicate as classification: mid-run prefix-matched checks sort under
         // "required" in the UI even before GitHub marks them isRequired — scoped to
         // the rollup workflow so foreign jobs (`ci-gate`) never read as required

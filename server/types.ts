@@ -3,6 +3,9 @@ export type CheckStatus = 'QUEUED' | 'IN_PROGRESS' | 'COMPLETED' | 'WAITING' | '
 export interface CheckRun {
   name: string;        // canonical (matrix-normalized) name
   rawName: string;
+  /** Matrix-shard members collapsed into this row by dedupeChecks
+   *  (1 / undefined = not a family). */
+  shardCount?: number;
   status: CheckStatus;
   conclusion: string | null; // SUCCESS | FAILURE | SKIPPED | CANCELLED | TIMED_OUT | ...
   startedAt: string | null;
