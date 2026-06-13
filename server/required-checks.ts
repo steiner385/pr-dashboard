@@ -319,3 +319,38 @@ export function deriveCiGraph(ciYamlText: string, rollupJobId = 'ci'): CiGraph |
 export function derivePrefixes(ciYamlText: string, rollupJobId = 'ci'): string[] | null {
   return deriveCiGraph(ciYamlText, rollupJobId)?.prefixes ?? null;
 }
+
+/** True when a workflow file's top-level `jobs:` map actually DEFINES `jobId`.
+ *  (deriveCiGraph returns a rollup-only graph even when the job is absent, so it
+ *  cannot answer this — discovery needs the stronger "is it really here" test.) */
+export function fileDefinesJob(ciYamlText: string, jobId: string): boolean {
+  let doc: unknown;
+  try {
+    doc = parse(ciYamlText);
+  } catch {
+    return false;
+  }
+  const jobs = (doc as { jobs?: unknown } | null)?.jobs;
+  return !!jobs && typeof jobs === 'object' && jobId in (jobs as Record<string, unknown>);
+}
+
+/**
+ * Auto-discover which workflow file owns the rollup job, so renaming the file
+ * (e.g. `ci.yml` -> `main.yml`) needs no config edit as long as the rollup job
+ * id is stable. Given candidate `{path, text}` files (caller supplies the
+ * `.github/workflows/` listing), pick the FIRST that genuinely defines
+ * `rollupJobId` and return its path + derived graph. Caller controls order;
+ * pass the conventional file first to keep ties deterministic. Null when no
+ * candidate defines the job (the rollup job itself was renamed — that still
+ * needs a one-line `rollupJobId` in `.pr-dashboard.yml`).
+ */
+export function discoverRollupWorkflow(
+  files: { path: string; text: string }[], rollupJobId = 'ci',
+): { path: string; graph: CiGraph } | null {
+  for (const f of files) {
+    if (!fileDefinesJob(f.text, rollupJobId)) continue;
+    const graph = deriveCiGraph(f.text, rollupJobId);
+    if (graph) return { path: f.path, graph };
+  }
+  return null;
+}

@@ -17,11 +17,16 @@ export interface RepoFileConfig {
   requiredCheckPrefixes?: string[];
   batchSize?: number;
   deploy?: DeployConfig;
+  /** Carry learned history across a check rename: `{ "old canonical name":
+   *  "new canonical name" }`. Applied once per pair (see History.applyCheckAliases)
+   *  so durations / pools / runner-waits / flake follow the rename instead of
+   *  cold-starting. Declare it in the SAME PR as the workflow/job rename. */
+  aliases?: Record<string, string>;
   /** Human-readable notes for every invalid piece that was dropped. */
   warnings: string[];
 }
 
-const KNOWN_KEYS = new Set(['rollupJobId', 'workflowPath', 'requiredCheckPrefixes', 'batchSize', 'deploy']);
+const KNOWN_KEYS = new Set(['rollupJobId', 'workflowPath', 'requiredCheckPrefixes', 'batchSize', 'deploy', 'aliases']);
 
 function isMapping(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v);
@@ -109,6 +114,18 @@ export function parseRepoConfig(repo: string, yamlText: string): RepoFileConfig 
       out.batchSize = doc.batchSize;
     } else {
       warnings.push('batchSize must be a positive integer — dropped');
+    }
+  }
+  if (doc.aliases !== undefined) {
+    if (isMapping(doc.aliases)) {
+      const clean: Record<string, string> = {};
+      for (const [from, to] of Object.entries(doc.aliases)) {
+        if (typeof to === 'string' && to && from && from !== to) clean[from] = to;
+        else warnings.push(`aliases["${from}"] must map a non-empty name to a different non-empty name — dropped`);
+      }
+      if (Object.keys(clean).length) out.aliases = clean;
+    } else {
+      warnings.push('aliases must be a mapping of old-name -> new-name — dropped');
     }
   }
   if (doc.deploy !== undefined) {

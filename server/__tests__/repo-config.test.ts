@@ -118,4 +118,38 @@ batchSize: -3
     expect(parseRepoConfig(REPO, '- a\n- b\n')).toBeNull();
     expect(parseRepoConfig(REPO, 'just a string')).toBeNull();
   });
+
+  describe('aliases (check-rename continuity)', () => {
+    it('parses a mapping of old-name -> new-name', () => {
+      const cfg = parseRepoConfig(REPO, `
+aliases:
+  static-checks: checks
+  integration-tests: integ
+`);
+      expect(cfg?.aliases).toEqual({ 'static-checks': 'checks', 'integration-tests': 'integ' });
+      expect(cfg?.warnings).toEqual([]);
+    });
+
+    it('drops self-mapping and empty entries with a warning, keeps the rest', () => {
+      const cfg = parseRepoConfig(REPO, `
+aliases:
+  same: same
+  good: renamed
+  blank: ""
+`);
+      expect(cfg?.aliases).toEqual({ good: 'renamed' });
+      expect(cfg?.warnings.length).toBe(2);
+    });
+
+    it('drops a non-mapping aliases value with a warning', () => {
+      const cfg = parseRepoConfig(REPO, 'aliases:\n  - a\n  - b\n');
+      expect(cfg?.aliases).toBeUndefined();
+      expect(cfg?.warnings.some((w) => w.includes('aliases'))).toBe(true);
+    });
+
+    it('omits aliases entirely when every entry is invalid', () => {
+      const cfg = parseRepoConfig(REPO, 'aliases:\n  x: x\n');
+      expect(cfg?.aliases).toBeUndefined();
+    });
+  });
 });

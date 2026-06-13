@@ -421,6 +421,8 @@ rollupJobId: ci                      # rollup job in the workflow below (default
 workflowPath: .github/workflows/ci.yml
 requiredCheckPrefixes: []            # replaces ci.yml derivation when set ([] disables prefix matching)
 batchSize: 6                         # merge-queue batch size
+aliases:                             # carry learned history across a check rename
+  static-checks: checks              #   old canonical check name -> new name
 deploy:                              # enables deploy stages for this repo
   cloneUrl: https://github.com/owner/repo.git   # default: GitHub URL of the repo (clone mode only)
   defaultBranch: main
@@ -448,6 +450,27 @@ Per-repo settings resolve field-by-field, highest first:
 
 The settings panel's per-repo section shows which layer each effective value
 came from (`override` / `in-repo` / `derived` / `default`).
+
+### Surviving workflow/job renames
+
+Reorganizing CI is a non-event for the dashboard if you treat `.pr-dashboard.yml`
+as config-as-code that travels in the same PR as the rename:
+
+- **Rename a workflow file** (`ci.yml` → `main.yml`): nothing to do. If the
+  configured/default path stops resolving, the dashboard **auto-discovers** which
+  file under `.github/workflows/` now defines `rollupJobId` (one GraphQL tree
+  read), adopts it, and remembers the path. Pinning `workflowPath` explicitly
+  opts out of discovery (the declared path is honored verbatim).
+- **Rename the rollup job** (`ci` → something): set `rollupJobId` in the same PR —
+  it must match branch protection's required check anyway, so it's the one line
+  that has to move with the rename.
+- **Rename any other check/job**: add an `aliases:` entry (`old-name: new-name`).
+  The renamed check then keeps its learned history — ETAs, runner-pool mapping,
+  flake/duration stats — instead of cold-starting. Without an alias the new name
+  still self-heals (durations re-learn over ~20 runs, pools re-learn within
+  hours); the alias just removes that transient. Aliases are applied once and
+  rewrite stored history under the new name (idempotent; reverse with the
+  inverse alias).
 
 ### Trust note
 

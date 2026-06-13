@@ -260,6 +260,15 @@ export class HistoryStore {
         pool TEXT NOT NULL, github_hosted INTEGER NOT NULL, last_seen TEXT NOT NULL,
         UNIQUE(repo, check_name, event)
       );
+      -- Idempotency ledger for check-name aliases (.pr-dashboard.yml aliases):
+      -- once an (repo, old -> new) rename has been folded into the history
+      -- tables, it is recorded here so re-running the migration each config load
+      -- is a cheap no-op. UNIQUE makes the marker insert itself idempotent.
+      CREATE TABLE IF NOT EXISTS applied_aliases (
+        repo TEXT NOT NULL, old_name TEXT NOT NULL, new_name TEXT NOT NULL,
+        applied_at TEXT NOT NULL,
+        UNIQUE(repo, old_name, new_name)
+      );
     `);
 
     // Migration: merged_prs gains created_at (PR lifespan metric). Fresh DBs get
@@ -541,6 +550,56 @@ export class HistoryStore {
     this.stmtInsertDuration.run(repo, name, event, secs, completedAt, conclusion,
       headSha || null, runAttempt ?? null, startedAt, runNumber ?? null);
     return true;
+  }
+
+  /**
+   * Fold check-name renames into the learned history so a renamed check keeps
+   * its ETA / pool / runner-wait / flake history instead of cold-starting.
+   * `aliases` maps `oldCanonicalName -> newCanonicalName` (from a repo's
+   * `.pr-dashboard.yml`). Each pair is applied at most once (tracked in
+   * `applied_aliases`), so calling this every config load is a cheap no-op.
+   *
+   * The four `check_name`-keyed tables split by their UNIQUE shape:
+   *  - APPEND tables (`check_durations`, `runner_waits`) include a timestamp in
+   *    the key, so a rename can never collide — a plain UPDATE moves every row.
+   *  - UPSERT tables (`observed_pools`, `group_failures`) are keyed on the name
+   *    itself; if the new name already learned a row, UPDATE would violate the
+   *    constraint — so UPDATE OR IGNORE moves what it can, then the stranded old
+   *    rows are deleted (the surviving new-name row is the fresher truth).
+   * (`eta_accuracy` is keyed by stage, not check_name — unaffected by renames.)
+   *
+   * Returns the number of (old -> new) pairs newly applied this call.
+   */
+  applyCheckAliases(repo: string, aliases: Record<string, string> | undefined): number {
+    if (!aliases) return 0;
+    const already = new Set(
+      (this.db.prepare('SELECT old_name, new_name FROM applied_aliases WHERE repo = ?').all(repo) as {
+        old_name: string; new_name: string;
+      }[]).map((r) => `${r.old_name} ${r.new_name}`),
+    );
+    const pending = Object.entries(aliases).filter(([from, to]) => !already.has(`${from} ${to}`));
+    if (!pending.length) return 0;
+
+    const move = this.db.transaction((pairs: [string, string][]) => {
+      const appendTables = ['check_durations', 'runner_waits'];
+      const upsertTables = ['observed_pools', 'group_failures'];
+      const markStmt = this.db.prepare(
+        'INSERT OR IGNORE INTO applied_aliases (repo, old_name, new_name, applied_at) VALUES (?,?,?,?)',
+      );
+      const now = new Date().toISOString();
+      for (const [from, to] of pairs) {
+        for (const t of appendTables) {
+          this.db.prepare(`UPDATE ${t} SET check_name = ? WHERE repo = ? AND check_name = ?`).run(to, repo, from);
+        }
+        for (const t of upsertTables) {
+          this.db.prepare(`UPDATE OR IGNORE ${t} SET check_name = ? WHERE repo = ? AND check_name = ?`).run(to, repo, from);
+          this.db.prepare(`DELETE FROM ${t} WHERE repo = ? AND check_name = ?`).run(repo, from);
+        }
+        markStmt.run(repo, from, to, now);
+      }
+    });
+    move(pending as [string, string][]);
+    return pending.length;
   }
 
   expected(repo: string, name: string, event: string): Expected | null {

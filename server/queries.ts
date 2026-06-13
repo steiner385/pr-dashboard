@@ -79,6 +79,21 @@ export function buildBlobQuery(owner: string, name: string, expression: string):
 }`;
 }
 
+/** One-shot listing of a directory's files WITH their text — `expression` is a
+ *  `<ref>:<dir>` tree path (e.g. `HEAD:.github/workflows`). Used by rollup
+ *  workflow auto-discovery: a single GraphQL call returns every workflow file's
+ *  body, so we can find which one defines the rollup job after a file rename. */
+export function buildTreeFilesQuery(owner: string, name: string, expression: string): string {
+  return `query {
+  rateLimit { remaining resetAt }
+  repository(owner: ${q(owner)}, name: ${q(name)}) {
+    object(expression: ${q(expression)}) {
+      ... on Tree { entries { name path object { ... on Blob { text } } } }
+    }
+  }
+}`;
+}
+
 function prDetailSelection(n: number): string {
   // files(first: 50): only the paths matter — the workflow-change flag
   // (issue #49) needs any path under .github/workflows/. Cost-aware cap at 50;

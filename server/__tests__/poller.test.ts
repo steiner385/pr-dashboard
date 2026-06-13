@@ -3856,6 +3856,75 @@ describe("Poller ancestrySource 'api' (issue #18)", () => {
     await p.deployOnce();
     expect(derivationReads()).toBe(2);
   });
+
+  // --- rollup workflow auto-discovery (file-rename tolerance) ----------------
+
+  const MAIN_YAML = 'name: CI\njobs:\n  lint: {}\n  ci:\n    needs: [lint]\n';
+  /** api client whose configured ci.yml is GONE (renamed away); a tree listing
+   *  of `.github/workflows/` offers an unrelated file + the renamed `main.yml`
+   *  that actually defines the `ci` rollup job. */
+  function renamedWorkflowClient() {
+    const tree = { repository: { object: { entries: [
+      { name: 'auto-merge.yml', path: '.github/workflows/auto-merge.yml', object: { text: 'jobs:\n  enable: {}\n' } },
+      { name: 'main.yml', path: '.github/workflows/main.yml', object: { text: MAIN_YAML } },
+    ] } } };
+    return {
+      remaining: 4000, resetAt: null,
+      graphql: vi.fn(async (q: string) => {
+        if (q.includes('on Tree')) return tree;                                  // dir listing
+        if (q.includes('.github/workflows/ci.yml')) return { repository: { defaultBranchRef: { name: 'main' }, object: null } }; // renamed away
+        if (q.includes('.github/workflows/main.yml')) return { repository: { defaultBranchRef: { name: 'main' }, object: { text: MAIN_YAML } } };
+        if (q.includes('.pr-dashboard.yml')) return { repository: { defaultBranchRef: { name: 'main' }, object: null } };
+        throw new Error(`unexpected query: ${q.slice(0, 80)}`);
+      }),
+      restGet: vi.fn(async () => ({ status: 'behind' })),
+    };
+  }
+  const treeCalls = (client: { graphql: ReturnType<typeof vi.fn> }) =>
+    client.graphql.mock.calls.map(([q]) => q as string).filter((q) => q.includes('on Tree')).length;
+
+  it('auto-discovers the rollup workflow when the configured ci.yml was renamed away', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    let t = NOW.getTime();
+    const client = renamedWorkflowClient();
+    const config: AppConfig = { ...DEFAULTS, ancestrySource: 'api', owners: ['acme'],
+      repos: { 'acme/tools': {} } }; // watched, default rollup 'ci', workflowPath NOT pinned
+    const p = new Poller({ router: asRouter(client), history, deploy: apiDeploy({}),
+      config, now: () => new Date(t) });
+    await p.deployOnce();
+    // one tree listing → adopted main.yml's graph (ci + lint), logged + persisted
+    expect(treeCalls(client)).toBe(1);
+    expect(String(log.mock.calls.find((c) => String(c).includes('auto-discovered'))))
+      .toContain('.github/workflows/main.yml');
+    expect(history.getMeta('discoveredWorkflowPath:acme/tools')).toBe('.github/workflows/main.yml');
+
+    // next cycle past the 24h throttle reads the discovered main.yml DIRECTLY
+    // (one blob read, no re-listing) and never re-reads the dead ci.yml.
+    t += 25 * 3600_000;
+    await p.deployOnce();
+    expect(treeCalls(client)).toBe(1); // no re-discovery
+    const reads = (needle: string) => client.graphql.mock.calls
+      .map(([q]) => q as string).filter((q) => q.includes(needle) && !q.includes('on Tree')).length;
+    expect(reads('.github/workflows/main.yml')).toBe(1); // 2nd cycle read the discovered path directly
+    expect(reads('.github/workflows/ci.yml')).toBe(1);   // dead path read only on the 1st cycle
+    log.mockRestore();
+  });
+
+  it('does NOT auto-discover when workflowPath is explicitly pinned (honors the declared path)', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const client = renamedWorkflowClient();
+    const config: AppConfig = { ...DEFAULTS, ancestrySource: 'api', owners: ['acme'],
+      repos: { 'acme/tools': { workflowPath: '.github/workflows/ci.yml' } } }; // pinned
+    const p = new Poller({ router: asRouter(client), history, deploy: apiDeploy({}),
+      config, now: () => NOW });
+    p.setDerivedPrefixes('acme/tools', ['prior']); // a prior good derivation to preserve
+    await p.deployOnce();
+    expect(treeCalls(client)).toBe(0);             // discovery never ran
+    expect(String(warn.mock.calls.find((c) => String(c).includes('keeping prior'))))
+      .toContain('ci.yml');
+    warn.mockRestore();
+  });
 });
 
 // ---------------------------------------------------------------------------

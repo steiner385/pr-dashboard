@@ -10,9 +10,9 @@ import { effectiveRepoSettings, effectiveDeployMap, poolRate, hasAnyRate,
 import { parseRepoConfig, REPO_CONFIG_PATH, type RepoFileConfig } from './repo-config';
 import type { WebhookRoute } from './webhooks';
 import type { Notifier, NotificationsConfig } from './notifier';
-import { deriveCiGraph, activeForEvent, ciGraphToJson, ciGraphFromJson, type CiGraph, type CiGraphNode } from './required-checks';
+import { deriveCiGraph, discoverRollupWorkflow, fileDefinesJob, activeForEvent, ciGraphToJson, ciGraphFromJson, type CiGraph, type CiGraphNode } from './required-checks';
 import type { PrSnapshot, StageResult, QueueEntry, CheckRun } from './types';
-import { buildSweepQuery, buildMergedPageQuery, buildOpenPageQuery, buildDetailQuery, buildQueueQuery, buildOidRollupQuery, buildBlobQuery } from './queries';
+import { buildSweepQuery, buildMergedPageQuery, buildOpenPageQuery, buildDetailQuery, buildQueueQuery, buildOidRollupQuery, buildBlobQuery, buildTreeFilesQuery } from './queries';
 import { mapPrNode, mapQueueEntries, mapRollupContexts } from './map';
 import { familyDisplayName, canonicalizeCheckName } from './normalize';
 import { selectRunIdsToFetch, observedKey, jobsApiPath, resolveJobsResponse,
@@ -517,6 +517,7 @@ export class Poller extends EventEmitter {
   private repoFileConfigs = new Map<string, RepoFileConfig>(); // repo → parsed .pr-dashboard.yml
   private repoConfigThrottle = new RetryThrottle(PREFIX_DERIVE_INTERVAL_MS); // 24h on success, backoff on failure
   private repoConfigSig = new Map<string, string>();           // repo → loaded-config signature (log-on-change)
+  private discoveredWorkflowPath = new Map<string, string>();  // repo → auto-discovered rollup workflow path (file-rename tolerance)
   private derivedPrefixes = new Map<string, string[]>();  // repo → ci.yml-derived prefixes
   private derivedGraph = new Map<string, Map<string, CiGraphNode>>(); // repo → node prefix → { needs, activity }
   private derivedWorkflowName = new Map<string, string | null>();     // repo → rollup workflow display name
@@ -598,6 +599,10 @@ export class Poller extends EventEmitter {
         this.derivedWorkflowName.set(repo, graph.workflowName);
         console.log(`[poller] restored persisted ci-graph for ${repo} (prefixes: ${graph.prefixes.join(', ')})`);
       } catch { /* corrupt row — ignore, live derivation will rewrite it */ }
+    }
+    for (const { key, value } of history.listMeta('discoveredWorkflowPath:')) {
+      const repo = key.slice('discoveredWorkflowPath:'.length);
+      if (value) this.discoveredWorkflowPath.set(repo, value);
     }
     // Seed the in-memory observed-pool set so the learning loop stays quiet for
     // job names already mapped on a previous run (only NEW names trigger a
@@ -1419,6 +1424,8 @@ export class Poller extends EventEmitter {
       const { warnings: _warnings, ...fields } = parsed;
       this.repoFileConfigs.set(repo, parsed);
       history.setMeta(`repoConfig:${repo}`, JSON.stringify(fields)); // last-known-good for restarts
+      const applied = history.applyCheckAliases(repo, parsed.aliases);
+      if (applied) console.log(`[repo-config] ${repo}: folded ${applied} check-name alias(es) into history`);
       const sig = JSON.stringify(fields);
       if (sig !== this.repoConfigSig.get(repo)) {
         this.repoConfigSig.set(repo, sig);
@@ -1647,16 +1654,43 @@ export class Poller extends EventEmitter {
     if (!this.deriveThrottle.due(repo, this.now().getTime())) return;
     const settings = this.settingsFor(repo);
     try {
+      // Prefer a path auto-discovered on a prior cycle (survives a file rename)
+      // over the configured/default one; both fall back to discovery below.
+      const path = this.discoveredWorkflowPath.get(repo) ?? settings.workflowPath;
       const text = this.deps.config.ancestrySource === 'clone'
-        ? await this.readWorkflowViaClone(repo, settings.workflowPath, branch ?? 'main')
-        : await this.readWorkflowViaBlob(repo, settings.workflowPath, branch);
+        ? await this.readWorkflowViaClone(repo, path, branch ?? 'main')
+        : await this.readWorkflowViaBlob(repo, path, branch);
       if (text === undefined) return; // owner has no installation — config mismatch, no backoff (mirrors refreshRepoConfigs)
       this.deriveThrottle.success(repo, this.now().getTime());
+
+      // Happy path: the file is present AND genuinely defines the rollup job.
+      if (text != null && fileDefinesJob(text, settings.rollupJobId)) {
+        this.adoptDerivedGraph(repo, deriveCiGraph(text, settings.rollupJobId)!);
+        return;
+      }
+
+      // The configured/discovered file is gone or no longer defines the rollup
+      // job — likely a workflow-FILE rename. Auto-discover which file owns the
+      // rollup job now, unless the path is explicitly pinned (then honor it) or
+      // we're in clone mode (no tree listing). On a hit, remember the path so
+      // later cycles read it directly without re-listing.
+      if (this.deps.config.ancestrySource !== 'clone' && !this.workflowPathPinned(repo)) {
+        const found = await this.discoverWorkflow(repo, branch, settings.rollupJobId);
+        if (found) {
+          this.discoveredWorkflowPath.set(repo, found.path);
+          this.deps.history.setMeta(`discoveredWorkflowPath:${repo}`, found.path);
+          this.adoptDerivedGraph(repo, found.graph);
+          if (found.path !== path) console.log(`[poller] ${repo}: auto-discovered rollup workflow at ${found.path} (was ${path})`);
+          return;
+        }
+      }
+
+      // Discovery off/failed. Preserve prior behavior: adopt the degraded
+      // rollup-only graph if the file at least parsed; otherwise keep the prior
+      // derived graph. Either way the 24h throttle is armed (never silent).
       const graph = text != null ? deriveCiGraph(text, settings.rollupJobId) : null;
-      // null = unreadable/unparseable: keep prior prefixes/graph (and the persisted
-      // copy) — but never silently: this path arms the 24h throttle.
       if (graph) this.adoptDerivedGraph(repo, graph);
-      else console.warn(`[poller] ${repo}: ${settings.workflowPath} ${text == null ? `not readable at ${branch ?? 'HEAD'}` : 'unparseable'} — keeping prior derived graph (next attempt in 24h)`);
+      else console.warn(`[poller] ${repo}: ${path} ${text == null ? `not readable at ${branch ?? 'HEAD'}` : 'unparseable'} — keeping prior derived graph (next attempt in 24h)`);
     } catch (e) {
       // best-effort: config/derived-so-far prefixes keep working
       this.deriveThrottle.failure(repo, this.now().getTime());
@@ -1690,6 +1724,43 @@ export class Poller extends EventEmitter {
     }
     const text = data.repository.object?.text;
     return typeof text === 'string' ? text : null;
+  }
+
+  /** True when `workflowPath` is explicitly pinned (instance config or in-repo
+   *  `.pr-dashboard.yml`) — auto-discovery then defers to the declared path. */
+  private workflowPathPinned(repo: string): boolean {
+    return this.deps.config.repos?.[repo]?.workflowPath != null
+      || this.repoFileConfigFor(repo)?.workflowPath != null;
+  }
+
+  /** List every workflow file under `.github/workflows/` WITH its text, in one
+   *  GraphQL call. `undefined` = no client for the owner; `[]` = dir absent. */
+  private async listWorkflowFiles(repo: string, branch?: string): Promise<{ path: string; text: string }[] | undefined> {
+    const [owner, name] = repo.split('/');
+    const client = this.routedClient(owner ?? '');
+    if (!client) return undefined;
+    const data = await client.graphql<{ repository?: { object?: { entries?: { name: string; path: string; object?: { text?: unknown } | null }[] } | null } | null }>(
+      buildTreeFilesQuery(owner ?? '', name ?? '', `${branch ?? 'HEAD'}:.github/workflows`));
+    const entries = data?.repository?.object?.entries;
+    if (!Array.isArray(entries)) return [];
+    return entries
+      .filter((e) => /\.ya?ml$/.test(e.name) && typeof e.object?.text === 'string')
+      .map((e) => ({ path: e.path, text: e.object!.text as string }));
+  }
+
+  /** Find the workflow file that currently owns the rollup job. The configured
+   *  basename is tried first so unchanged repos pick the conventional file on
+   *  ties; ties otherwise break alphabetically (deterministic). */
+  private async discoverWorkflow(repo: string, branch: string | undefined, rollupJobId: string): Promise<{ path: string; graph: CiGraph } | null> {
+    const files = await this.listWorkflowFiles(repo, branch);
+    if (!files || !files.length) return null;
+    const preferred = this.settingsFor(repo).workflowPath.split('/').pop() ?? '';
+    files.sort((a, b) => {
+      const ap = a.path.endsWith(`/${preferred}`) ? 0 : 1;
+      const bp = b.path.endsWith(`/${preferred}`) ? 0 : 1;
+      return ap !== bp ? ap - bp : a.path.localeCompare(b.path);
+    });
+    return discoverRollupWorkflow(files, rollupJobId);
   }
 
   // ---- state assembly -----------------------------------------------------

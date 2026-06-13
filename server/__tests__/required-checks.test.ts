@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { derivePrefixes, deriveCiGraph, activeForEvent, ciGraphToJson, ciGraphFromJson, type CiGraph } from '../required-checks';
+import { derivePrefixes, deriveCiGraph, activeForEvent, ciGraphToJson, ciGraphFromJson, fileDefinesJob, discoverRollupWorkflow, type CiGraph } from '../required-checks';
 
 const needsOf = (g: CiGraph, prefix: string) => g.nodes.get(prefix)?.needs;
 const activeFor = (g: CiGraph, prefix: string, event: string) =>
@@ -557,5 +557,42 @@ jobs:
       nodes: { ci: { needs: [], activity: { mode: 'all' }, timeoutMinutes: 'soon' } },
       workflowName: null });
     expect(coerced!.nodes.get('ci')!.timeoutMinutes).toBeNull();
+  });
+});
+
+describe('fileDefinesJob — does a workflow really define this job?', () => {
+  it('true only when the job key is present under jobs:', () => {
+    const yaml = 'name: CI\njobs:\n  ci:\n    needs: [build]\n  build:\n    runs-on: x\n';
+    expect(fileDefinesJob(yaml, 'ci')).toBe(true);
+    expect(fileDefinesJob(yaml, 'build')).toBe(true);
+    expect(fileDefinesJob(yaml, 'nope')).toBe(false);
+  });
+  it('false on a file with no jobs map or unparseable YAML', () => {
+    expect(fileDefinesJob('name: just a name\n', 'ci')).toBe(false);
+    expect(fileDefinesJob('not: [valid', 'ci')).toBe(false);
+  });
+});
+
+describe('discoverRollupWorkflow — find the file that owns the rollup job', () => {
+  const auto = { path: '.github/workflows/auto-merge.yml', text: 'name: Auto\njobs:\n  enable:\n    runs-on: x\n' };
+  const renamed = { path: '.github/workflows/main.yml', text: 'name: CI\njobs:\n  ci:\n    needs: [build]\n  build:\n    runs-on: x\n' };
+
+  it('returns the path + graph of the file defining the rollup job', () => {
+    const hit = discoverRollupWorkflow([auto, renamed], 'ci');
+    expect(hit?.path).toBe('.github/workflows/main.yml');
+    expect(hit?.graph.prefixes).toContain('ci');
+  });
+  it('skips files that merely parse but do not define the rollup job', () => {
+    // auto-merge.yml parses fine and deriveCiGraph would return a rollup-only
+    // graph for it — discovery must NOT be fooled into selecting it.
+    expect(discoverRollupWorkflow([auto], 'ci')).toBeNull();
+  });
+  it('honours candidate order for ties (conventional file first)', () => {
+    const a = { path: 'a.yml', text: 'jobs:\n  ci:\n    runs-on: x\n' };
+    const b = { path: 'b.yml', text: 'jobs:\n  ci:\n    runs-on: x\n' };
+    expect(discoverRollupWorkflow([a, b], 'ci')?.path).toBe('a.yml');
+  });
+  it('returns null when the rollup job id was itself renamed (no file defines it)', () => {
+    expect(discoverRollupWorkflow([auto, renamed], 'gate')).toBeNull();
   });
 });

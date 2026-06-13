@@ -1408,3 +1408,62 @@ describe('cost actuals (cost explorer phase 2)', () => {
     }
   });
 });
+
+describe('applyCheckAliases — carry learned history across a check rename', () => {
+  const pool = { pool: 'kindash-arc', githubHosted: false };
+
+  it('moves append-table rows (durations, runner-waits) onto the new name', () => {
+    h.recordCheckDuration(REPO, 'static-checks', 'pull_request',
+      '2026-06-10T10:00:00Z', '2026-06-10T10:05:00Z', 'SUCCESS');
+    h.recordRunnerWait(REPO, 'static-checks', 'pull_request', 30, '2026-06-10T10:00:00Z', 'kindash-arc');
+    expect(h.expected(REPO, 'static-checks', 'pull_request')).not.toBeNull();
+
+    const n = h.applyCheckAliases(REPO, { 'static-checks': 'checks' });
+    expect(n).toBe(1);
+
+    // history now lives under the new name…
+    expect(h.expected(REPO, 'checks', 'pull_request')).not.toBeNull();
+    expect(h.expectedRunnerWait(REPO, 'checks', 'pull_request')).not.toBeNull();
+    // …and nothing remains under the old name
+    expect(h.expected(REPO, 'static-checks', 'pull_request')).toBeNull();
+  });
+
+  it('moves an upsert-table pool when the new name has none', () => {
+    h.recordObservedPool(REPO, 'integration-tests', 'merge_group', pool);
+    h.applyCheckAliases(REPO, { 'integration-tests': 'integ' });
+    expect(h.observedPool(REPO, 'integ', 'merge_group')).toEqual(pool);
+    expect(h.observedPool(REPO, 'integration-tests', 'merge_group')).toBeNull();
+  });
+
+  it('keeps the fresher new-name pool on collision and drops the stale old row', () => {
+    h.recordObservedPool(REPO, 'old', 'merge_group', { pool: 'stale', githubHosted: false });
+    h.recordObservedPool(REPO, 'new', 'merge_group', { pool: 'fresh', githubHosted: false });
+    h.applyCheckAliases(REPO, { old: 'new' });
+    // UPDATE OR IGNORE can't overwrite the existing 'new' row; the stale 'old' is deleted
+    expect(h.observedPool(REPO, 'new', 'merge_group')).toEqual({ pool: 'fresh', githubHosted: false });
+    expect(h.observedPool(REPO, 'old', 'merge_group')).toBeNull();
+  });
+
+  it('is idempotent — a second apply of the same pair is a no-op', () => {
+    h.recordCheckDuration(REPO, 'a', 'pull_request',
+      '2026-06-10T10:00:00Z', '2026-06-10T10:05:00Z', 'SUCCESS');
+    expect(h.applyCheckAliases(REPO, { a: 'b' })).toBe(1);
+    // a later duration recorded under the (now-dead) old name must NOT be re-moved
+    h.recordCheckDuration(REPO, 'a', 'pull_request',
+      '2026-06-11T10:00:00Z', '2026-06-11T10:05:00Z', 'SUCCESS');
+    expect(h.applyCheckAliases(REPO, { a: 'b' })).toBe(0);
+    expect(h.expected(REPO, 'a', 'pull_request')).not.toBeNull(); // stayed put
+  });
+
+  it('scopes the rename to the given repo only', () => {
+    h.recordObservedPool(REPO, 'x', 'merge_group', pool);
+    h.recordObservedPool('other/repo', 'x', 'merge_group', pool);
+    h.applyCheckAliases(REPO, { x: 'y' });
+    expect(h.observedPool(REPO, 'y', 'merge_group')).toEqual(pool);
+    expect(h.observedPool('other/repo', 'x', 'merge_group')).toEqual(pool); // untouched
+  });
+
+  it('returns 0 and does nothing when aliases is undefined', () => {
+    expect(h.applyCheckAliases(REPO, undefined)).toBe(0);
+  });
+});
