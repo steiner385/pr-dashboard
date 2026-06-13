@@ -219,7 +219,12 @@ export interface MetricsPayload {
     days: { date: string; actualDollars: number; attributedDollars: number | null;
       coveragePct: number | null }[];
     totalActualDollars: number; totalAttributedDollars: number | null;
-    coveragePct: number | null }[];
+    coveragePct: number | null;
+    /** Coverage of the most recent fully-billed day (excludes today's still-
+     *  settling partial). The cumulative `coveragePct` is dragged down during
+     *  the attribution data-ramp — early in-window days have incomplete job
+     *  history — so this is the trustworthy current-state headline. */
+    recentCoveragePct: number | null; recentCoverageDate: string | null }[];
 }
 
 /** Lead-time segment ids, in pipeline order (issue #44). */
@@ -960,9 +965,17 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
       const totalActualDollars = days.reduce((s, d) => s + d.actualDollars, 0);
       const totalAttributedDollars = hasRates
         ? days.reduce((s, d) => s + (d.attributedDollars ?? 0), 0) : null;
+      // Most recent fully-billed day with a computable coverage, skipping the
+      // current UTC day (Cost Explorer is still settling it). Truthful headline
+      // that the attribution data-ramp can't distort.
+      const todayUtc = now.toISOString().slice(0, 10);
+      const recent = [...days].reverse().find(
+        (d) => d.date < todayUtc && d.coveragePct != null);
       return { scope, days, totalActualDollars, totalAttributedDollars,
         coveragePct: totalAttributedDollars != null && totalActualDollars > 0
-          ? (totalAttributedDollars / totalActualDollars) * 100 : null };
+          ? (totalAttributedDollars / totalActualDollars) * 100 : null,
+        recentCoveragePct: recent?.coveragePct ?? null,
+        recentCoverageDate: recent?.date ?? null };
     });
 
   return { window, bucket, runnerWaits, queue, slowestJobs, velocity, leadTime, trends,

@@ -493,13 +493,15 @@ export function MetricsView({ now }: {
                   value={a.totalAttributedDollars != null
                     ? fmtDollars(a.totalAttributedDollars) : '–'} />
                 <MetricStat label="coverage" def={DEFS.costActualsCoverage}
-                  value={a.coveragePct != null ? fmtPct(a.coveragePct) : '–'} />
+                  value={a.recentCoveragePct != null ? fmtPct(a.recentCoveragePct)
+                    : a.coveragePct != null ? fmtPct(a.coveragePct) : '–'} />
               </div>
-              {a.coveragePct != null && (
+              {(a.recentCoveragePct ?? a.coveragePct) != null && (
                 <p className="metric-note cost-coverage-headline"
                   title={defTitle(DEFS.costActualsCoverage)}
                   data-testid={`cost-coverage-${a.scope}`}>
-                  jobs explain {fmtPct(a.coveragePct)} of {a.scope} spend — the rest
+                  jobs explain {fmtPct((a.recentCoveragePct ?? a.coveragePct)!)} of {a.scope} spend
+                  {a.recentCoverageDate ? ` (${a.recentCoverageDate})` : ''} — the rest
                   is idle runner capacity, node overhead, and unpriced pools
                 </p>
               )}

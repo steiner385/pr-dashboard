@@ -1305,7 +1305,21 @@ describe('computeMetrics: cost actuals + attribution coverage (phase 2)', () => 
       totalActualDollars: 0.60,
       totalAttributedDollars: expect.closeTo(0.30, 6),
       coveragePct: expect.closeTo(50, 6),
+      // the only billed day is NOW's day (today, still settling) → excluded
+      recentCoveragePct: null, recentCoverageDate: null,
     });
+  });
+
+  it('recentCoveragePct = coverage of the latest fully-billed day, skipping today', () => {
+    // two billed days; NOW is 2026-06-11 noon so 06-11 is "today" (excluded),
+    // 06-10 is the latest complete day → its coverage is the headline
+    job('unit-tests', '2026-06-10T13:00:00Z', 600);   // 10 min × $0.01 = $0.10 (inside 24h window)
+    job('build', '2026-06-11T10:00:00Z', 600);        // today — counted in day but not headline
+    h.upsertCostActual('fleet', '2026-06-10', 0.20, 'aws-ce'); // coverage 0.10/0.20 = 50%
+    h.upsertCostActual('fleet', '2026-06-11', 5.00, 'aws-ce'); // today, partial
+    const [fleet] = actuals({ cpm: { spot: 0.01 } });
+    expect(fleet!.recentCoverageDate).toBe('2026-06-10');
+    expect(fleet!.recentCoveragePct).toBeCloseTo(50, 6);
   });
 
   it('minutes-only mode (no rates): attributed and coverage stay null, actual still reports', () => {

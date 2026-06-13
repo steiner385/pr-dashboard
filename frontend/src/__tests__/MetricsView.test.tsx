@@ -1024,7 +1024,8 @@ describe('MetricsView — cost actuals + attribution coverage (phase 2)', () => 
         { date: '2026-06-10', actualDollars: 123.45, attributedDollars: 71.6, coveragePct: 58 },
         { date: '2026-06-11', actualDollars: 100, attributedDollars: 40, coveragePct: 40 },
       ],
-      totalActualDollars: 223.45, totalAttributedDollars: 111.6, coveragePct: 49.94 },
+      totalActualDollars: 223.45, totalAttributedDollars: 111.6, coveragePct: 49.94,
+        recentCoveragePct: 49.94, recentCoverageDate: '2026-06-11' },
   ];
 
   it('renders the actuals tiles, the coverage headline, and the per-day table', async () => {
@@ -1051,7 +1052,8 @@ describe('MetricsView — cost actuals + attribution coverage (phase 2)', () => 
     const minutesOnly: NonNullable<MetricsPayload['costActuals']> = [
       { scope: 'fleet',
         days: [{ date: '2026-06-11', actualDollars: 100, attributedDollars: null, coveragePct: null }],
-        totalActualDollars: 100, totalAttributedDollars: null, coveragePct: null },
+        totalActualDollars: 100, totalAttributedDollars: null, coveragePct: null,
+        recentCoveragePct: null, recentCoverageDate: null },
     ];
     mockFetchOk({ ...PAYLOAD, costActuals: minutesOnly });
     render(<MetricsView now={NOW} />);
@@ -1067,7 +1069,8 @@ describe('MetricsView — cost actuals + attribution coverage (phase 2)', () => 
     const scoped = [...ACTUALS,
       { scope: 'kindash-arc',
         days: [{ date: '2026-06-11', actualDollars: 50, attributedDollars: 45, coveragePct: 90 }],
-        totalActualDollars: 50, totalAttributedDollars: 45, coveragePct: 90 }];
+        totalActualDollars: 50, totalAttributedDollars: 45, coveragePct: 90,
+        recentCoveragePct: 90, recentCoverageDate: '2026-06-11' }];
     mockFetchOk({ ...PAYLOAD, costActuals: scoped });
     render(<MetricsView now={NOW} />);
     const panel = await costPanel();

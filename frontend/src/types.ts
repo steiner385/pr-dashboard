@@ -404,5 +404,6 @@ export interface MetricsPayload {
     days: { date: string; actualDollars: number; attributedDollars: number | null;
       coveragePct: number | null }[];
     totalActualDollars: number; totalAttributedDollars: number | null;
-    coveragePct: number | null }[];
+    coveragePct: number | null;
+    recentCoveragePct: number | null; recentCoverageDate: string | null }[];
 }
