@@ -5,10 +5,15 @@ Wants=network-online.target
 
 [Service]
 WorkingDirectory=__APP_ROOT__
-# clear any orphaned process squatting the port (see ops note: escaped-cgroup
-# tsx child once caused a 50-restart EADDRINUSE crash loop)
+# Reap any orphaned poller from a prior start before binding. The pnpm→sh→tsx
+# →node tree can leave a tsx child outside systemd's cgroup; it keeps POLLING
+# (double GitHub API usage) even when it no longer holds the port, so the
+# port-clear alone misses it. pkill by the specific server entry covers both.
+ExecStartPre=-/usr/bin/pkill -TERM -f tsx.*server/index.ts
 ExecStartPre=-/usr/bin/fuser -k -TERM 4400/tcp
 ExecStartPre=/bin/sleep 1
+# control-group kill (default) tears down the whole tree on stop/restart
+KillMode=control-group
 ExecStart=/usr/bin/env pnpm start
 Restart=on-failure
 RestartSec=10
