@@ -33,8 +33,10 @@ function PrLinks({ numbers, className }: { numbers: number[]; className?: string
 
 function BuildingCar({ g }: { g: QueueGroupView }) {
   const pct = g.percent;
+  // g.etaSeconds is the REMAINING time (p50 − elapsed, max over required checks),
+  // not the train's total duration — label it "left" so it can't read as a total.
   const eta = g.etaSeconds != null ? formatDur(g.etaSeconds) : null;
-  const progressText = pct != null ? (eta ? `${pct}% · ~${eta}` : `${pct}%`) : null;
+  const progressText = pct != null ? (eta ? `${pct}% · ~${eta} left` : `${pct}%`) : null;
   const nums = g.prNumbers.map(prLabel).join(' ');
   const tooltip = g.failed
     ? `merge group build failed — the queue re-batches without the culprit: ${nums}`

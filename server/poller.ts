@@ -1786,8 +1786,12 @@ export class Poller extends EventEmitter {
         if (seenOids.has(e.headCommitOid)) continue;
         seenOids.add(e.headCommitOid);
         const checks = this.groupChecks.get(e.headCommitOid)!;
-        const p = computeProgress({ checks,
-          expectedSet: history.expectedSet(repo, 'merge_group', now), lookup: lookupMg, now,
+        // Scope to the REQUIRED needs-closure: non-blocking checks that run in the
+        // queue but don't gate the merge (accessibility, android-build) must not
+        // inflate the train ETA — the queue merges when the required checks finish.
+        const { checks: reqChecks, expectedSet } = this.requiredMergeGroupScope(repo, checks, now);
+        const p = computeProgress({ checks: reqChecks,
+          expectedSet, lookup: lookupMg, now,
           samples: (n) => history.samples(repo, n, 'merge_group'),
           queueDelay: (n) => this.expectedRunnerWaitFor(repo, n, 'merge_group') });
         groups.push({ oid: e.headCommitOid, percent: p.percent, etaSeconds: p.etaSeconds,
@@ -1842,6 +1846,30 @@ export class Poller extends EventEmitter {
    *
    *  Returns null when there are no queue entries for this repo.
    */
+  /** Scope live merge_group checks + their history expectedSet to the rollup's
+   *  REQUIRED needs-closure, so non-blocking checks that run in the queue but
+   *  don't gate the merge (e.g. accessibility, android-build) stop inflating the
+   *  train ETA. Falls back to the unfiltered inputs when no prefixes are derived
+   *  yet — a not-yet-known graph must never blank the estimate. Mirrors the
+   *  pull_request scoping in viewForOpenPr, but keyed on matchesRequiredPrefix
+   *  because requiredChecks() intentionally excludes merge_group events. */
+  private requiredMergeGroupScope(repo: string, checks: CheckRun[], now: Date):
+    { checks: CheckRun[]; expectedSet: string[] } {
+    const expectedAll = this.deps.history.expectedSet(repo, 'merge_group', now);
+    const prefixes = this.effectivePrefixes(repo);
+    if (!prefixes?.length) return { checks, expectedSet: expectedAll };
+    const rollupWf = this.rollupWorkflowFor(repo);
+    const req = checks.filter((c) =>
+      matchesRequiredPrefix(c.name, prefixes) && workflowScopeAllows(c.workflowName, rollupWf));
+    const reqNames = new Set(req.map((c) => c.name));
+    // history names carry no workflow identity → exclude any whose LIVE check is foreign
+    const foreign = new Set(checks
+      .filter((c) => !workflowScopeAllows(c.workflowName, rollupWf)).map((c) => c.name));
+    const expectedSet = expectedAll.filter((n) =>
+      (matchesRequiredPrefix(n, prefixes) && !foreign.has(n)) || reqNames.has(n));
+    return { checks: req, expectedSet };
+  }
+
   private buildQueueView(repo: string, groups: GroupProgress[], now: Date): RepoQueueView | null {
     const entries = this.queueEntries.get(repo);
     if (!entries?.length) return null;

@@ -40,9 +40,9 @@ describe('QueueTrain', () => {
     expect(cars).toHaveLength(2);
     // Headers present (two building groups each have the header)
     expect(screen.getAllByText('▶ group')).toHaveLength(2);
-    // Progress text
-    expect(screen.getByText(/80% · ~2m/)).toBeInTheDocument();
-    expect(screen.getByText(/30% · ~10m/)).toBeInTheDocument();
+    // Progress text — ETA is labeled "left" (remaining, not total duration)
+    expect(screen.getByText(/80% · ~2m left/)).toBeInTheDocument();
+    expect(screen.getByText(/30% · ~10m left/)).toBeInTheDocument();
   });
 
   it('renders PR number anchor links pointing to #pr-{n} inside building car', () => {

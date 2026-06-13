@@ -2502,6 +2502,82 @@ describe('Poller groupChecks payload (Y1)', () => {
   });
 });
 
+describe('Poller train ETA scopes to the required needs-closure (non-blocking checks excluded)', () => {
+  const GROUP_OID = 'oidReqScope';
+  const queuedDetail = {
+    r0: { nameWithOwner: 'acme/widgets', pr8962: {
+      number: 8962, title: 'fix: x', url: 'u', isDraft: false, mergeStateStatus: 'BLOCKED',
+      mergedAt: null, headRefOid: 'h', autoMergeRequest: { mergeMethod: 'SQUASH' }, mergeCommit: null,
+      mergeQueueEntry: { position: 1, state: 'AWAITING_CHECKS', enqueuedAt: '2026-06-10T11:30:00Z',
+        headCommit: { oid: GROUP_OID } },
+      commits: { nodes: [{ commit: { statusCheckRollup: { state: 'SUCCESS',
+        contexts: { pageInfo: { hasNextPage: false }, nodes: [{ ...CHECK_DONE }] } } } }] },
+    } },
+  };
+  const queueResponse = { repository: { mergeQueue: { entries: { nodes: [
+    { position: 1, state: 'AWAITING_CHECKS', enqueuedAt: '2026-06-10T11:30:00Z',
+      headCommit: { oid: GROUP_OID }, pullRequest: { number: 8962 } },
+  ] } } } };
+  // merge_group build: the required `ci` rollup is already DONE, but the
+  // non-blocking `accessibility` check is still running (started 11:55 → 300s
+  // elapsed at NOW, p50 31m). Pre-fix the train ETA maxed over accessibility.
+  const rollup = { repository: { o0: { oid: GROUP_OID, statusCheckRollup: { contexts: { nodes: [
+    { __typename: 'CheckRun', name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS',
+      startedAt: '2026-06-10T11:50:00Z', completedAt: '2026-06-10T11:58:00Z', detailsUrl: 'gu',
+      checkSuite: { workflowRun: { event: 'merge_group', runNumber: 7994, workflow: { name: 'CI' } } } },
+    { __typename: 'CheckRun', name: 'accessibility / Accessibility (combined)', status: 'IN_PROGRESS',
+      conclusion: null, startedAt: '2026-06-10T11:55:00Z', completedAt: null, detailsUrl: 'au',
+      checkSuite: { workflowRun: { event: 'merge_group', runNumber: 7994, workflow: { name: 'CI' } } } },
+  ] } } } } };
+  function client() {
+    return { remaining: 4000, resetAt: null,
+      graphql: vi.fn(async (q: string) => {
+        if (q.includes('open0: search')) return SWEEP_RESPONSE;
+        if (q.includes('pr8962: pullRequest')) return queuedDetail;
+        if (q.includes('object(oid:')) return rollup;
+        if (q.includes('mergeQueue')) return queueResponse;
+        throw new Error(`unexpected query: ${q.slice(0, 80)}`);
+      }) };
+  }
+  function seed() {
+    history.recordCheckDuration('acme/widgets', 'ci', 'merge_group',
+      '2026-06-01T10:00:00Z', '2026-06-01T10:08:00Z', 'SUCCESS'); // 8m
+    for (let i = 0; i < 3; i++) {
+      history.recordCheckDuration('acme/widgets', 'accessibility / Accessibility (combined)', 'merge_group',
+        `2026-06-0${i + 1}T09:00:00Z`, `2026-06-0${i + 1}T09:31:00Z`, 'SUCCESS'); // 31m each → p50 1860
+    }
+  }
+  async function groupOf(p: Poller) {
+    await p.sweepOnce(); await p.detailOnce(); await p.queueOnce();
+    return p.buildState().repos.find((r) => r.repo === 'acme/widgets')!.queue!.groups[0]!;
+  }
+
+  it('excludes the non-blocking check when prefixes mark only ci required → group reads complete', async () => {
+    seed();
+    const p = new Poller({ router: asRouter(client()), history, deploy: noDeploy(), config: CONFIG, now: () => NOW });
+    p.setDerivedPrefixes('acme/widgets', ['ci']);
+    const g = await groupOf(p);
+    expect(g.percent).toBe(100);   // required ci done; accessibility doesn't gate
+    expect(g.etaSeconds).toBe(0);
+  });
+
+  it('includes the same check once it IS required (prefix added) — proves scoping is the cause', async () => {
+    seed();
+    const p = new Poller({ router: asRouter(client()), history, deploy: noDeploy(), config: CONFIG, now: () => NOW });
+    p.setDerivedPrefixes('acme/widgets', ['ci', 'accessibility /']);
+    const g = await groupOf(p);
+    expect(g.percent).toBeLessThan(100);
+    expect(g.etaSeconds).toBeGreaterThan(1000); // ~1560s = 1860 p50 − 300 elapsed
+  });
+
+  it('falls back to all checks when no prefixes are derived yet (never blanks the ETA)', async () => {
+    seed();
+    const p = new Poller({ router: asRouter(client()), history, deploy: noDeploy(), config: CONFIG, now: () => NOW });
+    const g = await groupOf(p); // no setDerivedPrefixes; base CONFIG has none → unfiltered
+    expect(g.etaSeconds).toBeGreaterThan(1000); // accessibility still counted
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Round 7 Task Z1: in-repo .pr-dashboard.yml
 // ---------------------------------------------------------------------------
