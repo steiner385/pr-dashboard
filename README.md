@@ -175,6 +175,11 @@ All fields are optional; the table shows default values.
 | `repos.<repo>.rollupJobId` | `"ci"` | The rollup job in `ci.yml` whose `needs:` closure defines required checks. Also used to scope prefix matching to the right workflow. |
 | `repos.<repo>.workflowPath` | `".github/workflows/ci.yml"` | Repo-relative path to the workflow YAML read for `needs:` derivation. |
 | `repos.<repo>.batchSize` | global `batchSize` | Merge-queue batch size for this repo. Overrides the global value. |
+| `costPerMinute` | unset | CI cost attribution: pool label → $ per runner-minute (`"default"` prices unlisted pools). Unset → the cost panels report minutes only. File-only (money figures come from the operator's file, never the browser). |
+| `poolMeta.<pool>.instanceType` | unset | Display-only instance type for the pool (shown in the cost explorer tables). File-only. |
+| `poolMeta.<pool>.dollarsPerMinute` | unset | $ per runner-minute for the pool — **supersedes** the `costPerMinute` entry for the same label (the `"default"` key participates in fallback the same way). File-only. |
+| `poolMeta.<pool>.podsPerNode` | `1` | Bin-packing divisor (≥ 1, fractional OK): when N runner pods share one node (ARC/Kubernetes), pricing each job-minute at the node's $/min overstates spend N× — the effective rate is `rate ÷ podsPerNode` (label's entry, else `"default"`'s, else 1). File-only. |
+| `poolMeta.<pool>.note` | unset | Operator free-text for the pool. File-only. |
 
 ---
 
@@ -212,6 +217,52 @@ The panel also has a **Restart** button (`POST /api/admin/restart`, with inline
 confirmation): the server responds `202` and exits non-zero shortly after, so
 systemd (`Restart=on-failure`) revives it; no shell execution is involved. The
 UI rides out the bounce on the existing SSE auto-reconnect.
+
+---
+
+## CI cost explorer
+
+The metrics tab's **CI cost** panel attributes runner occupancy (every job's
+start→end span, all conclusions — a failed or cancelled job burned its runner
+too) to the job's `runs-on` pool, then prices it through the file-only rate
+config: `poolMeta.<pool>.dollarsPerMinute` supersedes `costPerMinute[<pool>]`
+per label, the `"default"` pair backs everything unlisted, and the winning
+rate divides by `podsPerNode` (bin-packing correction). Unpriced pools report
+minutes but stay out of the $ totals — a documented undercount, never a
+fabricated zero. The explorer breaks the window down **by pool** (with
+instance types), **by job** (top 15 by minutes), and **by run** (top 20,
+grouped by event + head sha + run number, with best-effort PR links); each
+open PR's expanded panel also shows *CI cost this run* for its current head
+(`(partial)` flags a $ figure that's missing unpriced checks).
+
+### Actuals import (`POST /api/cost/actuals`)
+
+Attribution explains *which jobs* burn the minutes; it can't see idle runner
+capacity, node boot/teardown, or anything else on the real bill. To close the
+loop, push your **actual** daily spend in — the panel then overlays actual vs
+attributed dollars per day and headlines **attribution coverage** ("jobs
+explain 58% of fleet spend"); the unexplained remainder is idle/overhead.
+Coverage trending down while job minutes hold steady means the fleet is
+idling more.
+
+The endpoint is provider-agnostic — anything that can `curl` can feed it:
+
+```jsonc
+// single row or an array; scope defaults to "fleet" (or name a pool label)
+{ "scope": "fleet", "date": "2026-06-11", "dollars": 123.45, "source": "aws-ce" }
+```
+
+Rows upsert on `(scope, date)` so re-imports are idempotent. Validation is
+strict (real calendar `YYYY-MM-DD`, finite `dollars ≥ 0`, no unknown keys) and
+all-or-nothing — a cron never half-imports. Browser-originated cross-site
+POSTs are blocked by the same-origin guard; header-less clients (curl, cron)
+pass. Example nightly cron pulling yesterday's spend from AWS Cost Explorer
+(illustrative — adapt the query/filters to your account):
+
+```cron
+# /etc/cron.d/pr-dashboard-cost-actuals — import yesterday's fleet spend at 09:30
+30 9 * * * tony aws ce get-cost-and-usage --time-period Start=$(date -d yesterday +\%F),End=$(date +\%F) --granularity DAILY --metrics UnblendedCost --query 'ResultsByTime[0].{date:TimePeriod.Start,dollars:Total.UnblendedCost.Amount}' --output json | jq '{scope:"fleet",date:.date,dollars:(.dollars|tonumber),source:"aws-ce"}' | curl -sS -X POST -H 'content-type: application/json' -d @- http://127.0.0.1:4400/api/cost/actuals
+```
 
 ---
 

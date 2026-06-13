@@ -41,23 +41,34 @@ export interface PoolMetaEntry {
   instanceType?: string;
   /** $ per runner-minute — takes precedence over costPerMinute[pool]. */
   dollarsPerMinute?: number;
+  /** Bin-packing divisor (ARC/Kubernetes pools): when N runner pods share one
+   *  node, pricing each job-minute at the NODE's $/min overstates spend N×.
+   *  The effective rate for the label is divided by this (label's own entry,
+   *  else the 'default' entry's, else 1). Must be ≥ 1; fractional values are
+   *  allowed (average packing density). */
+  podsPerNode?: number;
   /** Operator free-text (rendered as a tooltip where the pool appears). */
   note?: string;
 }
 
 /**
- * $/runner-minute for a pool label, across both rate sources. Precedence per
- * label: poolMeta[pool].dollarsPerMinute > costPerMinute[pool]; then the same
- * pair for the 'default' key. Null = unpriced (callers keep $ figures null).
+ * Effective $/runner-minute for a pool label, across both rate sources.
+ * Precedence per label: poolMeta[pool].dollarsPerMinute > costPerMinute[pool];
+ * then the same pair for the 'default' key. The winning rate is divided by
+ * podsPerNode (label's entry, else 'default''s, else 1) — N runner pods
+ * bin-packed onto one node each cost 1/N of the node's rate. Null = unpriced
+ * (callers keep $ figures null).
  */
 export function poolRate(pool: string,
   costPerMinute: Record<string, number> | null,
   poolMeta: Record<string, PoolMetaEntry> | null): number | null {
-  return poolMeta?.[pool]?.dollarsPerMinute
+  const base = poolMeta?.[pool]?.dollarsPerMinute
     ?? costPerMinute?.[pool]
     ?? poolMeta?.['default']?.dollarsPerMinute
     ?? costPerMinute?.['default']
     ?? null;
+  if (base == null) return null;
+  return base / (poolMeta?.[pool]?.podsPerNode ?? poolMeta?.['default']?.podsPerNode ?? 1);
 }
 
 /** Whether ANY $/minute rate is configured (costPerMinute present, or any
@@ -631,7 +642,7 @@ export function loadConfig(path?: string): AppConfig {
       throw new Error('config: poolMeta must be an object mapping pool labels to '
         + `{ instanceType?, dollarsPerMinute?, note? } (got ${JSON.stringify(pm)})`);
     }
-    const POOL_META_KEYS = new Set(['instanceType', 'dollarsPerMinute', 'note']);
+    const POOL_META_KEYS = new Set(['instanceType', 'dollarsPerMinute', 'podsPerNode', 'note']);
     for (const [pool, entry] of Object.entries(pm)) {
       if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
         throw new Error(`config: poolMeta["${pool}"] must be an object (got ${JSON.stringify(entry)})`);
@@ -641,7 +652,7 @@ export function loadConfig(path?: string): AppConfig {
       const unknown = Object.keys(e).filter((k) => !POOL_META_KEYS.has(k));
       if (unknown.length) {
         throw new Error(`config: poolMeta["${pool}"] has unknown key(s) ${unknown.join(', ')} `
-          + '(allowed: instanceType, dollarsPerMinute, note)');
+          + '(allowed: instanceType, dollarsPerMinute, podsPerNode, note)');
       }
       for (const k of ['instanceType', 'note'] as const) {
         if (e[k] !== undefined && (typeof e[k] !== 'string' || !(e[k] as string).trim())) {
@@ -654,6 +665,12 @@ export function loadConfig(path?: string): AppConfig {
       if (rate !== undefined && (typeof rate !== 'number' || !Number.isFinite(rate) || rate < 0)) {
         throw new Error(`config: poolMeta["${pool}"].dollarsPerMinute must be a finite number ≥ 0 `
           + `(got ${JSON.stringify(rate)})`);
+      }
+      // < 1 would INFLATE the rate — that's a misread of the knob, reject it
+      const pods = e.podsPerNode;
+      if (pods !== undefined && (typeof pods !== 'number' || !Number.isFinite(pods) || pods < 1)) {
+        throw new Error(`config: poolMeta["${pool}"].podsPerNode must be a finite number ≥ 1 `
+          + `(got ${JSON.stringify(pods)})`);
       }
     }
   }

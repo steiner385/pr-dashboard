@@ -1001,6 +1001,35 @@ describe('poolMeta config (cost explorer)', () => {
     expect(v.ok).toBe(false);
     if (!v.ok) expect(v.offendingKeys).toContain('poolMeta');
   });
+
+  it('accepts podsPerNode ≥ 1 (integer or fractional average packing)', () => {
+    const cfg = loadConfig(writeConfig({ poolMeta: {
+      'kindash-arc': { instanceType: 'EKS ARC', podsPerNode: 4 },
+      'kindash-arc-spot': { podsPerNode: 2.5 },
+    } }));
+    expect(cfg.poolMeta!['kindash-arc']!.podsPerNode).toBe(4);
+    expect(cfg.poolMeta!['kindash-arc-spot']!.podsPerNode).toBe(2.5);
+  });
+
+  it('rejects podsPerNode < 1 / non-numeric — dividing by it would inflate rates', () => {
+    expect(() => loadConfig(writeConfig({ poolMeta: { spot: { podsPerNode: 0.5 } } })))
+      .toThrow(/podsPerNode must be a finite number ≥ 1/);
+    expect(() => loadConfig(writeConfig({ poolMeta: { spot: { podsPerNode: 0 } } })))
+      .toThrow(/podsPerNode must be a finite number ≥ 1/);
+    expect(() => loadConfig(writeConfig({ poolMeta: { spot: { podsPerNode: '4' } } })))
+      .toThrow(/podsPerNode must be a finite number ≥ 1/);
+  });
+
+  it("accepts the live config's rate-less shape exactly: instanceType/note only", () => {
+    // mirror of the operator's hand-written block — entries carry NO rates
+    const cfg = loadConfig(writeConfig({ poolMeta: {
+      'kindash-arc': { instanceType: 'EKS ARC (on-demand)', note: 'ci-fast NodePool' },
+      'kindash-arc|kindash-arc-spot': { instanceType: 'EKS ARC (runs-on ternary)' },
+      'ubuntu-latest': { instanceType: 'GitHub-hosted 2 vCPU' },
+    } }));
+    expect(cfg.poolMeta!['kindash-arc']!.instanceType).toBe('EKS ARC (on-demand)');
+    expect(hasAnyRate(null, cfg.poolMeta!)).toBe(false); // minutes-only mode preserved
+  });
 });
 
 describe('poolRate / hasAnyRate (cost explorer rate precedence)', () => {
@@ -1030,5 +1059,27 @@ describe('poolRate / hasAnyRate (cost explorer rate precedence)', () => {
     expect(hasAnyRate(null, META)).toBe(true);
     expect(hasAnyRate(null, { spot: { instanceType: 'm7a' } })).toBe(false);
     expect(hasAnyRate(null, null)).toBe(false);
+  });
+
+  it('podsPerNode divides the effective rate (bin-packing correction)', () => {
+    expect(poolRate('arc', { arc: 0.012 }, { arc: { podsPerNode: 4 } })).toBeCloseTo(0.003);
+    expect(poolRate('arc', null, { arc: { dollarsPerMinute: 0.012, podsPerNode: 4 } }))
+      .toBeCloseTo(0.003);
+  });
+
+  it("podsPerNode divides whichever rate wins — even a 'default'-sourced one", () => {
+    // rate falls back to costPerMinute.default; the LABEL's divisor still applies
+    expect(poolRate('arc', { default: 0.02 }, { arc: { podsPerNode: 2 } })).toBeCloseTo(0.01);
+  });
+
+  it("podsPerNode falls back label → 'default' → 1, independently of the rate", () => {
+    expect(poolRate('arc', { arc: 0.01 }, { default: { podsPerNode: 2 } })).toBeCloseTo(0.005);
+    expect(poolRate('arc', { arc: 0.01 }, { arc: { instanceType: 'm7a' } })).toBeCloseTo(0.01);
+    expect(poolRate('arc', { arc: 0.01 }, null)).toBeCloseTo(0.01);
+  });
+
+  it('podsPerNode without any rate stays unpriced (divisor alone prices nothing)', () => {
+    expect(poolRate('arc', null, { arc: { podsPerNode: 4 } })).toBeNull();
+    expect(hasAnyRate(null, { arc: { podsPerNode: 4 } })).toBe(false);
   });
 });

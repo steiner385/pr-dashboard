@@ -128,7 +128,13 @@ export const METRIC_DEFINITIONS = {
   costRunPr: { label: 'PR',
     text: 'best-effort join of the run’s head sha onto a tracked open PR (or queued merge-group head) — ‘–’ when the head is no longer live (older pushes, merged PRs)' },
   prCiCost: { label: 'CI cost this run',
-    text: 'elapsed runner-minutes of the current head’s checks (running checks count started → now; foreign-workflow spans excluded). $ prices each check via its runs-on pool (poolMeta > costPerMinute > ‘default’); minutes-only when no rates are configured' },
+    text: 'elapsed runner-minutes of the current head’s checks (running checks count started → now; foreign-workflow spans excluded). $ prices each check via its runs-on pool (poolMeta > costPerMinute > ‘default’, ÷ podsPerNode); minutes-only when no rates are configured. ‘(partial)’ flags that some checks ran on unpriced pools — the $ undercounts' },
+  costActualsActual: { label: 'actual spend',
+    text: 'operator-imported daily spend for this scope (POST /api/cost/actuals — e.g. an AWS Cost Explorer cron; provider-agnostic). Scope ‘fleet’ is the whole bill; a pool scope is that pool’s share' },
+  costActualsAttributed: { label: 'attributed',
+    text: 'the per-day sum of priced job dollars (minutes × pool rate) over tracked CI jobs — what the dashboard can explain. Null until rates are configured' },
+  costActualsCoverage: { label: 'attribution coverage',
+    text: 'attributed job dollars ÷ actual imported spend. The unexplained remainder is idle runner capacity, node boot/teardown overhead, unpriced pools, and anything else on the bill that isn’t a tracked CI job — coverage trending DOWN with steady job minutes means the fleet is idling more' },
 
   // ---- merge velocity panel ----
   velocityMerged: { label: 'merged',

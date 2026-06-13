@@ -207,6 +207,13 @@ async function main() {
       config.costPerMinute ?? null, config.poolMeta ?? null,
       (repo, sha) => poller.prNumberForSha(repo, sha)),
     repos: () => poller.repoToggleList(),
+    // cost actuals import (cost explorer phase 2) — rows land in SQLite and
+    // surface through the metrics costActuals section
+    costActuals: {
+      upsert: (rows) => {
+        for (const r of rows) history.upsertCostActual(r.scope, r.date, r.dollars, r.source);
+      },
+    },
     webhooks: webhookSecret != null ? {
       path: config.webhooks.path,
       secret: webhookSecret,

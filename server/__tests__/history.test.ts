@@ -1277,3 +1277,52 @@ describe('run_number plumbing (cost explorer)', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Cost actuals import (cost explorer phase 2)
+// ---------------------------------------------------------------------------
+
+describe('cost actuals (cost explorer phase 2)', () => {
+  it('upserts and reads rows by date floor, ordered scope → date', () => {
+    h.upsertCostActual('fleet', '2026-06-10', 123.45, 'aws-ce');
+    h.upsertCostActual('fleet', '2026-06-09', 110, null);
+    h.upsertCostActual('kindash-arc', '2026-06-10', 80, 'aws-ce');
+    expect(h.costActualsSince('2026-06-09')).toEqual([
+      { scope: 'fleet', date: '2026-06-09', dollars: 110, source: null },
+      { scope: 'fleet', date: '2026-06-10', dollars: 123.45, source: 'aws-ce' },
+      { scope: 'kindash-arc', date: '2026-06-10', dollars: 80, source: 'aws-ce' },
+    ]);
+    // window floor: older dates drop out
+    expect(h.costActualsSince('2026-06-10').map((r) => r.date)).toEqual(['2026-06-10', '2026-06-10']);
+  });
+
+  it('re-importing the same (scope, date) REPLACES dollars and source (idempotent cron)', () => {
+    h.upsertCostActual('fleet', '2026-06-10', 100, 'manual');
+    h.upsertCostActual('fleet', '2026-06-10', 123.45, 'aws-ce');
+    expect(h.costActualsSince('2026-06-01')).toEqual([
+      { scope: 'fleet', date: '2026-06-10', dollars: 123.45, source: 'aws-ce' },
+    ]);
+  });
+
+  it('migration: a pre-existing DB gains the cost_actuals table on re-open', () => {
+    const { mkdtempSync, rmSync } = require('node:fs') as typeof import('node:fs');
+    const { tmpdir } = require('node:os') as typeof import('node:os');
+    const { join } = require('node:path') as typeof import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'prdash-hist-'));
+    try {
+      const path = join(dir, 'history.db');
+      const h1 = new HistoryStore(path);
+      // simulate a pre-upgrade DB: the table didn't exist before this feature
+      (h1 as unknown as { db: import('better-sqlite3').Database }).db
+        .exec('DROP TABLE cost_actuals');
+      h1.close();
+      const h2 = new HistoryStore(path); // re-open re-creates it
+      h2.upsertCostActual('fleet', '2026-06-10', 42, null);
+      expect(h2.costActualsSince('2026-06-01'))
+        .toEqual([{ scope: 'fleet', date: '2026-06-10', dollars: 42, source: null }]);
+      h2.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

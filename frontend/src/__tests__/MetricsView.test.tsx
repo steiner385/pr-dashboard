@@ -1011,3 +1011,84 @@ describe('MetricsView — Concurrency demand panel (issue #47)', () => {
     expect(within(panel).getByText('no job intervals in window yet')).toBeInTheDocument();
   });
 });
+
+describe('MetricsView — cost actuals + attribution coverage (phase 2)', () => {
+  const costPanel = async () => {
+    const heading = await screen.findByRole('heading', { name: 'CI cost' });
+    return heading.closest('section')! as HTMLElement;
+  };
+
+  const ACTUALS: NonNullable<MetricsPayload['costActuals']> = [
+    { scope: 'fleet',
+      days: [
+        { date: '2026-06-10', actualDollars: 123.45, attributedDollars: 71.6, coveragePct: 58 },
+        { date: '2026-06-11', actualDollars: 100, attributedDollars: 40, coveragePct: 40 },
+      ],
+      totalActualDollars: 223.45, totalAttributedDollars: 111.6, coveragePct: 49.94 },
+  ];
+
+  it('renders the actuals tiles, the coverage headline, and the per-day table', async () => {
+    mockFetchOk({ ...PAYLOAD, costActuals: ACTUALS });
+    render(<MetricsView now={NOW} />);
+    const panel = await costPanel();
+    const block = within(panel).getByTestId('cost-actuals-fleet');
+    expect(within(block).getByText('$223.45')).toBeInTheDocument();   // actual spend
+    expect(within(block).getByText('actual spend')).toBeInTheDocument();
+    expect(within(block).getByText('$111.60')).toBeInTheDocument();   // attributed
+    expect(within(block).getByText('2 days imported')).toBeInTheDocument();
+    const headline = within(panel).getByTestId('cost-coverage-fleet');
+    expect(headline.textContent).toContain('jobs explain 50% of fleet spend');
+    // per-day rows
+    const rows = within(block).getAllByRole('row').slice(1);
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]!).getByText('2026-06-10')).toBeInTheDocument();
+    expect(within(rows[0]!).getByText('$123.45')).toBeInTheDocument();
+    expect(within(rows[0]!).getByText('$71.60')).toBeInTheDocument();
+    expect(within(rows[0]!).getByText('58%')).toBeInTheDocument();
+  });
+
+  it('minutes-only mode: attributed/coverage read "–", no headline, and the rates nudge shows', async () => {
+    const minutesOnly: NonNullable<MetricsPayload['costActuals']> = [
+      { scope: 'fleet',
+        days: [{ date: '2026-06-11', actualDollars: 100, attributedDollars: null, coveragePct: null }],
+        totalActualDollars: 100, totalAttributedDollars: null, coveragePct: null },
+    ];
+    mockFetchOk({ ...PAYLOAD, costActuals: minutesOnly });
+    render(<MetricsView now={NOW} />);
+    const panel = await costPanel();
+    const block = within(panel).getByTestId('cost-actuals-fleet');
+    // tile value AND the per-day table cell both show the actual
+    expect(within(block).getAllByText('$100.00').length).toBeGreaterThan(0);
+    expect(within(panel).queryByTestId('cost-coverage-fleet')).not.toBeInTheDocument();
+    expect(within(block).getByText(/attribution needs rates/)).toBeInTheDocument();
+  });
+
+  it('renders per-pool scopes alongside fleet (scope name in the heading and headline)', async () => {
+    const scoped = [...ACTUALS,
+      { scope: 'kindash-arc',
+        days: [{ date: '2026-06-11', actualDollars: 50, attributedDollars: 45, coveragePct: 90 }],
+        totalActualDollars: 50, totalAttributedDollars: 45, coveragePct: 90 }];
+    mockFetchOk({ ...PAYLOAD, costActuals: scoped });
+    render(<MetricsView now={NOW} />);
+    const panel = await costPanel();
+    expect(within(panel).getByTestId('cost-actuals-kindash-arc')).toBeInTheDocument();
+    expect(within(panel).getByTestId('cost-coverage-kindash-arc').textContent)
+      .toContain('jobs explain 90% of kindash-arc spend');
+  });
+
+  it('tolerates a pre-upgrade payload without costActuals (no actuals block, panel intact)', async () => {
+    mockFetchOk(PAYLOAD); // no costActuals key at all
+    render(<MetricsView now={NOW} />);
+    const panel = await costPanel();
+    expect(within(panel).queryByTestId('cost-actuals-fleet')).not.toBeInTheDocument();
+    expect(within(panel).getByText('runner-minutes')).toBeInTheDocument();
+  });
+
+  it('actuals render even when no job minutes exist (panel is non-empty on actuals alone)', async () => {
+    mockFetchOk({ ...EMPTY, costActuals: ACTUALS });
+    render(<MetricsView now={NOW} />);
+    const panel = await costPanel();
+    expect(within(panel).queryByText('no runner-minutes in window yet')).not.toBeInTheDocument();
+    expect(within(panel).getByTestId('cost-actuals-fleet')).toBeInTheDocument();
+  });
+});

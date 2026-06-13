@@ -312,6 +312,9 @@ export function MetricsView({ now }: {
   // Cost explorer sub-sections (?? [] tolerates a pre-upgrade server payload)
   const costJobsByRepo = new Map((payload.costJobs ?? []).map((j) => [j.repo, j.jobs]));
   const costRunsByRepo = new Map((payload.costRuns ?? []).map((r) => [r.repo, r.runs]));
+  // Actuals vs attributed (phase 2): always day-keyed — bills are daily
+  const costActualScopes = (payload.costActuals ?? []).filter((a) => a.days.length > 0);
+  const dayAxis = windowBuckets(payload.window, 'day', (now ?? (() => new Date()))());
 
   return (
     <div className="metrics">
@@ -465,8 +468,74 @@ export function MetricsView({ now }: {
         ))}
       </Panel>
 
-      <Panel title="CI cost" empty={costRepos.length === 0}
+      <Panel title="CI cost" empty={costRepos.length === 0 && costActualScopes.length === 0}
         emptyText="no runner-minutes in window yet">
+        {/* Actuals vs attributed (phase 2): imported daily bills per scope,
+            with the coverage headline. Day-keyed regardless of the bucket
+            selector — bills are daily. */}
+        {costActualScopes.map((a) => {
+          const dayRows = a.days.map((d) => ({ bucket: d.date, ...d }));
+          const series: LineSeries[] = [
+            { name: 'actual $', color: POOL_COLORS[1]!,
+              points: align(dayAxis, dayRows, (d) => d.actualDollars) },
+            { name: 'attributed $', color: POOL_COLORS[0]!,
+              points: align(dayAxis, dayRows.filter((d) => d.attributedDollars != null),
+                (d) => d.attributedDollars!) },
+          ];
+          return (
+            <div key={a.scope} className="metric-repo" data-testid={`cost-actuals-${a.scope}`}>
+              <h3>actual spend — {a.scope}</h3>
+              <div className="metric-row">
+                <MetricStat label="actual spend" def={DEFS.costActualsActual}
+                  value={fmtDollars(a.totalActualDollars)}
+                  delta={`${a.days.length} day${a.days.length === 1 ? '' : 's'} imported`} />
+                <MetricStat label="attributed" def={DEFS.costActualsAttributed}
+                  value={a.totalAttributedDollars != null
+                    ? fmtDollars(a.totalAttributedDollars) : '–'} />
+                <MetricStat label="coverage" def={DEFS.costActualsCoverage}
+                  value={a.coveragePct != null ? fmtPct(a.coveragePct) : '–'} />
+              </div>
+              {a.coveragePct != null && (
+                <p className="metric-note cost-coverage-headline"
+                  title={defTitle(DEFS.costActualsCoverage)}
+                  data-testid={`cost-coverage-${a.scope}`}>
+                  jobs explain {fmtPct(a.coveragePct)} of {a.scope} spend — the rest
+                  is idle runner capacity, node overhead, and unpriced pools
+                </p>
+              )}
+              <ChartBlock label="actual vs attributed $ per day">
+                <MultiLine series={series} kind="day" format={fmtDollars}
+                  label={`${a.scope} actual vs attributed dollars per day`} />
+              </ChartBlock>
+              <table className="metric-table">
+                <thead>
+                  <tr>
+                    <th>day</th>
+                    <th title={defTitle(DEFS.costActualsActual)}>actual $</th>
+                    <th title={defTitle(DEFS.costActualsAttributed)}>attributed $</th>
+                    <th title={defTitle(DEFS.costActualsCoverage)}>coverage</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {a.days.map((d) => (
+                    <tr key={d.date}>
+                      <td>{d.date}</td>
+                      <td>{fmtDollars(d.actualDollars)}</td>
+                      <td>{d.attributedDollars != null ? fmtDollars(d.attributedDollars) : '–'}</td>
+                      <td>{d.coveragePct != null ? fmtPct(d.coveragePct) : '–'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {a.totalAttributedDollars == null && (
+                <p className="metric-note">
+                  attribution needs rates — set costPerMinute or poolMeta $/min in
+                  config.json to compute coverage
+                </p>
+              )}
+            </div>
+          );
+        })}
         {costRepos.map((c) => {
           const maxPoolMinutes = Math.max(...c.pools.map((pl) => pl.minutes));
           const series: LineSeries[] = c.pools.map((pl, i) => ({
@@ -586,7 +655,7 @@ export function MetricsView({ now }: {
               </div>
               <p className="metric-note">
                 {c.totalDollars != null
-                  ? 'dollars = minutes × pool rate (file-only config: poolMeta $/min supersedes costPerMinute per pool, ‘default’ backs the rest) — unpriced pools stay out of the $ totals. '
+                  ? 'dollars = minutes × pool rate (file-only config: poolMeta $/min supersedes costPerMinute per pool, ‘default’ backs the rest, ÷ podsPerNode corrects bin-packing) — unpriced pools stay out of the $ totals. '
                   : 'minutes only — set costPerMinute or poolMeta in config.json (pool → $/min, ‘default’ fallback) to see $. '}
                 retry burden = minutes on run_attempt &gt; 1 (re-runs after flakes,
                 spot reclaims, manual retries)

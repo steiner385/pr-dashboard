@@ -5295,7 +5295,36 @@ describe('computePrCost (cost explorer)', () => {
     const negative: CheckRun = { ...base, name: 'skipped-placeholder',
       startedAt: '2026-06-10T11:10:00Z', completedAt: '2026-06-10T11:00:00Z' };
     expect(computePrCost([unstarted, negative], 'CI', spotPools, { default: 0.01 }, null, NOW_COST))
-      .toEqual({ costMinutes: null, costDollars: null });
+      .toEqual({ costMinutes: null, costDollars: null, costDollarsPartial: false });
+  });
+
+  it('costDollarsPartial flags a $ undercount: rates exist but a counted check is unpriced', () => {
+    const mystery: CheckRun = { ...base, name: 'mystery' }; // pool unknowable → 'unknown'
+    const { costDollars, costDollarsPartial } = computePrCost([base, mystery], 'CI',
+      spotPools, { spot: 0.01 }, null, NOW_COST); // no 'default' → mystery unpriced
+    expect(costDollars).toBeCloseTo(0.1);
+    expect(costDollarsPartial).toBe(true);
+  });
+
+  it('costDollarsPartial stays false when every check is priced (default backstop counts)', () => {
+    const mystery: CheckRun = { ...base, name: 'mystery' };
+    const { costDollarsPartial } = computePrCost([base, mystery], 'CI',
+      spotPools, { spot: 0.01, default: 0.02 }, null, NOW_COST);
+    expect(costDollarsPartial).toBe(false);
+  });
+
+  it('costDollarsPartial stays false in minutes-only mode — it qualifies a $, never replaces one', () => {
+    const mystery: CheckRun = { ...base, name: 'mystery' };
+    const { costDollars, costDollarsPartial } = computePrCost([base, mystery], 'CI',
+      spotPools, null, null, NOW_COST);
+    expect(costDollars).toBeNull();
+    expect(costDollarsPartial).toBe(false);
+  });
+
+  it('podsPerNode divides the PR-level rate too (shared poolRate resolution)', () => {
+    const { costDollars } = computePrCost([base], 'CI', spotPools,
+      { spot: 0.012 }, { spot: { podsPerNode: 4 } }, NOW_COST);
+    expect(costDollars).toBeCloseTo(0.03); // 10 min × ($0.012 ÷ 4)
   });
 });
 

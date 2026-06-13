@@ -69,6 +69,12 @@ export interface GroupFailureRow {
   repo: string; checkName: string; groupSha: string; at: string;
 }
 
+/** One imported actual-spend row (cost explorer phase 2): `scope` is 'fleet'
+ *  or a single pool label; `date` is the bill's YYYY-MM-DD day. */
+export interface CostActualRow {
+  scope: string; date: string; dollars: number; source: string | null;
+}
+
 /**
  * `ALTER TABLE … ADD COLUMN` that tolerates exactly one failure mode: the
  * column already existing (idempotent re-open of a migrated DB). Any other
@@ -160,6 +166,9 @@ export class HistoryStore {
   private readonly stmtSelectIntervalsSince: Database.Statement;
   // CI cost attribution (issue #43): runner-minute rows
   private readonly stmtSelectCostRows: Database.Statement;
+  // Cost actuals import (cost explorer phase 2)
+  private readonly stmtUpsertCostActual: Database.Statement;
+  private readonly stmtSelectCostActuals: Database.Statement;
 
   constructor(path: string) {
     this.db = new Database(path);
@@ -219,6 +228,15 @@ export class HistoryStore {
         UNIQUE(repo, group_sha, check_name)
       );
       CREATE INDEX IF NOT EXISTS idx_group_failures_observed ON group_failures(observed_at);
+      -- Cost actuals import (cost explorer phase 2): operator-pushed ACTUAL
+      -- daily spend per scope ('fleet', or a single pool label) — deliberately
+      -- provider-agnostic: anything that can curl POST /api/cost/actuals can
+      -- feed it (AWS Cost Explorer cron, a spreadsheet export, …).
+      -- UNIQUE(scope, date) makes re-imports idempotent upserts.
+      CREATE TABLE IF NOT EXISTS cost_actuals (
+        scope TEXT NOT NULL, date TEXT NOT NULL, dollars REAL NOT NULL, source TEXT,
+        UNIQUE(scope, date)
+      );
     `);
 
     // Migration: merged_prs gains created_at (PR lifespan metric). Fresh DBs get
@@ -452,6 +470,13 @@ export class HistoryStore {
               duration_secs, run_attempt
        FROM check_durations WHERE completed_at >= ?
        ORDER BY repo, completed_at`
+    );
+    this.stmtUpsertCostActual = this.db.prepare(
+      `INSERT INTO cost_actuals (scope, date, dollars, source) VALUES (?,?,?,?)
+       ON CONFLICT(scope, date) DO UPDATE SET dollars=excluded.dollars, source=excluded.source`
+    );
+    this.stmtSelectCostActuals = this.db.prepare(
+      'SELECT scope, date, dollars, source FROM cost_actuals WHERE date >= ? ORDER BY scope, date'
     );
   }
 
@@ -924,6 +949,20 @@ export class HistoryStore {
         runNumber: (r.run_number as number | null) ?? null,
         startedAt, durationSecs, runAttempt: (r.run_attempt as number | null) ?? null };
     });
+  }
+
+  /** Cost actuals import (cost explorer phase 2): write-or-replace one
+   *  (scope, date) row — re-imports are idempotent; the latest POST wins. */
+  upsertCostActual(scope: string, date: string, dollars: number, source: string | null): void {
+    this.stmtUpsertCostActual.run(scope, date, dollars, source);
+  }
+
+  /** Imported actual-spend rows with date ≥ `sinceDate` (a YYYY-MM-DD key —
+   *  actual bills are daily), ordered scope → date. */
+  costActualsSince(sinceDate: string): CostActualRow[] {
+    const rows = this.stmtSelectCostActuals.all(sinceDate) as Record<string, unknown>[];
+    return rows.map((r) => ({ scope: r.scope as string, date: r.date as string,
+      dollars: r.dollars as number, source: (r.source as string | null) ?? null }));
   }
 
   /** SUCCESS check durations at/after `since` with full timestamps (bucketing happens in metrics). */

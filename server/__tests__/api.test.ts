@@ -491,7 +491,8 @@ const EMPTY_METRICS = (w: MetricsWindow, b: MetricsBucket): MetricsPayload =>
   ({ window: w, bucket: b, runnerWaits: [], queue: [], slowestJobs: [], velocity: [],
     leadTime: [], trends: [], calibration: [], flakiness: [], trainKillers: [],
     criticalPath: [], lint: [], regressions: [],
-    runnerPools: [], reclaims: [], concurrency: [], cost: [], costJobs: [], costRuns: [] });
+    runnerPools: [], reclaims: [], concurrency: [], cost: [], costJobs: [], costRuns: [],
+    costActuals: [] });
 
 describe('GET /api/metrics', () => {
   function metricsApp() {
@@ -550,5 +551,120 @@ describe('GET /api/repos', () => {
     ]);
     const bare = createApp({ getState: () => STATE, bus: new EventEmitter() });
     expect((await request(bare).get('/api/repos')).status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cost actuals import (cost explorer phase 2): POST /api/cost/actuals
+// ---------------------------------------------------------------------------
+
+import { validateCostActualsBody, type CostActualInput } from '../api';
+
+describe('validateCostActualsBody', () => {
+  it('accepts a single row; scope defaults to fleet, source to null', () => {
+    const v = validateCostActualsBody({ date: '2026-06-11', dollars: 123.45 });
+    expect(v).toEqual({ ok: true,
+      rows: [{ scope: 'fleet', date: '2026-06-11', dollars: 123.45, source: null }] });
+  });
+
+  it('accepts an array of rows with explicit scope/source (trimmed)', () => {
+    const v = validateCostActualsBody([
+      { scope: ' kindash-arc ', date: '2026-06-10', dollars: 80, source: ' aws-ce ' },
+      { date: '2026-06-11', dollars: 90.5 },
+    ]);
+    expect(v).toEqual({ ok: true, rows: [
+      { scope: 'kindash-arc', date: '2026-06-10', dollars: 80, source: 'aws-ce' },
+      { scope: 'fleet', date: '2026-06-11', dollars: 90.5, source: null },
+    ] });
+  });
+
+  it('rejects malformed dates, impossible calendar days, and bad dollars', () => {
+    for (const body of [
+      { date: '06/11/2026', dollars: 1 },
+      { date: '2026-6-1', dollars: 1 },
+      { date: '2026-02-31', dollars: 1 },     // not a real day
+      { date: '2026-06-11', dollars: -1 },
+      { date: '2026-06-11', dollars: '12' },
+      { date: '2026-06-11', dollars: Infinity },
+      { date: '2026-06-11' },
+    ]) {
+      const v = validateCostActualsBody(body);
+      expect(v.ok, JSON.stringify(body)).toBe(false);
+    }
+  });
+
+  it('rejects unknown keys, empty scope/source, non-object rows, and empty arrays', () => {
+    expect(validateCostActualsBody({ date: '2026-06-11', dollars: 1, dolars: 2 }).ok).toBe(false);
+    expect(validateCostActualsBody({ date: '2026-06-11', dollars: 1, scope: ' ' }).ok).toBe(false);
+    expect(validateCostActualsBody({ date: '2026-06-11', dollars: 1, source: '' }).ok).toBe(false);
+    expect(validateCostActualsBody('row').ok).toBe(false);
+    expect(validateCostActualsBody(null).ok).toBe(false);
+    expect(validateCostActualsBody([]).ok).toBe(false);
+  });
+
+  it('all-or-nothing: one bad row in an array fails the whole batch with indexed errors', () => {
+    const v = validateCostActualsBody([
+      { date: '2026-06-10', dollars: 1 },
+      { date: 'nope', dollars: 1 },
+    ]);
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.errors.join(' ')).toContain('[1].date');
+  });
+});
+
+describe('POST /api/cost/actuals', () => {
+  const actualsApp = (upsert: (rows: CostActualInput[]) => void) =>
+    createApp({ getState: () => STATE, bus: new EventEmitter(), costActuals: { upsert } });
+
+  it('upserts validated rows and reports the count', async () => {
+    const upsert = vi.fn();
+    const res = await request(actualsApp(upsert)).post('/api/cost/actuals')
+      .send([{ date: '2026-06-11', dollars: 123.45, source: 'aws-ce' }]);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ upserted: 1 });
+    expect(upsert).toHaveBeenCalledWith(
+      [{ scope: 'fleet', date: '2026-06-11', dollars: 123.45, source: 'aws-ce' }]);
+  });
+
+  it('400s invalid bodies with the error list; upsert never runs', async () => {
+    const upsert = vi.fn();
+    const res = await request(actualsApp(upsert)).post('/api/cost/actuals')
+      .send({ date: 'yesterday', dollars: 1 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid cost actuals');
+    expect(res.body.errors.join(' ')).toContain('date');
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('same-origin guard: cross-site browsers are 403, header-less crons pass', async () => {
+    const upsert = vi.fn();
+    const blocked = await request(actualsApp(upsert)).post('/api/cost/actuals')
+      .set('sec-fetch-site', 'cross-site')
+      .send({ date: '2026-06-11', dollars: 1 });
+    expect(blocked.status).toBe(403);
+    const foreign = await request(actualsApp(upsert)).post('/api/cost/actuals')
+      .set('origin', 'https://evil.example')
+      .send({ date: '2026-06-11', dollars: 1 });
+    expect(foreign.status).toBe(403);
+    expect(upsert).not.toHaveBeenCalled();
+    // no Origin / no Sec-Fetch-Site — exactly what `aws ce ... | curl` sends
+    const curl = await request(actualsApp(upsert)).post('/api/cost/actuals')
+      .send({ date: '2026-06-11', dollars: 1 });
+    expect(curl.status).toBe(200);
+    expect(upsert).toHaveBeenCalledTimes(1);
+  });
+
+  it('a throwing upsert surfaces as 500 with the message', async () => {
+    const res = await request(actualsApp(() => { throw new Error('disk full'); }))
+      .post('/api/cost/actuals').send({ date: '2026-06-11', dollars: 1 });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('disk full');
+  });
+
+  it('404 when the endpoint is not wired (no costActuals opt)', async () => {
+    const app = createApp({ getState: () => STATE, bus: new EventEmitter() });
+    const res = await request(app).post('/api/cost/actuals')
+      .send({ date: '2026-06-11', dollars: 1 });
+    expect(res.status).toBe(404);
   });
 });

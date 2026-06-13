@@ -297,7 +297,7 @@ describe('computeMetrics: empty history', () => {
       runnerWaits: [], queue: [], slowestJobs: [], velocity: [], leadTime: [], trends: [],
       calibration: [], flakiness: [], trainKillers: [], criticalPath: [], lint: [],
       regressions: [], runnerPools: [], reclaims: [], concurrency: [], cost: [],
-      costJobs: [], costRuns: [],
+      costJobs: [], costRuns: [], costActuals: [],
     });
   });
 });
@@ -1265,5 +1265,106 @@ describe('computeMetrics: cost explorer (per-job, per-run, poolMeta)', () => {
       [], poolsFor, [], null);
     expect(m.costJobs).toEqual([]);
     expect(m.costRuns).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cost actuals + attribution coverage (cost explorer phase 2)
+// ---------------------------------------------------------------------------
+
+describe('computeMetrics: cost actuals + attribution coverage (phase 2)', () => {
+  /** unit-tests/build → spot; e2e → composite ternary; mystery → unmappable. */
+  const poolsFor = (_repo: string, name: string): string[] | null =>
+    name.startsWith('e2e') ? ['spot', 'ondemand']
+      : name === 'mystery' ? null
+        : ['spot'];
+
+  const actuals = (opts: {
+    cpm?: Record<string, number> | null;
+    exclude?: string[];
+  } = {}) =>
+    computeMetrics(h, '24h', 'hour', NOW, opts.exclude ?? [], () => 1, new Map(), new Map(),
+      [], poolsFor, [], opts.cpm ?? null, null, () => null).costActuals;
+
+  const job = (name: string, startISO: string, secs: number, repo = REPO): void => {
+    const start = new Date(startISO);
+    const end = new Date(start.getTime() + secs * 1000);
+    h.recordCheckDuration(repo, name, 'pull_request', start.toISOString(),
+      end.toISOString(), 'SUCCESS', 'sha1', 1, 1);
+  };
+
+  it('joins per-day actuals with per-day attributed dollars; coverage = attributed ÷ actual', () => {
+    job('unit-tests', '2026-06-11T10:00:00Z', 600);   // spot, 10 min
+    job('build', '2026-06-11T11:00:00Z', 1200);       // spot, 20 min
+    h.upsertCostActual('fleet', '2026-06-11', 0.60, 'aws-ce');
+    const [fleet] = actuals({ cpm: { spot: 0.01 } }); // 30 min × $0.01 = $0.30
+    expect(fleet).toEqual({
+      scope: 'fleet',
+      days: [{ date: '2026-06-11', actualDollars: 0.60,
+        attributedDollars: expect.closeTo(0.30, 6), coveragePct: expect.closeTo(50, 6) }],
+      totalActualDollars: 0.60,
+      totalAttributedDollars: expect.closeTo(0.30, 6),
+      coveragePct: expect.closeTo(50, 6),
+    });
+  });
+
+  it('minutes-only mode (no rates): attributed and coverage stay null, actual still reports', () => {
+    job('unit-tests', '2026-06-11T10:00:00Z', 600);
+    h.upsertCostActual('fleet', '2026-06-11', 123, null);
+    const [fleet] = actuals();
+    expect(fleet!.days).toEqual([
+      { date: '2026-06-11', actualDollars: 123, attributedDollars: null, coveragePct: null }]);
+    expect(fleet!.totalAttributedDollars).toBeNull();
+    expect(fleet!.coveragePct).toBeNull();
+  });
+
+  it('a billed day with zero priced job rows reads attributed 0 / coverage 0, not null', () => {
+    h.upsertCostActual('fleet', '2026-06-11', 50, null);
+    const [fleet] = actuals({ cpm: { spot: 0.01 } });
+    expect(fleet!.days).toEqual([
+      { date: '2026-06-11', actualDollars: 50, attributedDollars: 0, coveragePct: 0 }]);
+  });
+
+  it('a $0 actual cannot be a coverage denominator — per-day and headline go null', () => {
+    job('unit-tests', '2026-06-11T10:00:00Z', 600);
+    h.upsertCostActual('fleet', '2026-06-11', 0, null);
+    const [fleet] = actuals({ cpm: { spot: 0.01 } });
+    expect(fleet!.days[0]!.coveragePct).toBeNull();
+    expect(fleet!.coveragePct).toBeNull();
+  });
+
+  it('pool scopes attribute only their own pool; unpriced pools never attribute; fleet sorts first', () => {
+    job('unit-tests', '2026-06-11T10:00:00Z', 600);   // spot
+    job('e2e', '2026-06-11T10:10:00Z', 600);          // spot|ondemand composite
+    job('mystery', '2026-06-11T10:20:00Z', 600);      // unknown — no rate, never attributes
+    h.upsertCostActual('spot', '2026-06-11', 1, null);
+    h.upsertCostActual('fleet', '2026-06-11', 1, null);
+    const out = actuals({ cpm: { 'spot': 0.01, 'spot|ondemand': 0.02 } });
+    expect(out.map((a) => a.scope)).toEqual(['fleet', 'spot']);
+    // fleet = spot $0.10 + composite $0.20 (mystery unpriced → excluded)
+    expect(out[0]!.days[0]!.attributedDollars).toBeCloseTo(0.30, 6);
+    // pool scope 'spot' = only the spot job's $0.10
+    expect(out[1]!.days[0]!.attributedDollars).toBeCloseTo(0.10, 6);
+  });
+
+  it('window floor applies to actual rows; headline sums in-window days only', () => {
+    h.upsertCostActual('fleet', '2026-06-01', 999, null); // outside the 24h window
+    h.upsertCostActual('fleet', '2026-06-11', 10, null);
+    const [fleet] = actuals({ cpm: { spot: 0.01 } });
+    expect(fleet!.days.map((d) => d.date)).toEqual(['2026-06-11']);
+    expect(fleet!.totalActualDollars).toBe(10);
+  });
+
+  it('excluded repos do not attribute (the actual side is fleet-level and unaffected)', () => {
+    job('unit-tests', '2026-06-11T10:00:00Z', 600);                  // REPO — excluded below
+    job('unit-tests', '2026-06-11T10:00:00Z', 600, 'acme/other');    // stays
+    h.upsertCostActual('fleet', '2026-06-11', 1, null);
+    const [fleet] = actuals({ cpm: { spot: 0.01 }, exclude: [REPO] });
+    expect(fleet!.days[0]!.attributedDollars).toBeCloseTo(0.10, 6);
+  });
+
+  it('empty without imported rows (jobs alone produce no actuals section)', () => {
+    job('unit-tests', '2026-06-11T10:00:00Z', 600);
+    expect(actuals({ cpm: { spot: 0.01 } })).toEqual([]);
   });
 });

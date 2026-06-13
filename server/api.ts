@@ -57,6 +57,79 @@ function sameOriginGuard(req: express.Request, res: express.Response, next: expr
   next();
 }
 
+/** One validated cost-actuals row (cost explorer phase 2). */
+export interface CostActualInput {
+  scope: string; date: string; dollars: number; source: string | null;
+}
+
+export type CostActualsValidation =
+  | { ok: true; rows: CostActualInput[] }
+  | { ok: false; errors: string[] };
+
+const COST_ACTUAL_KEYS = new Set(['scope', 'date', 'dollars', 'source']);
+/** Sanity cap on rows per POST — a year of dailies fits with headroom. */
+const COST_ACTUALS_MAX_ROWS = 1000;
+
+/**
+ * Strict validation for POST /api/cost/actuals: a single row object or an
+ * array of them. Per row: `date` must be a REAL calendar YYYY-MM-DD day,
+ * `dollars` a finite number ≥ 0; `scope` defaults to 'fleet' (any non-empty
+ * pool label is accepted — the importer can't know the dashboard's pool keys);
+ * `source` is optional free-text. Unknown keys are rejected (a typo'd field
+ * silently dropping data is worse than a 400). All-or-nothing: any invalid
+ * row fails the whole request so a cron never half-imports.
+ */
+export function validateCostActualsBody(body: unknown): CostActualsValidation {
+  const errors: string[] = [];
+  const list = Array.isArray(body) ? body : [body];
+  if (list.length === 0) return { ok: false, errors: ['body must contain at least one row'] };
+  if (list.length > COST_ACTUALS_MAX_ROWS) {
+    return { ok: false, errors: [`body exceeds ${COST_ACTUALS_MAX_ROWS} rows`] };
+  }
+  const rows: CostActualInput[] = [];
+  list.forEach((item, i) => {
+    const at = Array.isArray(body) ? `[${i}]` : 'body';
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      errors.push(`${at} must be an object ({ scope?, date, dollars, source? })`);
+      return;
+    }
+    const r = item as Record<string, unknown>;
+    const unknown = Object.keys(r).filter((k) => !COST_ACTUAL_KEYS.has(k));
+    if (unknown.length) {
+      errors.push(`${at} has unknown key(s) ${unknown.join(', ')} (allowed: scope, date, dollars, source)`);
+    }
+    let scope = 'fleet';
+    if (r.scope !== undefined) {
+      if (typeof r.scope !== 'string' || !r.scope.trim()) {
+        errors.push(`${at}.scope must be a non-empty string ('fleet' or a pool label)`);
+      } else scope = r.scope.trim();
+    }
+    let date: string | null = null;
+    if (typeof r.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(r.date)) {
+      errors.push(`${at}.date must be a YYYY-MM-DD string (got ${JSON.stringify(r.date)})`);
+    } else {
+      // calendar-real days only — '2026-02-31' must not become a silent key
+      const parsed = new Date(`${r.date}T00:00:00Z`);
+      if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== r.date) {
+        errors.push(`${at}.date is not a real calendar day (got ${JSON.stringify(r.date)})`);
+      } else date = r.date;
+    }
+    let dollars: number | null = null;
+    if (typeof r.dollars !== 'number' || !Number.isFinite(r.dollars) || r.dollars < 0) {
+      errors.push(`${at}.dollars must be a finite number ≥ 0 (got ${JSON.stringify(r.dollars)})`);
+    } else dollars = r.dollars;
+    let source: string | null = null;
+    if (r.source !== undefined) {
+      if (typeof r.source !== 'string' || !r.source.trim()) {
+        errors.push(`${at}.source must be a non-empty string when present`);
+      } else source = r.source.trim();
+    }
+    if (date != null && dollars != null) rows.push({ scope, date, dollars, source });
+  });
+  if (errors.length) return { ok: false, errors };
+  return { ok: true, rows };
+}
+
 /** Wiring for the optional webhook receiver (mounted only when webhooks.enabled). */
 export interface WebhookApi {
   /** URL path the receiver mounts at (config webhooks.path). */
@@ -77,6 +150,9 @@ export function createApp(opts: {
   metrics?: (window: MetricsWindow, bucket: MetricsBucket) => MetricsPayload;
   /** GET /api/repos — discovered repos with their excluded flags (settings toggles). */
   repos?: () => { repo: string; excluded: boolean }[];
+  /** POST /api/cost/actuals — operator-imported daily spend (cost explorer
+   *  phase 2). Upsert is all-or-nothing over the validated rows. */
+  costActuals?: { upsert: (rows: CostActualInput[]) => void };
   /** Restart endpoint knobs — `exit` injectable for tests. */
   restart?: { exit?: (code: number) => void; delayMs?: number };
 }): express.Express {
@@ -130,6 +206,27 @@ export function createApp(opts: {
     app.get('/api/metrics', (req, res) => {
       const { window, bucket } = resolveMetricsQuery(req.query);
       res.json(metrics(window, bucket));
+    });
+  }
+
+  if (opts.costActuals) {
+    const sink = opts.costActuals;
+    // Same-origin guard like the other mutating endpoints: browsers can't
+    // cross-site POST money figures at loopback, while header-less clients
+    // (curl, an infra cron piping `aws ce get-cost-and-usage`) pass freely.
+    app.post('/api/cost/actuals', sameOriginGuard, (req, res) => {
+      const v = validateCostActualsBody(req.body);
+      if (!v.ok) {
+        res.status(400).json({ error: 'invalid cost actuals', errors: v.errors });
+        return;
+      }
+      try {
+        sink.upsert(v.rows);
+      } catch (e) {
+        res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+        return;
+      }
+      res.json({ upserted: v.rows.length });
     });
   }
 

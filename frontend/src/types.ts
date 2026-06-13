@@ -84,6 +84,9 @@ export interface PrView {
   /** The priced subset of costMinutes in dollars (poolMeta > costPerMinute >
    *  'default'); null in minutes-only mode. */
   costDollars?: number | null;
+  /** True when costDollars is a known undercount: rates exist but at least
+   *  one counted check ran on an unpriced pool — rendered '(partial)'. */
+  costDollarsPartial?: boolean;
 }
 
 /** Mirror of server estimator/queue.ts MergeEtaSimulation (issue #40). */
@@ -196,10 +199,12 @@ export interface AppConfig {
   /** CI cost attribution (issue #43): pool label → $ per runner-minute
    *  ('default' prices unlisted pools). File-only; absent = minutes only. */
   costPerMinute?: Record<string, number>;
-  /** Cost explorer: per-pool metadata — instance type (display) and an
-   *  optional $/min that SUPERSEDES costPerMinute for the same label.
-   *  File-only; read-only in the settings display. */
-  poolMeta?: Record<string, { instanceType?: string; dollarsPerMinute?: number; note?: string }>;
+  /** Cost explorer: per-pool metadata — instance type (display), an optional
+   *  $/min that SUPERSEDES costPerMinute for the same label, and an optional
+   *  podsPerNode divisor (bin-packing correction: N runner pods on one node
+   *  each cost 1/N of the node rate). File-only; read-only in settings. */
+  poolMeta?: Record<string, { instanceType?: string; dollarsPerMinute?: number;
+    podsPerNode?: number; note?: string }>;
 }
 
 /** Which config layer a per-repo setting value came from. */
@@ -390,4 +395,14 @@ export interface MetricsPayload {
   costRuns?: { repo: string; runs: { event: string; runNumber: number;
     headShaShort: string; minutes: number; dollars: number | null;
     jobCount: number; prNumber: number | null }[] }[];
+  /** Cost actuals + attribution coverage (cost explorer phase 2): imported
+   *  per-day ACTUAL spend per scope ('fleet' first) vs the per-day ATTRIBUTED
+   *  job dollars. ALWAYS day-keyed (bills are daily). attributedDollars /
+   *  coveragePct are null in minutes-only mode (and coverage when actual = 0).
+   *  Optional to tolerate pre-upgrade payloads. */
+  costActuals?: { scope: string;
+    days: { date: string; actualDollars: number; attributedDollars: number | null;
+      coveragePct: number | null }[];
+    totalActualDollars: number; totalAttributedDollars: number | null;
+    coveragePct: number | null }[];
 }

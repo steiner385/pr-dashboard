@@ -419,6 +419,19 @@ describe('PrRow — PR-level CI cost line (cost explorer)', () => {
     expect(line).toHaveAttribute('title', expect.stringContaining('CI cost this run'));
   });
 
+  it("'(partial)' qualifies the $ when some checks ran on unpriced pools", () => {
+    render(<PrRow pr={pr({ costMinutes: 38, costDollars: 1.2, costDollarsPartial: true })} hasDeploy />);
+    fireEvent.click(screen.getByText('#8962'));
+    expect(screen.getByTestId('pr-cost').textContent)
+      .toBe('CI cost this run: 38m (~$1.20) (partial)');
+  });
+
+  it("no '(partial)' suffix in minutes-only mode — the flag only qualifies a $ figure", () => {
+    render(<PrRow pr={pr({ costMinutes: 90, costDollars: null, costDollarsPartial: false })} hasDeploy />);
+    fireEvent.click(screen.getByText('#8962'));
+    expect(screen.getByTestId('pr-cost').textContent).toBe('CI cost this run: 1h 30m');
+  });
+
   it('minutes-only when no rates are configured (costDollars null)', () => {
     render(<PrRow pr={pr({ costMinutes: 90, costDollars: null })} hasDeploy />);
     fireEvent.click(screen.getByText('#8962'));

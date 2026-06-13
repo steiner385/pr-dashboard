@@ -119,7 +119,9 @@ export function PrRow({ pr, hasDeploy, queueCulprit = null, expandable = true }:
         <div className="check-sections pr-cost" data-testid="pr-cost"
           title={defTitle(DEFS.prCiCost)}>
           CI cost this run: {formatDur(pr.costMinutes * 60)}
-          {pr.costDollars != null ? ` (~$${pr.costDollars.toFixed(2)})` : ''}
+          {pr.costDollars != null
+            ? ` (~$${pr.costDollars.toFixed(2)})${pr.costDollarsPartial ? ' (partial)' : ''}`
+            : ''}
         </div>
       )}
       {/* workflow-change impact card (issue #49): derived-graph diff summary,

@@ -494,13 +494,14 @@ export function SettingsPanel({ open, onClose, returnFocusRef, connected }: Sett
                 </dd>
                 <dt>poolMeta</dt>
                 <dd>
-                  <code title="pool label → { instanceType, dollarsPerMinute, note } — instance types display in the cost explorer; a dollarsPerMinute here supersedes the costPerMinute entry for the same pool; file-only">
+                  <code title="pool label → { instanceType, dollarsPerMinute, podsPerNode, note } — instance types display in the cost explorer; a dollarsPerMinute here supersedes the costPerMinute entry for the same pool; the effective rate divides by podsPerNode (bin-packing correction); file-only">
                     {config.resolved.poolMeta
                       ? Object.entries(config.resolved.poolMeta)
                         .map(([pool, meta]) => [
                           pool,
                           [meta.instanceType,
-                            meta.dollarsPerMinute != null ? `$${meta.dollarsPerMinute}/min` : null]
+                            meta.dollarsPerMinute != null ? `$${meta.dollarsPerMinute}/min` : null,
+                            meta.podsPerNode != null ? `${meta.podsPerNode} pods/node` : null]
                             .filter(Boolean).join(', ') || '(empty)',
                         ].join(': ')).join(' · ')
                       : '(not configured — pools show no instance type)'}

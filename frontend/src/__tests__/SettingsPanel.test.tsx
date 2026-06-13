@@ -149,6 +149,25 @@ describe('SettingsPanel', () => {
       .toBeInTheDocument();
   });
 
+  it("instance section: tolerates rate-less poolMeta entries and shows podsPerNode (the live config's shape)", async () => {
+    // mirrors the operator's hand-written block: instanceType/note only, no rates
+    const withMeta = { ...CONFIG, resolved: { ...CONFIG.resolved,
+      poolMeta: {
+        'kindash-arc': { instanceType: 'EKS ARC (on-demand)', note: 'ci-fast NodePool' },
+        'kindash-arc|kindash-arc-spot': { instanceType: 'EKS ARC (runs-on ternary)' },
+        'kindash-arc-spot': { instanceType: 'EKS ARC (spot)', podsPerNode: 4 },
+      } } };
+    fetchSpy.mockImplementation(async (url: unknown) =>
+      String(url) === '/api/repos'
+        ? mockFetchOk({ repos: [] })
+        : mockFetchOk(withMeta));
+    render(<SettingsPanel open={true} onClose={() => {}} />);
+    expect(await screen.findByText(
+      'kindash-arc: EKS ARC (on-demand) · kindash-arc|kindash-arc-spot: EKS ARC (runs-on ternary)'
+      + ' · kindash-arc-spot: EKS ARC (spot), 4 pods/node'))
+      .toBeInTheDocument();
+  });
+
   it('renders per-repo read-only section with source tags', async () => {
     render(<SettingsPanel open={true} onClose={() => {}} />);
     expect((await screen.findAllByText('acme/widgets')).length).toBeGreaterThan(0);

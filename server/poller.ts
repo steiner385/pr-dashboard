@@ -118,6 +118,12 @@ export interface PrView {
    *  poolMeta > costPerMinute > 'default'). Null in minutes-only mode (no
    *  rates configured) or when costMinutes is null. */
   costDollars: number | null;
+  /** True when costDollars is a KNOWN UNDERCOUNT: rates are configured but at
+   *  least one counted check ran on an unpriced pool (its minutes are in
+   *  costMinutes, its dollars aren't). Always false in minutes-only mode and
+   *  when costMinutes is null — the flag qualifies a $ figure, never replaces
+   *  one. The UI renders '(partial)'. */
+  costDollarsPartial: boolean;
 }
 
 /** Absolute plausibility cap (secs) for a SUCCESS duration sample when the
@@ -197,16 +203,20 @@ export function ingestCheckSet(history: HistoryStore, repo: string, checks: Chec
  * spans are CI-lifecycle wall-clock, not runner occupancy. Per check the rate
  * resolves through its runs-on pool (poolFor candidates joined '|', unknown →
  * 'unknown') with the poolRate precedence (poolMeta > costPerMinute > the
- * 'default' pair); unpriced checks contribute minutes but no dollars (the
- * same documented undercount as the metrics $ totals). Returns nulls when no
- * check has started; dollars is null in minutes-only mode (no rates at all).
+ * 'default' pair); unpriced checks contribute minutes but no dollars — the
+ * same documented undercount as the metrics $ totals, surfaced here as
+ * `costDollarsPartial: true` so the UI can label the $ figure '(partial)'.
+ * Returns nulls when no check has started; dollars is null (and partial
+ * false) in minutes-only mode (no rates at all).
  */
 export function computePrCost(checks: CheckRun[], rollupWorkflowName: string | null,
   poolFor: (canonicalName: string) => string[] | null,
   costPerMinute: Record<string, number> | null,
   poolMeta: Record<string, PoolMetaEntry> | null,
-  now: Date): { costMinutes: number | null; costDollars: number | null } {
+  now: Date): { costMinutes: number | null; costDollars: number | null;
+    costDollarsPartial: boolean } {
   let sawSample = false;
+  let sawUnpriced = false;
   let minutes = 0;
   let dollars = 0;
   for (const c of checks) {
@@ -221,10 +231,13 @@ export function computePrCost(checks: CheckRun[], rollupWorkflowName: string | n
     const pools = poolFor(c.name);
     const rate = poolRate(pools?.length ? pools.join('|') : 'unknown', costPerMinute, poolMeta);
     if (rate != null) dollars += mins * rate;
+    else sawUnpriced = true;
   }
-  if (!sawSample) return { costMinutes: null, costDollars: null };
+  if (!sawSample) return { costMinutes: null, costDollars: null, costDollarsPartial: false };
+  const hasRates = hasAnyRate(costPerMinute, poolMeta);
   return { costMinutes: minutes,
-    costDollars: hasAnyRate(costPerMinute, poolMeta) ? dollars : null };
+    costDollars: hasRates ? dollars : null,
+    costDollarsPartial: hasRates && sawUnpriced };
 }
 
 /** Flake-rate map key — check names contain spaces and ' / ', so a NUL it is. */
@@ -1952,11 +1965,11 @@ export class Poller extends EventEmitter {
       ? this.mergeEtaSimFor(pr.repo, this.queueEntries.get(pr.repo) ?? [], pr.number, groups)
       : null;
     // PR-level CI cost (cost explorer): the current head's runner occupancy
-    const { costMinutes, costDollars } = computePrCost(pr.checks,
+    const { costMinutes, costDollars, costDollarsPartial } = computePrCost(pr.checks,
       this.rollupWorkflowFor(pr.repo), (n) => this.poolsFor(pr.repo, n),
       this.deps.config.costPerMinute ?? null, this.deps.config.poolMeta ?? null, now);
     return { repo: pr.repo, number: pr.number, title: pr.title, url: pr.url, stage,
-      queueAheadCount, costMinutes, costDollars,
+      queueAheadCount, costMinutes, costDollars, costDollarsPartial,
       checks: this.checkViews(pr, now, prefixes),
       timeline: null,
       touchesWorkflows: pr.touchesWorkflows,
@@ -2015,7 +2028,8 @@ export class Poller extends EventEmitter {
         enqueuedAt: rec.enqueuedAt, mergedAt: rec.mergedAt,
         qaLiveAt: rec.qaLiveAt, prodLiveAt: rec.prodLiveAt },
       touchesWorkflows: false, workflowImpact: null,
-      groupChecks: null, mergeEtaSim: null, costMinutes: null, costDollars: null };
+      groupChecks: null, mergeEtaSim: null, costMinutes: null, costDollars: null,
+      costDollarsPartial: false };
   }
 
   private checkViews(pr: PrSnapshot, now: Date, prefixes?: string[]): CheckView[] {

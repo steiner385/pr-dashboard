@@ -201,6 +201,25 @@ export interface MetricsPayload {
   costRuns: { repo: string; runs: { event: string; runNumber: number;
     headShaShort: string; minutes: number; dollars: number | null;
     jobCount: number; prNumber: number | null }[] }[];
+  /** Cost actuals + attribution coverage (cost explorer phase 2): operator-
+   *  imported per-day ACTUAL spend (POST /api/cost/actuals; scope 'fleet' or a
+   *  single pool label) joined against the per-day ATTRIBUTED dollars over the
+   *  same rows as `cost` (priced jobs only, summed across non-excluded repos;
+   *  a pool scope matches the job's runs-on pool key, 'fleet' takes every
+   *  priced job). ALWAYS day-keyed — actual bills are daily, so the hour/day
+   *  bucket selector never applies here. `attributedDollars` is null in
+   *  minutes-only mode (no rates configured); `coveragePct` = attributed ÷
+   *  actual × 100, null when either side is missing (no rates, or actual = 0).
+   *  The headline totals sum the in-window days that carry an actual row; the
+   *  UNEXPLAINED remainder (coverage < 100%) is idle runner time, node boot/
+   *  teardown overhead, unpriced pools, and anything else on the bill that
+   *  isn't a tracked CI job. Scopes with no actual rows in-window are omitted;
+   *  'fleet' sorts first. */
+  costActuals: { scope: string;
+    days: { date: string; actualDollars: number; attributedDollars: number | null;
+      coveragePct: number | null }[];
+    totalActualDollars: number; totalAttributedDollars: number | null;
+    coveragePct: number | null }[];
 }
 
 /** Lead-time segment ids, in pipeline order (issue #44). */
@@ -907,7 +926,46 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
     costRuns.push({ repo, runs });
   }
 
+  // 16. Cost actuals + attribution coverage (cost explorer phase 2): the
+  // operator-imported daily bills vs what the tracked jobs explain. Attributed
+  // dollars come from the SAME rows as `cost` (keep()-filtered, foreign names
+  // excluded), priced via the same rate resolution — bucketed by UTC start day
+  // regardless of the hour/day selector (bills are daily).
+  const dayOf = (ts: string): string => ts.slice(0, 10);
+  const attributedByScopeDay = new Map<string, number>(); // `${scope}\0${date}` → $
+  if (hasRates) {
+    for (const r of costRows) {
+      const pool = poolKeyOf(r.repo, r.name);
+      const rate = rateFor(pool);
+      if (rate == null) continue;
+      const d = (r.durationSecs / 60) * rate;
+      // a priced job attributes to its own pool's scope AND the fleet rollup
+      for (const scope of ['fleet', pool]) {
+        const k = `${scope}${SEP}${dayOf(r.startedAt)}`;
+        attributedByScopeDay.set(k, (attributedByScopeDay.get(k) ?? 0) + d);
+      }
+    }
+  }
+  const costActuals = [...groupBy(history.costActualsSince(since.slice(0, 10)), (r) => r.scope)]
+    .sort(([a], [b]) => (a === 'fleet' ? -1 : b === 'fleet' ? 1 : a.localeCompare(b)))
+    .map(([scope, rows]) => {
+      const days = [...rows].sort((a, b) => a.date.localeCompare(b.date)).map((r) => {
+        // a priced window with zero job rows that day is an honest 0, not null
+        const attributed = hasRates
+          ? attributedByScopeDay.get(`${scope}${SEP}${r.date}`) ?? 0 : null;
+        return { date: r.date, actualDollars: r.dollars, attributedDollars: attributed,
+          coveragePct: attributed != null && r.dollars > 0
+            ? (attributed / r.dollars) * 100 : null };
+      });
+      const totalActualDollars = days.reduce((s, d) => s + d.actualDollars, 0);
+      const totalAttributedDollars = hasRates
+        ? days.reduce((s, d) => s + (d.attributedDollars ?? 0), 0) : null;
+      return { scope, days, totalActualDollars, totalAttributedDollars,
+        coveragePct: totalAttributedDollars != null && totalActualDollars > 0
+          ? (totalAttributedDollars / totalActualDollars) * 100 : null };
+    });
+
   return { window, bucket, runnerWaits, queue, slowestJobs, velocity, leadTime, trends,
     calibration, flakiness, trainKillers, criticalPath, lint, regressions,
-    runnerPools, reclaims, concurrency, cost, costJobs, costRuns };
+    runnerPools, reclaims, concurrency, cost, costJobs, costRuns, costActuals };
 }
