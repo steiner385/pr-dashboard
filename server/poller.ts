@@ -16,7 +16,8 @@ import { buildSweepQuery, buildMergedPageQuery, buildOpenPageQuery, buildDetailQ
 import { mapPrNode, mapQueueEntries, mapRollupContexts } from './map';
 import { familyDisplayName, canonicalizeCheckName } from './normalize';
 import { selectRunIdsToFetch, observedKey, jobsApiPath, resolveJobsResponse,
-  type JobsApiResponse } from './pool-learning';
+  pushRunsApiPath, selectPushRunIds, type JobsApiResponse,
+  type WorkflowRunsResponse } from './pool-learning';
 import type { ObservedPool } from './history';
 import { computeProgress } from './estimator/progress';
 import { applyEtaCalibration, CALIBRATED_STAGES } from './estimator/calibrate';
@@ -427,6 +428,11 @@ const MAX_OPEN_PAGES = 5;
 /** Re-derive required-check prefixes from a deploy repo's ci.yml at most this often. */
 const PREFIX_DERIVE_INTERVAL_MS = 24 * 3600_000;
 
+/** Re-list a repo's recent push runs (to learn push-only job pools) at most
+ *  this often per repo — the push job set is near-static, so 6h is plenty to
+ *  fill it in without spamming the list call. */
+const PUSH_POOL_LEARN_INTERVAL_MS = 6 * 3600_000;
+
 /** Stages whose first ETA prediction is scored against the actual stage duration —
  *  the same set the conformal-lite range calibration applies to (single source
  *  of truth in estimator/calibrate.ts). */
@@ -520,6 +526,7 @@ export class Poller extends EventEmitter {
   private observedPoolKeys = new Set<string>();                        // observedKey(repo, canonicalName, event)
   private recentlyFetchedRunIds = new Map<number, number>();           // runDatabaseId → last-fetched ms
   private deriveThrottle = new RetryThrottle(PREFIX_DERIVE_INTERVAL_MS); // 24h on success, backoff on failure
+  private pushPoolThrottle = new RetryThrottle(PUSH_POOL_LEARN_INTERVAL_MS); // 6h on success; list-fail arms no throttle
   private envShas = new Map<string, string | null>();     // repo/env → deployed sha
   private propagating = new Set<string>();                // merged PR keys whose sha is 'missing'
   private discovered = new Set<string>();                  // every repo ever seen by a sweep (incl. excluded)
@@ -994,6 +1001,22 @@ export class Poller extends EventEmitter {
         eventByRunId.set(c.runDatabaseId, c.event);
       }
     }
+    await this.fetchAndRecordPools(client, repo, runIds,
+      (id) => eventByRunId.get(id) ?? 'unknown');
+  }
+
+  /**
+   * Fetch the Jobs API for each run id and record every job's pool under the
+   * event `eventForRunId(id)` returns. Shared by the checks-driven loop and the
+   * push-runs loop. Best-effort: a failed fetch logs once per repo and is left
+   * unobserved (retried next cycle); a RateLimitError pauses the poller and
+   * stops the rest of the batch. Only SUCCESSFUL fetches are marked
+   * recently-fetched, so a failure retries. The caller has already capped
+   * `runIds`.
+   */
+  private async fetchAndRecordPools(client: GithubClient, repo: string,
+    runIds: number[], eventForRunId: (id: number) => string): Promise<void> {
+    const [owner, name] = repo.split('/');
     const nowMs = this.now().getTime();
     for (const runId of runIds) {
       let resp: JobsApiResponse;
@@ -1008,13 +1031,54 @@ export class Poller extends EventEmitter {
         continue; // best-effort: leave the key unobserved, retry next cycle
       }
       this.recentlyFetchedRunIds.set(runId, nowMs);
-      const event = eventByRunId.get(runId) ?? 'unknown';
+      const event = eventForRunId(runId);
       for (const { name: rawJobName, pool } of resolveJobsResponse(resp)) {
         const canonical = canonicalizeCheckName(rawJobName);
         this.deps.history.recordObservedPool(repo, canonical, event, pool);
         this.observedPoolKeys.add(observedKey(repo, canonical, event));
       }
     }
+  }
+
+  /**
+   * Learn pools for PUSH-only jobs (Storybook deploy, smoke, axe-per-story,
+   * tag): they run ONLY on push to the default branch, so the checks-driven
+   * loop (PR + merge_group detail) never sees them and the sibling-event
+   * fallback has no sibling to borrow from. We list the workflow's most-recent
+   * completed push runs and fetch their jobs, recording observations under
+   * event='push' (resolvePool's sibling fallback then lets pull_request reads
+   * borrow them too). Throttled per-repo (~6h on success) so we don't spam the
+   * list call; the list-call cost is one REST request per eligible cycle.
+   *
+   * Best-effort: a list-call failure logs once per repo and retries the next
+   * eligible cycle (no throttle armed); a RateLimitError pauses the poller.
+   */
+  private async learnPushPools(client: GithubClient, repo: string): Promise<void> {
+    if (!this.pushPoolThrottle.due(repo, this.now().getTime())) return;
+    this.pruneRecentlyFetchedRunIds();
+    const [owner, name] = repo.split('/');
+    const settings = this.settingsFor(repo);
+    const workflowFile = settings.workflowPath.split('/').pop() ?? settings.workflowPath;
+    const branch = this.effectiveDeploy()[repo]?.defaultBranch ?? 'main';
+    let resp: WorkflowRunsResponse;
+    try {
+      resp = await client.restGet<WorkflowRunsResponse>(
+        pushRunsApiPath(owner ?? '', name ?? '', workflowFile, branch, 5));
+    } catch (e) {
+      if (e instanceof RateLimitError) { this.notePause(e.retryAfterSeconds); return; }
+      if (!this.warnedJobsApi.has(repo)) {
+        this.warnedJobsApi.add(repo);
+        console.warn(`[pool-learn] ${repo}: push-runs list failed — will retry: ${describeError(e)}`);
+      }
+      return; // no throttle armed → retry next eligible cycle
+    }
+    // List call succeeded — arm the 6h throttle even if there's nothing to fetch
+    // (don't re-list every cycle just because everything is already mapped).
+    this.pushPoolThrottle.success(repo, this.now().getTime());
+    const recent = new Set(this.recentlyFetchedRunIds.keys());
+    const ids = selectPushRunIds(resp, recent);
+    if (!ids.length) return;
+    await this.fetchAndRecordPools(client, repo, ids, () => 'push');
   }
 
   /** Drop recently-fetched run ids older than the dedup window so a long-lived
@@ -1098,6 +1162,8 @@ export class Poller extends EventEmitter {
     await this.refreshRepoConfigs();
     // ci.yml re-derivation shares this cycle too (24h per-repo throttle inside).
     await this.refreshDerivedGraphs();
+    // Push-only job pool learning shares this cycle too (6h per-repo throttle inside).
+    await this.refreshPushPools();
     const now = this.now();
     // expire old throttle entries so the map stays bounded
     for (const [k, at] of this.ancestryCheckedAt) {
@@ -1547,6 +1613,20 @@ export class Poller extends EventEmitter {
     for (const repo of [...this.derivationRepos()].sort()) {
       if (this.deps.config.exclude.includes(repo)) continue;
       await this.maybeRederivePrefixes(repo, deployMap[repo]?.defaultBranch);
+    }
+  }
+
+  /** Learn push-only job pools for every derivation-eligible repo (those with a
+   *  rollup workflow / explicitly watched), at most once per repo per 6h. Rides
+   *  the deploy cycle alongside the 24h ci.yml re-derivation. */
+  async refreshPushPools(): Promise<void> {
+    for (const repo of [...this.derivationRepos()].sort()) {
+      if (this.deps.config.exclude.includes(repo)) continue;
+      if (!this.pushPoolThrottle.due(repo, this.now().getTime())) continue;
+      const [owner] = repo.split('/');
+      const client = this.routedClient(owner ?? '');
+      if (!client) continue; // owner has no installation — skip without arming
+      await this.learnPushPools(client, repo);
     }
   }
 

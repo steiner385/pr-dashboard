@@ -3740,13 +3740,17 @@ describe("Poller ancestrySource 'api' (issue #18)", () => {
     const p = new Poller({ router: asRouter(client), history,
       deploy: apiDeploy({ 'https://qa.widgets.example.com/health': 'oldSha-qa' }),
       config: API_CONFIG, now: () => new Date(t) });
+    // Count only ancestry (compare-API) calls — the push-pool learner also
+    // issues a one-time workflow-runs list call against this same client.
+    const compareCalls = () => client.restGet.mock.calls.filter(
+      (c) => String(c[0]).includes('/compare/')).length;
     await p.sweepOnce();
     await p.deployOnce();
     await p.deployOnce(); // same clock → within 60s of the first check
-    expect(client.restGet).toHaveBeenCalledTimes(1);
+    expect(compareCalls()).toBe(1);
     t += 61_000; // step past the throttle window
     await p.deployOnce();
-    expect(client.restGet).toHaveBeenCalledTimes(2);
+    expect(compareCalls()).toBe(2);
   });
 
   it('a transport error falls back to a PRE-EXISTING clone for the evaluation, warning once', async () => {
@@ -5507,5 +5511,156 @@ describe('Poller learns job→pool from the Jobs REST API', () => {
     await p.sweepOnce();
     await p.detailOnce();
     expect(client.restGet).toHaveBeenCalledTimes(8);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Push-only job pool learning via the workflow push-runs list (feat #81)
+// ---------------------------------------------------------------------------
+
+describe('Poller learns push-only job pools from push workflow runs', () => {
+  // A clone-mode deploy fake that supplies the workflow-read methods so the
+  // shared deploy cycle's ci.yml re-derivation is a no-op (returns null) rather
+  // than throwing — keeps console quiet and isolates push-pool behavior.
+  const pushDeploy = () => ({
+    health: vi.fn(async () => null),
+    ensureClone: vi.fn(async () => {}),
+    fetchClone: vi.fn(async () => {}),
+    readFileAtHead: vi.fn(async () => null),
+    isAncestor: vi.fn(async () => 'missing' as const),
+  } as unknown as DeployWatcher);
+
+  const PUSH_RUNS_PATH =
+    '/repos/acme/widgets/actions/workflows/ci.yml/runs?event=push&branch=main&status=completed&per_page=5';
+
+  /** A client whose restGet serves the push-runs list (run 777) + its jobs. */
+  const pushClient = (
+    runs: unknown,
+    jobs: unknown[],
+    onRestGet?: (path: string) => void,
+  ) => ({
+    remaining: 4000, resetAt: null,
+    graphql: vi.fn(async (q: string) => {
+      if (q.includes('open0: search')) return { open0: { issueCount: 0, nodes: [] },
+        open1: { issueCount: 0, nodes: [] }, merged0: { issueCount: 0, nodes: [] },
+        merged1: { issueCount: 0, nodes: [] } };
+      throw new Error(`unexpected query: ${q.slice(0, 80)}`);
+    }),
+    restGet: vi.fn(async (path: string) => {
+      onRestGet?.(path);
+      if (path === PUSH_RUNS_PATH) return runs;
+      if (path.includes('/actions/runs/777/jobs')) return { jobs };
+      throw new Error(`unexpected restGet ${path}`);
+    }),
+  });
+
+  it('lists recent push runs and records their jobs under event=push', async () => {
+    const client = pushClient(
+      { workflow_runs: [{ id: 777 }] },
+      [{ name: 'Build Storybook', labels: ['kindash-arc-spot'], runner_group_name: 'arc' },
+       { name: 'smoke', labels: ['ubuntu-latest'], runner_group_name: 'GitHub Actions' }],
+    );
+    const p = new Poller({ router: asRouter(client), history, deploy: pushDeploy(),
+      config: CONFIG, now: () => NOW });
+    await p.deployOnce();
+    expect(client.restGet).toHaveBeenCalledWith(PUSH_RUNS_PATH);
+    expect(history.observedPool('acme/widgets', 'Build Storybook', 'push'))
+      .toEqual({ pool: 'kindash-arc-spot', githubHosted: false });
+    expect(history.observedPool('acme/widgets', 'smoke', 'push'))
+      .toEqual({ pool: 'ubuntu-latest', githubHosted: true });
+    // a pull_request read borrows the push observation via the sibling fallback
+    expect(p.resolvePool('acme/widgets', 'smoke', 'pull_request'))
+      .toEqual({ pool: 'ubuntu-latest', githubHosted: true });
+  });
+
+  it('fires once then stays quiet for 6h (per-repo throttle)', async () => {
+    let t = NOW.getTime();
+    const client = pushClient({ workflow_runs: [{ id: 777 }] },
+      [{ name: 'tag', labels: ['ubuntu-latest'] }]);
+    const listCalls = () => client.restGet.mock.calls.filter(
+      (c) => String(c[0]).includes('/runs?event=push')).length;
+    const p = new Poller({ router: asRouter(client), history, deploy: pushDeploy(),
+      config: CONFIG, now: () => new Date(t) });
+    await p.deployOnce();
+    expect(listCalls()).toBe(1);
+    await p.deployOnce(); // within 6h → throttled, no list call
+    expect(listCalls()).toBe(1);
+    t += 6 * 3600_000 + 1000; // past the 6h window
+    await p.deployOnce();
+    expect(listCalls()).toBe(2);
+  });
+
+  it('caps the runs fetched per cycle at 3 (newest first)', async () => {
+    const client = pushClient(
+      { workflow_runs: [{ id: 777 }, { id: 776 }, { id: 775 }, { id: 774 }] },
+      [{ name: 'axe-per-story', labels: ['kindash-arc-spot'] }]);
+    // jobs path only matches run 777; the others would throw "unexpected" if
+    // selectPushRunIds didn't cap — but the cap keeps it to the newest 3, and
+    // every fetched id maps to the same jobs handler below.
+    client.restGet.mockImplementation(async (path: string) => {
+      if (path === PUSH_RUNS_PATH) return { workflow_runs:
+        [{ id: 777 }, { id: 776 }, { id: 775 }, { id: 774 }] };
+      const m = path.match(/runs\/(\d+)\/jobs/);
+      if (m) return { jobs: [{ name: 'axe-per-story', labels: ['kindash-arc-spot'] }] };
+      throw new Error(`unexpected restGet ${path}`);
+    });
+    const p = new Poller({ router: asRouter(client), history, deploy: pushDeploy(),
+      config: CONFIG, now: () => NOW });
+    await p.deployOnce();
+    const jobCalls = client.restGet.mock.calls.filter((c) => /\/jobs/.test(String(c[0])));
+    expect(jobCalls).toHaveLength(3); // cap = MAX_PUSH_RUNS_PER_CYCLE
+  });
+
+  it('an empty push-runs list arms the throttle without fetching jobs', async () => {
+    const client = pushClient({ workflow_runs: [] }, []);
+    const listCalls = () => client.restGet.mock.calls.filter(
+      (c) => String(c[0]).includes('/runs?event=push')).length;
+    const p = new Poller({ router: asRouter(client), history, deploy: pushDeploy(),
+      config: CONFIG, now: () => NOW });
+    await p.deployOnce();
+    expect(listCalls()).toBe(1);
+    // no jobs fetch happened
+    expect(client.restGet.mock.calls.some((c) => /\/jobs/.test(String(c[0])))).toBe(false);
+    await p.deployOnce(); // throttled despite nothing learned → no re-list
+    expect(listCalls()).toBe(1);
+  });
+
+  it('a list-call failure warns once and retries next cycle (no throttle armed)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let fail = true;
+    const client = pushClient({ workflow_runs: [{ id: 777 }] },
+      [{ name: 'smoke', labels: ['kindash-arc-spot'] }]);
+    client.restGet.mockImplementation(async (path: string) => {
+      if (path === PUSH_RUNS_PATH) {
+        if (fail) throw new Error('boom');
+        return { workflow_runs: [{ id: 777 }] };
+      }
+      if (path.includes('/actions/runs/777/jobs')) return { jobs:
+        [{ name: 'smoke', labels: ['kindash-arc-spot'] }] };
+      throw new Error(`unexpected restGet ${path}`);
+    });
+    const p = new Poller({ router: asRouter(client), history, deploy: pushDeploy(),
+      config: CONFIG, now: () => NOW });
+    await p.deployOnce(); // list fails → nothing learned, no throttle
+    expect(history.observedPool('acme/widgets', 'smoke', 'push')).toBeNull();
+    fail = false;
+    await p.deployOnce(); // same clock, but the failed list armed no throttle → retry
+    expect(history.observedPool('acme/widgets', 'smoke', 'push'))
+      .toEqual({ pool: 'kindash-arc-spot', githubHosted: false });
+    const listWarns = warn.mock.calls.filter((c) => String(c).includes('push-runs list failed'));
+    expect(listWarns).toHaveLength(1); // warn-once
+    warn.mockRestore();
+  });
+
+  it('a RateLimitError on the list call pauses the poller', async () => {
+    const client = pushClient({ workflow_runs: [{ id: 777 }] }, []);
+    client.restGet.mockImplementation(async (path: string) => {
+      if (path === PUSH_RUNS_PATH) throw new RateLimitError(30);
+      throw new Error(`unexpected restGet ${path}`);
+    });
+    const p = new Poller({ router: asRouter(client), history, deploy: pushDeploy(),
+      config: CONFIG, now: () => NOW });
+    await expect(p.deployOnce()).resolves.not.toThrow();
+    expect(history.observedPool('acme/widgets', 'x', 'push')).toBeNull();
   });
 });
