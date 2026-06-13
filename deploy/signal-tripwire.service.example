@@ -1,0 +1,13 @@
+[Unit]
+Description=Signal tripwire — logs who sends TERM/KILL/INT/QUIT to node processes
+After=multi-user.target
+
+[Service]
+ExecStart=/usr/bin/bpftrace /opt/signal-tripwire/trace-node-signals.bt
+Restart=always
+RestartSec=5
+# bpftrace needs CAP_BPF/perfmon; run as root
+User=root
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+#!/usr/bin/env bpftrace
+/* Logs who sends TERM/INT/KILL/QUIT to any `node` process. Sender =
+ * current task (comm/pid/uid); target = args->pid. Built after an
+ * unexplained SIGTERM killed pr-dashboard 2026-06-13 00:43. */
+tracepoint:signal:signal_generate
+/(args->sig == 15 || args->sig == 9 || args->sig == 2 || args->sig == 3)
+ && args->comm == "node"/
+{
+  printf("SIG%d -> node pid=%d  SENT BY %s(pid=%d uid=%d)\n",
+         args->sig, args->pid, comm, pid, uid);
+}
