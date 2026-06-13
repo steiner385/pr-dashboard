@@ -9,7 +9,7 @@ WorkingDirectory=__APP_ROOT__
 # →node tree can leave a tsx child outside systemd's cgroup; it keeps POLLING
 # (double GitHub API usage) even when it no longer holds the port, so the
 # port-clear alone misses it. pkill by the specific server entry covers both.
-ExecStartPre=-/usr/bin/pkill -TERM -f tsx.*server/index.ts
+ExecStartPre=-/usr/bin/pkill -TERM -f tsx/dist/loader.*server/index.ts
 ExecStartPre=-/usr/bin/fuser -k -TERM 4400/tcp
 ExecStartPre=/bin/sleep 1
 # control-group kill (default) tears down the whole tree on stop/restart
