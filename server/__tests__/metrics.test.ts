@@ -296,7 +296,8 @@ describe('computeMetrics: empty history', () => {
       window: '3d', bucket: 'hour',
       runnerWaits: [], queue: [], queueEfficiency: [], slowestJobs: [], velocity: [],
       leadTime: [], trends: [],
-      calibration: [], flakiness: [], trainKillers: [], criticalPath: [], lint: [],
+      calibration: [], flakiness: [], trainKillers: [], criticalPath: [], needsGraph: [],
+      lint: [],
       regressions: [], runnerPools: [], reclaims: [], concurrency: [], cost: [],
       costJobs: [], costRuns: [], costActuals: [], costAutoRate: null,
     });
@@ -673,6 +674,27 @@ describe('computeMetrics: critical path (issue #42)', () => {
     expect(mg.endToEndP50Secs).toBe(100 + 900 + 10); // no waits recorded → 0
     // unit-tests sits off-path with slack = 900 − 200
     expect(mg.offPath).toEqual([{ name: 'unit-tests', slackSecs: 700 }]);
+  });
+
+  it('emits the full needs-graph (#74): every node, its edges, p50/wait, on-path flag, slack', () => {
+    seedDiamond();
+    const m = computeMetrics(h, '3d', 'hour', NOW, [], () => 1, diamondGraph());
+
+    // pull_request: bats is merge_group-only → not in the PR graph at all
+    const pr = m.needsGraph.find((g) => g.event === 'pull_request')!;
+    expect(pr.nodes.map((n) => n.name).sort()).toEqual(['build', 'ci', 'unit-tests']);
+    const ci = pr.nodes.find((n) => n.name === 'ci')!;
+    expect(ci.needs.sort()).toEqual(['build', 'unit-tests']);    // bats-tests edge excluded
+    const ut = pr.nodes.find((n) => n.name === 'unit-tests')!;
+    expect(ut).toMatchObject({ needs: ['build'], durationP50: 600, waitP50: 30,
+      onCriticalPath: true, slackSecs: 0 });
+
+    // merge_group: 4 nodes, unit-tests OFF the path with its slack
+    const mg = m.needsGraph.find((g) => g.event === 'merge_group')!;
+    expect(mg.nodes.map((n) => n.name).sort()).toEqual(['bats-tests', 'build', 'ci', 'unit-tests']);
+    expect(mg.nodes.find((n) => n.name === 'bats-tests')!.onCriticalPath).toBe(true);
+    expect(mg.nodes.find((n) => n.name === 'unit-tests')!)
+      .toMatchObject({ onCriticalPath: false, slackSecs: 700 });
   });
 
   it('matches check names to graph nodes by longest prefix (reusable-workflow inner checks)', () => {

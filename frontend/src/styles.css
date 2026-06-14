@@ -482,6 +482,26 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
 .cp-offpath .metric-job-name { display: inline-block; max-width: 240px;
   vertical-align: bottom; color: var(--text); }
 
+/* --- Interactive needs-graph (#74) — pure-SVG layered DAG --- */
+.needs-graph { width: 100%; height: auto; max-width: 100%; display: block;
+  /* viewBox scales to the container, so the graph is readable on mobile */ }
+.needs-graph .ng-edge { stroke: var(--border); stroke-width: 1.5; fill: none;
+  transition: opacity 0.12s; }
+.needs-graph .ng-edge.cp { stroke: var(--amber); stroke-width: 2.5; }
+.needs-graph .ng-arrow-head { fill: var(--border); }
+.needs-graph .ng-edge.cp ~ * .ng-arrow-head { fill: var(--amber); }
+.needs-graph .ng-edge.dim { opacity: 0.12; }
+.needs-graph .ng-node { cursor: pointer; transition: opacity 0.12s; outline: none; }
+.needs-graph .ng-node.dim { opacity: 0.22; }
+.needs-graph .ng-rect { fill: var(--surface); stroke: var(--border); stroke-width: 1.5; }
+.needs-graph .ng-node.cp .ng-rect { stroke: var(--amber); stroke-width: 2.5; }
+.needs-graph .ng-node:hover .ng-rect,
+.needs-graph .ng-node:focus-visible .ng-rect { stroke: var(--text); }
+.needs-graph .ng-name { fill: var(--text); font-size: 12px; font-weight: 600; }
+.needs-graph .ng-metric { fill: var(--muted); font-size: 11px; }
+.needs-graph-legend { font-size: 11px; color: var(--muted); margin: 0 0 6px; }
+.needs-graph-legend .cp-swatch { color: var(--amber); font-weight: 600; }
+
 /* --- CI cost (#43): per-pool runner-minute share bars --- */
 .cost-pools { list-style: none; margin: 8px 0 4px; padding: 0;
   display: flex; flex-direction: column; gap: 4px; }

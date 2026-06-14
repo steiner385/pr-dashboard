@@ -246,7 +246,7 @@ beforeEach(() => {
 });
 
 const PANELS = ['Lead time', 'Trends', 'Runner-wait health', 'Queue throughput',
-  'Queue efficiency',
+  'Queue efficiency', 'CI needs graph',
   'Slowest / most-variable jobs', 'Merge velocity + deploy lag', 'ETA calibration'];
 
 describe('MetricsView', () => {
@@ -420,6 +420,25 @@ describe('MetricsView', () => {
     const block = await screen.findByTestId('queue-eff-acme/widgets');
     expect(within(block).getByText('set requiredCheckPrefixes')).toBeInTheDocument();
     expect(within(block).getByText(/required-gate split can.t be computed/)).toBeInTheDocument();
+  });
+
+  it('CI needs-graph panel renders the DAG nodes with the critical path highlighted', async () => {
+    mockFetchOk({ ...PAYLOAD, needsGraph: [
+      { repo: 'acme/widgets', event: 'pull_request', endToEndP50Secs: 720, nodes: [
+        { name: 'build', needs: [], durationP50: 100, waitP50: 20, onCriticalPath: true, slackSecs: 0 },
+        { name: 'unit-tests', needs: ['build'], durationP50: 600, waitP50: 30, onCriticalPath: true, slackSecs: 0 },
+        { name: 'lint', needs: ['build'], durationP50: 60, waitP50: 0, onCriticalPath: false, slackSecs: 540 },
+        { name: 'ci', needs: ['unit-tests', 'lint'], durationP50: 10, waitP50: 5, onCriticalPath: true, slackSecs: 0 },
+      ] }] });
+    render(<MetricsView now={NOW} />);
+    const block = await screen.findByTestId('needs-graph-acme/widgets-pull_request');
+    // all four jobs rendered as nodes
+    for (const name of ['build', 'unit-tests', 'lint', 'ci']) {
+      expect(within(block).getByTestId(`ng-node-${name}`)).toBeInTheDocument();
+    }
+    // critical-path nodes carry the cp class; an off-path node does not
+    expect(within(block).getByTestId('ng-node-unit-tests').getAttribute('class')).toContain('cp');
+    expect(within(block).getByTestId('ng-node-lint').getAttribute('class')).not.toContain('cp');
   });
 
   it('slowest-jobs table keeps its leaderboard with variability highlighting and band trends', async () => {

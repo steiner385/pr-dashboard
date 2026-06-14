@@ -368,6 +368,11 @@ export interface MetricsPayload {
   criticalPath: { repo: string; event: string; endToEndP50Secs: number;
     path: { name: string; durationP50: number; waitP50: number }[];
     offPath: { name: string; slackSecs: number }[] }[];
+  /** Interactive needs-graph (issue #74): the full needs-DAG per (repo, event).
+   *  Optional to tolerate captured / pre-upgrade payloads. */
+  needsGraph?: { repo: string; event: string; endToEndP50Secs: number;
+    nodes: { name: string; needs: string[]; durationP50: number | null;
+      waitP50: number | null; onCriticalPath: boolean; slackSecs: number | null }[] }[];
   /** Lead-time decomposition + DORA-lite headlines (issue #44). Segment
    *  medians (seconds) over PRs MERGED in the window, computed pairwise — a
    *  row counts toward a segment only when it has both endpoint timestamps

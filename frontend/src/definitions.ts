@@ -136,6 +136,10 @@ export const METRIC_DEFINITIONS = {
   costActualsCoverage: { label: 'attribution coverage',
     text: 'attributed ÷ actual — a confidence gauge on the breakdown, NOT a dollar amount. Computed over COMPARABLE days only: days since job-tracking began AND fully billed (today’s bill is still settling), so both sides cover the same span — comparing mismatched day-sets is what made attributed look like it beat actual. ~100% = priced jobs explain the bill well. BELOW = the gap is spend no single job owns (idle runner capacity, node boot/teardown, control-plane, unpriced pools; for fleet ~10% is non-compute EC2-Other/EKS/VPC). ABOVE 100% = the per-minute rate is over-pricing the fixed-capacity fleet (relay rate set too high, or the last day or two haven’t finished billing). The per-day column is noisy by nature — read the headline, not a single day' },
 
+  // ---- CI needs graph (issue #74) ----
+  needsGraphNodes: { label: 'jobs',
+    text: 'number of jobs in the derived needs-DAG for this event. The graph below lays them out by dependency depth (left→right), overlays each job’s observed p50 duration + runner wait, and highlights the critical path (the longest wait+duration chain that gates end-to-end time)' },
+
   // ---- queue efficiency panel (issue #23) ----
   queueEffRunsPerMerge: { label: 'runs / merge',
     text: 'merge_group CI runs ÷ PRs merged, over the window — how many times the queue rebuilt a batch per PR it actually landed. The headline churn metric: ~0.33 is ideal (serial), and a high value (≈6.5 was observed at batch min=3) means batches keep rebuilding — the gate signal for raising batch size. Counts every merge_group run including re-runs and ejected batches' },

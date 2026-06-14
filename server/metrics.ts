@@ -105,6 +105,13 @@ export interface MetricsPayload {
   criticalPath: { repo: string; event: string; endToEndP50Secs: number;
     path: { name: string; durationP50: number; waitP50: number }[];
     offPath: { name: string; slackSecs: number }[] }[];
+  /** Interactive needs-graph (issue #74): the full derived needs-DAG per
+   *  (repo, event) — every node with its edges, observed p50 duration + runner
+   *  wait, critical-path membership, and slack. The visualizer lays this out;
+   *  the critical path is the `path` sequence in `criticalPath` above. */
+  needsGraph: { repo: string; event: string; endToEndP50Secs: number;
+    nodes: { name: string; needs: string[]; durationP50: number | null;
+      waitP50: number | null; onCriticalPath: boolean; slackSecs: number | null }[] }[];
   /** Lead-time decomposition + DORA-lite headlines (issue #44): per repo, the
    *  median seconds spent in each delivery segment over PRs MERGED in the
    *  window. Segments are computed pairwise — a row contributes to a segment
@@ -818,6 +825,7 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
   // last-20 samples per (check, event), p99s from the last-50, and check-name
   // discovery from the 14-day expectedSet — the window selector never applies.
   const criticalPath: MetricsPayload['criticalPath'] = [];
+  const needsGraph: MetricsPayload['needsGraph'] = [];
   const lint: MetricsPayload['lint'] = [];
   for (const [repo, graph] of [...ciGraphs].sort(([a], [b]) => a.localeCompare(b))) {
     if (dropped.has(repo)) continue;
@@ -886,6 +894,25 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
       if (result == null) continue; // empty/cyclic (corrupt persisted graph)
       criticalPath.push({ repo, event, endToEndP50Secs: result.endToEndP50Secs,
         path: result.path, offPath: result.offPath.slice(0, OFF_PATH_CAP) });
+
+      // Interactive needs-graph (issue #74): emit EVERY active node — not just
+      // the path — with its edges (restricted to active nodes, mirroring CPM's
+      // known-edge rule), p50/wait, on-path flag, and slack. Reuses the `inputs`
+      // already built for the critical path.
+      const cpNames = new Set(result.path.map((s) => s.name));
+      const slackByName = new Map(result.offPath.map((o) => [o.name, o.slackSecs]));
+      const activeKeySet = new Set(activeKeys);
+      needsGraph.push({
+        repo, event, endToEndP50Secs: result.endToEndP50Secs,
+        nodes: inputs.map((inp) => ({
+          name: inp.name,
+          needs: inp.needs.filter((n) => activeKeySet.has(n)),
+          durationP50: inp.durationP50,
+          waitP50: inp.waitP50,
+          onCriticalPath: cpNames.has(inp.name),
+          slackSecs: cpNames.has(inp.name) ? 0 : (slackByName.get(inp.name) ?? null),
+        })),
+      });
 
       // Rule 2 candidates: observed on-path nodes with ≥1 event-active dependent.
       const onPath = new Set(result.path.map((s) => s.name));
@@ -1210,7 +1237,7 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
     });
 
   return { window, bucket, runnerWaits, queue, queueEfficiency, slowestJobs, velocity, leadTime,
-    trends, calibration, flakiness, trainKillers, criticalPath, lint, regressions,
+    trends, calibration, flakiness, trainKillers, criticalPath, needsGraph, lint, regressions,
     runnerPools, reclaims, concurrency, cost, costJobs, costRuns, costActuals,
     costAutoRate: blended != null
       ? { ...blended, windowDays: WINDOW_DAYS[window] } : null };

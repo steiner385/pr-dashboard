@@ -7,6 +7,7 @@ import {
   type BandPoint, type ChartPoint, type LineSeries,
 } from './charts';
 import { formatDur, formatSince } from './format';
+import { NeedsGraph } from './NeedsGraph';
 import { CONTROL_DEFINITIONS, DEFS, defTitle, type Definition } from './definitions';
 
 const WINDOWS = ['24h', '3d', '7d', '14d', '30d'] as const;
@@ -313,6 +314,11 @@ export function MetricsView({ now, focusCostNonce }: {
   for (const cp of payload.criticalPath) {
     if (!cp.path.length) continue;
     cpByRepo.set(cp.repo, [...(cpByRepo.get(cp.repo) ?? []), cp]);
+  }
+  // Needs-graph (#74): group per-(repo,event) graphs by repo for the panel.
+  const needsByRepo = new Map<string, NonNullable<typeof payload.needsGraph>>();
+  for (const g of payload.needsGraph ?? []) {
+    needsByRepo.set(g.repo, [...(needsByRepo.get(g.repo) ?? []), g]);
   }
   const lintRepos = payload.lint.filter((l) => l.findings.length);
   // ?? []: tolerate a pre-upgrade server payload while the SPA is newer
@@ -993,6 +999,30 @@ export function MetricsView({ now, focusCostNonce }: {
               ignores the window selector; off-path slack = how much a job could
               grow before it starts gating the end-to-end time
             </p>
+          </div>
+        ))}
+      </Panel>
+
+      <Panel title="CI needs graph" empty={(payload.needsGraph ?? []).length === 0}
+        emptyText="no derived needs-graph with observed durations yet">
+        <p className="needs-graph-legend">
+          nodes are jobs (run p50 + runner wait); edges are <code>needs:</code> dependencies;
+          the <span className="cp-swatch">critical path</span> is highlighted. Hover or focus a
+          node to isolate its dependencies.
+        </p>
+        {[...needsByRepo].map(([repo, events]) => (
+          <div key={repo} className="metric-repo">
+            <h3>{repo}</h3>
+            {events.map((g) => (
+              <div key={g.event} className="metric-cp" data-testid={`needs-graph-${repo}-${g.event}`}>
+                <div className="metric-row">
+                  <MetricStat label={`${g.event} jobs`} def={DEFS.needsGraphNodes}
+                    value={String(g.nodes.length)}
+                    delta={`end-to-end p50 ${formatDur(g.endToEndP50Secs)}`} />
+                </div>
+                <NeedsGraph nodes={g.nodes} formatDur={formatDur} />
+              </div>
+            ))}
           </div>
         ))}
       </Panel>
