@@ -134,7 +134,7 @@ export const METRIC_DEFINITIONS = {
   costActualsAttributed: { label: 'attributed',
     text: 'the per-day sum of priced job dollars (minutes × pool rate) over tracked CI jobs — what the dashboard can explain. Null until rates are configured' },
   costActualsCoverage: { label: 'attribution coverage',
-    text: 'attributed job dollars ÷ actual imported spend. The unexplained remainder is idle runner capacity, node boot/teardown overhead, unpriced pools, and anything else on the bill that isn’t a tracked CI job — coverage trending DOWN with steady job minutes means the fleet is idling more' },
+    text: 'attributed job dollars ÷ actual imported spend. The unexplained remainder is idle runner capacity, node boot/teardown overhead, unpriced pools, and anything else on the bill that isn’t a tracked CI job — coverage trending DOWN with steady job minutes means the fleet is idling more. Under cost auto-rate (empirical $/min) the per-minute price is the fully-loaded fleet ÷ tracked-minutes rate, so attributed ≈ actual and coverage reflects per-day utilization hovering near 100% — not the ~6.5× gap the static config rate leaves' },
 
   // ---- merge velocity panel ----
   velocityMerged: { label: 'merged',

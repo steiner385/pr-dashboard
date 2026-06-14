@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { writeFileSync, readFileSync, rmSync, mkdtempSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig, repoSettings, effectiveRepoSettings, effectiveDeployMap, resolveOwners, validateConfigPatch, writeConfigPatch, configFileSources, _resetDeployAllowlistWarnings, SAFE_CONFIG_KEYS, READ_ONLY_CONFIG_KEYS, DEFAULTS, poolRate, hasAnyRate, type AppConfig } from '../config';
+import { loadConfig, repoSettings, effectiveRepoSettings, effectiveDeployMap, resolveOwners, validateConfigPatch, writeConfigPatch, configFileSources, _resetDeployAllowlistWarnings, SAFE_CONFIG_KEYS, READ_ONLY_CONFIG_KEYS, DEFAULTS, poolRate, hasAnyRate, empiricalRate, type AppConfig } from '../config';
 import { parseRepoConfig } from '../repo-config';
 import { APP_ROOT } from '../paths';
 
@@ -1096,5 +1096,50 @@ describe('poolRate / hasAnyRate (cost explorer rate precedence)', () => {
   it('podsPerNode without any rate stays unpriced (divisor alone prices nothing)', () => {
     expect(poolRate('arc', null, { arc: { podsPerNode: 4 } })).toBeNull();
     expect(hasAnyRate(null, { arc: { podsPerNode: 4 } })).toBe(false);
+  });
+});
+
+describe('empiricalRate (cost auto-rate — issue #100)', () => {
+  it('returns fleetDollars ÷ trackedMinutes when both finite and minutes > 0', () => {
+    expect(empiricalRate(1040, 150000)).toBeCloseTo(0.0069333, 7);
+    expect(empiricalRate(60, 6000)).toBeCloseTo(0.01, 9);
+  });
+
+  it('returns null when trackedMinutes is zero or negative (no denominator)', () => {
+    expect(empiricalRate(100, 0)).toBeNull();
+    expect(empiricalRate(100, -5)).toBeNull();
+  });
+
+  it('returns null when either side is non-finite', () => {
+    expect(empiricalRate(Infinity, 100)).toBeNull();
+    expect(empiricalRate(NaN, 100)).toBeNull();
+    expect(empiricalRate(100, Infinity)).toBeNull();
+    expect(empiricalRate(100, NaN)).toBeNull();
+  });
+
+  it('a zero fleet bill is an honest $0/min, not null', () => {
+    expect(empiricalRate(0, 100)).toBe(0);
+  });
+});
+
+describe('costAutoRate config flag (issue #100)', () => {
+  it('defaults to false (opt-in)', () => {
+    expect(DEFAULTS.costAutoRate).toBe(false);
+    expect(loadConfig('/nonexistent/config.json').costAutoRate).toBe(false);
+  });
+
+  it('parses an explicit true', () => {
+    expect(loadConfig(writeConfig({ costAutoRate: true })).costAutoRate).toBe(true);
+  });
+
+  it('coerces truthy non-booleans to true', () => {
+    expect(loadConfig(writeConfig({ costAutoRate: 1 })).costAutoRate).toBe(true);
+    expect(loadConfig(writeConfig({ costAutoRate: 'yes' })).costAutoRate).toBe(true);
+  });
+
+  it('coerces falsy values to false', () => {
+    expect(loadConfig(writeConfig({ costAutoRate: 0 })).costAutoRate).toBe(false);
+    expect(loadConfig(writeConfig({ costAutoRate: '' })).costAutoRate).toBe(false);
+    expect(loadConfig(writeConfig({ costAutoRate: null })).costAutoRate).toBe(false);
   });
 });

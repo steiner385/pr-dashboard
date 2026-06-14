@@ -29,9 +29,10 @@ const job = (name: string, startISO: string, secs: number, event = 'pull_request
 const summary = (cpm: Record<string, number> | null = null, opts: {
   exclude?: string[]; foreignNames?: Map<string, Set<string>>;
   poolMeta?: Parameters<typeof computeCostSummary>[5];
+  autoRate?: boolean;
 } = {}) =>
   computeCostSummary(h, NOW, opts.exclude ?? [], poolsFor,
-    opts.foreignNames ?? new Map(), opts.poolMeta ?? null, cpm);
+    opts.foreignNames ?? new Map(), opts.poolMeta ?? null, cpm, opts.autoRate ?? false);
 
 describe('computeCostSummary', () => {
   it('reports a 7-day window and the four stages, minutes-only when no rates', () => {
@@ -120,5 +121,48 @@ describe('computeCostSummary', () => {
     job('unit-tests', '2026-06-11T10:00:00Z', 600, 'workflow_dispatch');
     const c = summary(null);
     expect(c.byStage.every((s) => s.minutes === 0)).toBe(true);
+  });
+});
+
+describe('computeCostSummary: cost empirical auto-rate (issue #100)', () => {
+  /** spot is on the fleet; hosted is github-hosted (separate bill). */
+  const poolsFor2 = (_repo: string, name: string, _event: string) =>
+    name === 'hosted' ? { pool: 'ubuntu-latest', githubHosted: true }
+      : { pool: 'spot', githubHosted: false };
+  const job2 = (name: string, startISO: string, secs: number, event = 'pull_request'): void => {
+    const start = new Date(startISO);
+    h.recordCheckDuration(REPO, name, event,
+      start.toISOString(), new Date(start.getTime() + secs * 1000).toISOString(),
+      'SUCCESS', 'sha-cost', 1);
+  };
+  const run = (autoRate: boolean, cpm: Record<string, number> | null) =>
+    computeCostSummary(h, NOW, [], poolsFor2, new Map(), null, cpm, autoRate);
+
+  it('prices non-github-hosted stage dollars at the blended rate (fleet ÷ tracked minutes)', () => {
+    job2('unit-tests', '2026-06-11T10:00:00Z', 600, 'pull_request');  // spot 10m pr
+    job2('build', '2026-06-11T11:00:00Z', 1200, 'push');             // spot 20m main
+    h.upsertCostActual('fleet', '2026-06-11', 0.60, 'aws-ce');        // 30 tracked min → $0.02/min
+    const c = run(true, { spot: 0.001 });                            // static would be way off
+    expect(c.byStage.find((s) => s.stage === 'pr')!.dollars).toBeCloseTo(0.20, 6);   // 10 × 0.02
+    expect(c.byStage.find((s) => s.stage === 'main')!.dollars).toBeCloseTo(0.40, 6); // 20 × 0.02
+    expect(c.totalDollars).toBeCloseTo(0.60, 6);                     // ≈ fleet bill
+  });
+
+  it('github-hosted stages keep the static rate; flag OFF uses static everywhere', () => {
+    job2('hosted', '2026-06-11T10:00:00Z', 600, 'pull_request');     // github-hosted 10m
+    job2('unit-tests', '2026-06-11T11:00:00Z', 600, 'pull_request'); // spot 10m
+    h.upsertCostActual('fleet', '2026-06-11', 0.20, 'aws-ce');        // 10 tracked → $0.02/min
+    const on = run(true, { 'spot': 0.001, 'ubuntu-latest': 0.008 });
+    // pr stage = blended spot $0.20 + static hosted $0.08 = $0.28
+    expect(on.byStage.find((s) => s.stage === 'pr')!.dollars).toBeCloseTo(0.28, 6);
+    const off = run(false, { 'spot': 0.001, 'ubuntu-latest': 0.008 });
+    // static: spot $0.01 + hosted $0.08 = $0.09
+    expect(off.byStage.find((s) => s.stage === 'pr')!.dollars).toBeCloseTo(0.09, 6);
+  });
+
+  it('flag ON but no fleet actuals: falls back to the static rate', () => {
+    job2('unit-tests', '2026-06-11T10:00:00Z', 600, 'pull_request'); // spot 10m, no bill
+    const c = run(true, { spot: 0.001 });
+    expect(c.byStage.find((s) => s.stage === 'pr')!.dollars).toBeCloseTo(0.01, 6);
   });
 });

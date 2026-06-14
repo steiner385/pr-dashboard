@@ -470,6 +470,18 @@ export function MetricsView({ now }: {
 
       <Panel title="CI cost" empty={costRepos.length === 0 && costActualScopes.length === 0}
         emptyText="no runner-minutes in window yet">
+        {/* Cost empirical auto-rate (issue #100): when enabled and derivable,
+            the fully-loaded $/min used for non-github-hosted pools — fleet
+            actuals ÷ tracked runner-minutes, so dollars reflect true cost. */}
+        {payload.costAutoRate && (
+          <p className="metric-note" data-testid="cost-auto-rate"
+            title="Fully-loaded rate: the window's fleet bill spread across tracked
+              EC2 runner-minutes (idle/boot/teardown included). Replaces the static
+              config rate for non-github-hosted pools.">
+            empirical ${payload.costAutoRate.dollarsPerMinute.toFixed(4)}/min
+            {' '}(auto — fleet ÷ tracked minutes)
+          </p>
+        )}
         {/* Actuals vs attributed (phase 2): imported daily bills per scope,
             with the coverage headline. Day-keyed regardless of the bucket
             selector — bills are daily. */}

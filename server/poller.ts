@@ -2002,7 +2002,8 @@ export class Poller extends EventEmitter {
     this.costSummaryCache = computeCostSummary(
       history, this.now(), this.currentExclude(),
       (repo, name, event) => this.resolvePool(repo, name, event),
-      this.liveForeignNames(), config.poolMeta ?? null, config.costPerMinute ?? null);
+      this.liveForeignNames(), config.poolMeta ?? null, config.costPerMinute ?? null,
+      config.costAutoRate);
     this.costSummaryAt = nowMs;
   }
 

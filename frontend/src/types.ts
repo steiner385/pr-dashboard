@@ -438,6 +438,13 @@ export interface MetricsPayload {
     totalActualDollars: number; totalAttributedDollars: number | null;
     coveragePct: number | null;
     recentCoveragePct: number | null; recentCoverageDate: string | null }[];
+  /** Cost empirical auto-rate (issue #100): the derived fully-loaded $/runner-
+   *  minute applied to non-github-hosted pools when `costAutoRate` is enabled
+   *  (fleet actuals ÷ tracked EC2 runner-minutes over the window). Null when the
+   *  flag is off or no fleet actuals exist yet (static rate is used instead).
+   *  Optional to tolerate pre-upgrade payloads. */
+  costAutoRate?: { dollarsPerMinute: number; fleetDollars: number;
+    trackedMinutes: number; windowDays: number } | null;
 }
 
 // ---- Delivery Spine (spec §2, §3.1, §4.2, §14) ----

@@ -510,7 +510,7 @@ const EMPTY_METRICS = (w: MetricsWindow, b: MetricsBucket): MetricsPayload =>
     leadTime: [], trends: [], calibration: [], flakiness: [], trainKillers: [],
     criticalPath: [], lint: [], regressions: [],
     runnerPools: [], reclaims: [], concurrency: [], cost: [], costJobs: [], costRuns: [],
-    costActuals: [] });
+    costActuals: [], costAutoRate: null });
 
 describe('GET /api/metrics', () => {
   function metricsApp() {

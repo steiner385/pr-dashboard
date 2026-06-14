@@ -71,6 +71,20 @@ export function poolRate(pool: string,
   return base / (poolMeta?.[pool]?.podsPerNode ?? poolMeta?.['default']?.podsPerNode ?? 1);
 }
 
+/**
+ * Empirically-derived fully-loaded $/runner-minute (issue #100 — cost auto-rate):
+ * the window's fleet actual bill divided by the window's tracked EC2-fleet
+ * runner-minutes. A single blended rate that spreads idle/boot/teardown across
+ * job-minutes. Null when there's no usable denominator (no minutes yet) or
+ * either side isn't a finite number — callers then fall back to the static
+ * `poolRate`, never crash. A zero bill is an honest $0/min (not null).
+ */
+export function empiricalRate(fleetDollars: number, trackedMinutes: number): number | null {
+  if (!Number.isFinite(fleetDollars) || !Number.isFinite(trackedMinutes)) return null;
+  if (trackedMinutes <= 0) return null;
+  return fleetDollars / trackedMinutes;
+}
+
 /** Whether ANY $/minute rate is configured (costPerMinute present, or any
  *  poolMeta entry carries dollarsPerMinute) — when false, every dollar figure
  *  must be null (minutes-only mode), never fabricated zeroes. */
@@ -153,6 +167,13 @@ export interface AppConfig {
    *  fallback exactly like costPerMinute's. File-only — never PUT-writable
    *  (money figures must come from the operator's file, not the browser). */
   poolMeta?: Record<string, PoolMetaEntry>;
+  /** Cost auto-rate (issue #100): when true, NON-github-hosted runner-minutes
+   *  are priced at the empirically-derived fully-loaded rate (fleet actuals ÷
+   *  tracked EC2 runner-minutes over the cost window) instead of the static
+   *  per-pool `poolRate`. Self-correcting from imported actuals; falls back to
+   *  the static rate when no fleet actuals exist yet. Default false (opt-in) —
+   *  the static-rate behavior is unchanged when off. File-only. */
+  costAutoRate: boolean;
   deploy: Record<string, DeployConfig>;
   repos?: Record<string, RepoConfig>;
   intervals: { sweepMs: number; hotMs: number; deployMs: number };
@@ -176,6 +197,7 @@ export const DEFAULTS: AppConfig = {
   ancestrySource: 'api',
   notifications: DEFAULT_NOTIFICATIONS,
   webhooks: { enabled: false, path: '/api/webhooks/github' },
+  costAutoRate: false,
   deploy: {},
   repos: {},
   intervals: { sweepMs: 60_000, hotMs: 15_000, deployMs: 30_000 },
@@ -546,6 +568,10 @@ export function loadConfig(path?: string): AppConfig {
     Array.isArray(v) ? v.filter((h): h is string => typeof h === 'string' && h.trim().length > 0) : [];
   merged.bindHosts = cleanHosts(merged.bindHosts).length ? cleanHosts(merged.bindHosts) : ['127.0.0.1'];
   merged.allowedOriginHosts = cleanHosts(merged.allowedOriginHosts);
+  // cost auto-rate (issue #100): a plain opt-in flag — coerce any truthy value
+  // to a real boolean so a `1`/`"yes"` in the file can't leak a non-boolean into
+  // the cost engine; missing/falsy → false (default behavior is the static rate).
+  merged.costAutoRate = Boolean(merged.costAutoRate);
   if (merged.tokenSource !== 'gh' && merged.tokenSource !== 'env' && merged.tokenSource !== 'app') {
     throw new Error(`config: tokenSource must be "gh", "env", or "app" (got "${String(merged.tokenSource)}")`);
   }

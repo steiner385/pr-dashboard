@@ -297,7 +297,7 @@ describe('computeMetrics: empty history', () => {
       runnerWaits: [], queue: [], slowestJobs: [], velocity: [], leadTime: [], trends: [],
       calibration: [], flakiness: [], trainKillers: [], criticalPath: [], lint: [],
       regressions: [], runnerPools: [], reclaims: [], concurrency: [], cost: [],
-      costJobs: [], costRuns: [], costActuals: [],
+      costJobs: [], costRuns: [], costActuals: [], costAutoRate: null,
     });
   });
 });
@@ -1400,5 +1400,92 @@ describe('computeMetrics: cost actuals + attribution coverage (phase 2)', () => 
   it('empty without imported rows (jobs alone produce no actuals section)', () => {
     job('unit-tests', '2026-06-11T10:00:00Z', 600);
     expect(actuals({ cpm: { spot: 0.01 } })).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cost empirical auto-rate (issue #100) — opt-in, fleet ÷ tracked minutes
+// ---------------------------------------------------------------------------
+
+describe('computeMetrics: cost empirical auto-rate (issue #100)', () => {
+  /** unit-tests/build → spot (fleet); hosted → github-hosted (NOT on the fleet). */
+  const poolsFor = (_repo: string, name: string, _event: string) =>
+    name === 'hosted' ? { pool: 'ubuntu-latest', githubHosted: true }
+      : { pool: 'spot', githubHosted: false };
+
+  const job = (name: string, startISO: string, secs: number, repo = REPO): void => {
+    const start = new Date(startISO);
+    const end = new Date(start.getTime() + secs * 1000);
+    h.recordCheckDuration(repo, name, 'pull_request', start.toISOString(),
+      end.toISOString(), 'SUCCESS', 'sha1', 1, 1);
+  };
+
+  /** computeMetrics with the auto-rate flag wired in as the trailing param. */
+  const run = (opts: { auto?: boolean; cpm?: Record<string, number> | null } = {}) =>
+    computeMetrics(h, '24h', 'hour', NOW, [], () => 1, new Map(), new Map(),
+      [], poolsFor, [], opts.cpm ?? null, null, () => null, opts.auto ?? false);
+
+  it('derives the blended rate = fleet actuals ÷ tracked (non-github-hosted) minutes', () => {
+    job('unit-tests', '2026-06-11T10:00:00Z', 600);   // spot, 10 min (tracked)
+    job('build', '2026-06-11T11:00:00Z', 1200);       // spot, 20 min (tracked)
+    job('hosted', '2026-06-11T11:30:00Z', 6000);      // github-hosted, 100 min (EXCLUDED)
+    h.upsertCostActual('fleet', '2026-06-11', 0.60, 'aws-ce');
+    const m = run({ auto: true, cpm: { spot: 0.001 } }); // static rate would be way off
+    // 30 tracked minutes, $0.60 fleet → $0.02/min
+    expect(m.costAutoRate).toEqual({
+      dollarsPerMinute: expect.closeTo(0.02, 9),
+      fleetDollars: expect.closeTo(0.60, 9),
+      trackedMinutes: expect.closeTo(30, 9),
+      windowDays: 1,
+    });
+  });
+
+  it('prices per-pool/per-job dollars at the blended rate for non-github-hosted pools', () => {
+    job('unit-tests', '2026-06-11T10:00:00Z', 600);   // spot, 10 min
+    job('build', '2026-06-11T11:00:00Z', 1200);       // spot, 20 min
+    h.upsertCostActual('fleet', '2026-06-11', 0.60, 'aws-ce'); // blended $0.02/min
+    const m = run({ auto: true, cpm: { spot: 0.001 } });
+    const pool = m.cost[0]!.pools.find((p) => p.pool === 'spot')!;
+    expect(pool.dollars).toBeCloseTo(0.60, 6);       // 30 min × $0.02, NOT static 0.001
+    const byJob = new Map(m.costJobs[0]!.jobs.map((j) => [j.name, j]));
+    expect(byJob.get('unit-tests')!.dollars).toBeCloseTo(0.20, 6); // 10 × 0.02
+    expect(byJob.get('build')!.dollars).toBeCloseTo(0.40, 6);      // 20 × 0.02
+  });
+
+  it('total attributed ≈ fleet actuals (coverage ≈ 100%) under auto-rate', () => {
+    job('unit-tests', '2026-06-11T10:00:00Z', 600);   // spot, 10 min
+    job('build', '2026-06-11T11:00:00Z', 1200);       // spot, 20 min
+    h.upsertCostActual('fleet', '2026-06-11', 0.60, 'aws-ce');
+    const fleet = run({ auto: true, cpm: { spot: 0.001 } }).costActuals
+      .find((a) => a.scope === 'fleet')!;
+    expect(fleet.days[0]!.coveragePct).toBeCloseTo(100, 4);
+    expect(fleet.totalAttributedDollars).toBeCloseTo(0.60, 6);
+  });
+
+  it('github-hosted pools keep their STATIC rate even under auto-rate (separate bill)', () => {
+    job('hosted', '2026-06-11T10:00:00Z', 600);       // github-hosted, 10 min
+    job('unit-tests', '2026-06-11T11:00:00Z', 600);   // spot, 10 min
+    h.upsertCostActual('fleet', '2026-06-11', 0.20, 'aws-ce'); // blended over 10 tracked = $0.02/min
+    const m = run({ auto: true, cpm: { 'spot': 0.001, 'ubuntu-latest': 0.008 } });
+    const byJob = new Map(m.costJobs[0]!.jobs.map((j) => [j.name, j]));
+    expect(byJob.get('hosted')!.dollars).toBeCloseTo(0.08, 6);   // 10 × static 0.008
+    expect(byJob.get('unit-tests')!.dollars).toBeCloseTo(0.20, 6); // 10 × blended 0.02
+    // tracked minutes excluded the hosted job
+    expect(m.costAutoRate!.trackedMinutes).toBeCloseTo(10, 9);
+  });
+
+  it('flag OFF (default): dollars use the static poolRate, costAutoRate is null', () => {
+    job('unit-tests', '2026-06-11T10:00:00Z', 600);   // spot, 10 min
+    h.upsertCostActual('fleet', '2026-06-11', 0.60, 'aws-ce');
+    const m = run({ auto: false, cpm: { spot: 0.001 } });
+    expect(m.costAutoRate).toBeNull();
+    expect(m.cost[0]!.pools[0]!.dollars).toBeCloseTo(0.01, 6); // 10 × static 0.001
+  });
+
+  it('flag ON but no fleet actuals yet: falls back to the static rate, costAutoRate null', () => {
+    job('unit-tests', '2026-06-11T10:00:00Z', 600);   // spot, 10 min, no fleet bill imported
+    const m = run({ auto: true, cpm: { spot: 0.001 } });
+    expect(m.costAutoRate).toBeNull();
+    expect(m.cost[0]!.pools[0]!.dollars).toBeCloseTo(0.01, 6); // static fallback
   });
 });

@@ -205,7 +205,7 @@ async function main() {
       poller.allDerivedGraphs(), poller.liveForeignNames(), poller.activeRegressions(),
       (repo, name, event) => poller.resolvePool(repo, name, event), poller.poolHealth(),
       config.costPerMinute ?? null, config.poolMeta ?? null,
-      (repo, sha) => poller.prNumberForSha(repo, sha)),
+      (repo, sha) => poller.prNumberForSha(repo, sha), config.costAutoRate),
     repos: () => poller.repoToggleList(),
     // cost actuals import (cost explorer phase 2) — rows land in SQLite and
     // surface through the metrics costActuals section

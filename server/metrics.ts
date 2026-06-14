@@ -1,5 +1,5 @@
 import { FLAKE_MIN_RUNS, type HistoryStore } from './history';
-import { poolRate, hasAnyRate, type PoolMetaEntry } from './config';
+import { poolRate, hasAnyRate, empiricalRate, type PoolMetaEntry } from './config';
 import type { DurationRegressionView, PoolHealthView } from './poller';
 import { percentile } from './math';
 import { activeForEvent, type CiGraphNode } from './required-checks';
@@ -231,6 +231,18 @@ export interface MetricsPayload {
      *  the attribution data-ramp — early in-window days have incomplete job
      *  history — so this is the trustworthy current-state headline. */
     recentCoveragePct: number | null; recentCoverageDate: string | null }[];
+  /** Cost empirical auto-rate (issue #100): the derived fully-loaded $/runner-
+   *  minute applied to NON-github-hosted pools when `costAutoRate` is enabled —
+   *  `fleetDollars` (the window's imported scope='fleet' actuals) ÷
+   *  `trackedMinutes` (the window's non-github-hosted tracked runner-minutes,
+   *  the SAME row set / exclusion the fleet coverage join uses). Null when the
+   *  flag is off OR no fleet actuals exist yet (the engine then prices via the
+   *  static `poolRate`, never crashing). When present, per-job/run/pool dollars
+   *  and the fleet attributed total are computed at `dollarsPerMinute`, so
+   *  coverage reflects per-day utilization (~100%) rather than the ~6.5×
+   *  static-rate modeling gap. `windowDays` echoes the metrics window. */
+  costAutoRate: { dollarsPerMinute: number; fleetDollars: number;
+    trackedMinutes: number; windowDays: number } | null;
 }
 
 /** Delivery-spine cost stages (Spec 3) — the CI `event` mapped onto the four
@@ -258,6 +270,45 @@ export interface CostSummary {
   days: number;
   byStage: { stage: CostStage; dollars: number | null; minutes: number }[];
   retryWastePct: number | null;
+}
+
+/** The derived blended rate plus its inputs (issue #100). */
+export interface BlendedFleetRate {
+  dollarsPerMinute: number;
+  fleetDollars: number;
+  trackedMinutes: number;
+}
+
+/**
+ * SINGLE SOURCE OF TRUTH for the empirical auto-rate (issue #100), shared by
+ * `computeMetrics` and `computeCostSummary` so the Metrics tab and the spine
+ * Cost lane agree. `trackedMinutes` is summed from the SAME already-filtered
+ * cost rows the callers use for fleet attribution (started-in-window, foreign
+ * names dropped, excluded repos dropped), counting only NON-github-hosted rows
+ * — the exact denominator that matches the 'fleet' coverage join (github-hosted
+ * minutes are on GitHub's separate bill, never on the EC2 fleet actuals).
+ * `fleetDollars` is the window's imported scope='fleet' actuals. Returns null
+ * when the flag is off, when there's no fleet bill yet, or when the rate can't
+ * be derived (no tracked minutes) — callers then fall back to the static rate.
+ */
+export function blendedFleetRate(
+  enabled: boolean,
+  costRows: { repo: string; name: string; event: string; durationSecs: number }[],
+  isGithubHosted: (repo: string, name: string, event: string) => boolean,
+  fleetActuals: { scope: string; dollars: number }[],
+): BlendedFleetRate | null {
+  if (!enabled) return null;
+  const fleetRows = fleetActuals.filter((r) => r.scope === 'fleet');
+  // No imported fleet bill yet → no empirical basis; caller falls back to the
+  // static rate (an imported $0 bill, by contrast, is an honest $0/min).
+  if (fleetRows.length === 0) return null;
+  const fleetDollars = fleetRows.reduce((s, r) => s + r.dollars, 0);
+  const trackedMinutes = costRows
+    .filter((r) => !isGithubHosted(r.repo, r.name, r.event))
+    .reduce((s, r) => s + r.durationSecs, 0) / 60;
+  const rate = empiricalRate(fleetDollars, trackedMinutes);
+  if (rate == null) return null;
+  return { dollarsPerMinute: rate, fleetDollars, trackedMinutes };
 }
 
 /** Lead-time segment ids, in pipeline order (issue #44). */
@@ -444,7 +495,8 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
   poolHealth: { repo: string; pools: PoolHealthView[] }[] = [],
   costPerMinute: Record<string, number> | null = null,
   poolMeta: Record<string, PoolMetaEntry> | null = null,
-  prNumberForSha: (repo: string, sha: string) => number | null = () => null): MetricsPayload {
+  prNumberForSha: (repo: string, sha: string) => number | null = () => null,
+  costAutoRate = false): MetricsPayload {
   const dropped = new Set(exclude);
   const keep = <T extends { repo: string }>(rows: T[]): T[] =>
     dropped.size ? rows.filter((r) => !dropped.has(r.repo)) : rows;
@@ -888,10 +940,32 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
   // Rate resolution (cost explorer): poolMeta[pool].dollarsPerMinute supersedes
   // the flat costPerMinute entry per label; the 'default' pair backs the rest.
   // hasRates=false → minutes-only mode: EVERY dollar figure stays null.
-  const hasRates = hasAnyRate(costPerMinute, poolMeta);
-  const rateFor = (pool: string): number | null => poolRate(pool, costPerMinute, poolMeta);
   const costRows = keep(history.costRowsSince(since)).filter((r) =>
     Date.parse(r.startedAt) >= sinceMs && !foreignNames.get(r.repo)?.has(r.name));
+  // Imported actual bills, read once and reused by the auto-rate denominator and
+  // the costActuals coverage join below (day-keyed — bills are daily).
+  const fleetActuals = history.costActualsSince(since.slice(0, 10));
+  // Cost empirical auto-rate (issue #100): the single blended fully-loaded
+  // $/runner-minute, derived from the SAME filtered rows + github-hosted
+  // exclusion used for fleet attribution (single source of truth in
+  // blendedFleetRate). Null when off or no fleet bill yet → static fallback.
+  const blended = blendedFleetRate(costAutoRate, costRows, isGithubHosted, fleetActuals);
+  // A derivable blended rate makes dollars available even with no static config
+  // (it prices the non-github-hosted majority); otherwise fall to static rates.
+  const hasRates = blended != null || hasAnyRate(costPerMinute, poolMeta);
+  // Pool-level github-hosted lookup: a pool key resolves consistently to
+  // github-hosted, so the per-pool rate override can decide from the pool alone.
+  const githubHostedPools = new Set(
+    costRows.filter((r) => isGithubHosted(r.repo, r.name, r.event))
+      .map((r) => poolKeyOf(r.repo, r.name, r.event)));
+  // Rate resolution (cost explorer): under auto-rate, NON-github-hosted pools
+  // price at the blended rate; github-hosted pools and the off/no-actuals case
+  // fall through to the static poolRate (poolMeta > costPerMinute > 'default').
+  // hasRates=false → minutes-only mode: EVERY dollar figure stays null.
+  const rateFor = (pool: string): number | null =>
+    blended != null && !githubHostedPools.has(pool)
+      ? blended.dollarsPerMinute
+      : poolRate(pool, costPerMinute, poolMeta);
   const cost: MetricsPayload['cost'] = [];
   const costJobs: MetricsPayload['costJobs'] = [];
   const costRuns: MetricsPayload['costRuns'] = [];
@@ -999,7 +1073,7 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
       }
     }
   }
-  const costActuals = [...groupBy(history.costActualsSince(since.slice(0, 10)), (r) => r.scope)]
+  const costActuals = [...groupBy(fleetActuals, (r) => r.scope)]
     .sort(([a], [b]) => (a === 'fleet' ? -1 : b === 'fleet' ? 1 : a.localeCompare(b)))
     .map(([scope, rows]) => {
       const days = [...rows].sort((a, b) => a.date.localeCompare(b.date)).map((r) => {
@@ -1028,7 +1102,9 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
 
   return { window, bucket, runnerWaits, queue, slowestJobs, velocity, leadTime, trends,
     calibration, flakiness, trainKillers, criticalPath, lint, regressions,
-    runnerPools, reclaims, concurrency, cost, costJobs, costRuns, costActuals };
+    runnerPools, reclaims, concurrency, cost, costJobs, costRuns, costActuals,
+    costAutoRate: blended != null
+      ? { ...blended, windowDays: WINDOW_DAYS[window] } : null };
 }
 
 /**
@@ -1051,6 +1127,7 @@ export function computeCostSummary(
   foreignNames: Map<string, Set<string>>,
   poolMeta: Record<string, PoolMetaEntry> | null,
   costPerMinute: Record<string, number> | null,
+  costAutoRate = false,
 ): CostSummary {
   const days = 7;
   const dropped = new Set(exclude);
@@ -1059,8 +1136,8 @@ export function computeCostSummary(
   const since = new Date(sinceMs).toISOString();
   const poolKeyOf = (repo: string, name: string, event: string): string =>
     resolvePool(repo, name, event)?.pool ?? 'unknown';
-  const hasRates = hasAnyRate(costPerMinute, poolMeta);
-  const rateFor = (pool: string): number | null => poolRate(pool, costPerMinute, poolMeta);
+  const isGithubHosted = (repo: string, name: string, event: string): boolean =>
+    resolvePool(repo, name, event)?.githubHosted === true;
 
   // Same row source + filters as the cost section: drop excluded repos, drop
   // foreign rollup-mirror names (their spans are CI-lifecycle wall-clock, not
@@ -1070,6 +1147,22 @@ export function computeCostSummary(
     !dropped.has(r.repo)
     && !foreignNames.get(r.repo)?.has(r.name)
     && Date.parse(r.startedAt) >= sinceMs);
+
+  // Cost empirical auto-rate (issue #100): the SAME shared blended-rate
+  // derivation as `computeMetrics` (blendedFleetRate is the single source of
+  // truth), so the spine Cost chips agree with the Metrics tab. Tracked minutes
+  // come from these same filtered rows minus github-hosted; the bill is the
+  // 7-day fleet actuals window.
+  const blended = blendedFleetRate(
+    costAutoRate, rows, isGithubHosted, history.costActualsSince(since.slice(0, 10)));
+  const githubHostedPools = new Set(
+    rows.filter((r) => isGithubHosted(r.repo, r.name, r.event))
+      .map((r) => poolKeyOf(r.repo, r.name, r.event)));
+  const hasRates = blended != null || hasAnyRate(costPerMinute, poolMeta);
+  const rateFor = (pool: string): number | null =>
+    blended != null && !githubHostedPools.has(pool)
+      ? blended.dollarsPerMinute
+      : poolRate(pool, costPerMinute, poolMeta);
 
   const byStage = COST_STAGES.map((stage) => {
     const stageRows = rows.filter((r) => EVENT_TO_STAGE[r.event] === stage);
