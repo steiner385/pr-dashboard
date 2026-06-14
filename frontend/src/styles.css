@@ -568,3 +568,30 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
 .repo-toggle.excluded button { color: var(--muted); }
 
 .lint-rule { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* --- Delivery spine (lifecycle rail) --- */
+/* spec §16: color the GLYPH only; lane text stays in the default --text token,
+   so the global --fail/--done/--amber tokens are never re-purposed. */
+.delivery-spine { max-width: 1100px; margin: 0 auto; }
+.spine-rollup { font: inherit; cursor: pointer; padding: 4px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); margin-bottom: 8px; }
+.spine-rollup.r-red { border-color: var(--fail); }
+.spine-rollup.r-amber { border-color: var(--amber); }
+.spine-rail { list-style: none; margin: 0; padding: 0; }
+.spine-lane { border-top: 1px solid var(--border); }
+.spine-lane:first-child { border-top: none; }
+.spine-lane-btn { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px;
+  background: none; border: 0; color: var(--text); text-align: left; cursor: pointer;
+  padding: 6px 8px; font: inherit; }
+.spine-lane-btn:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.spine-glyph { width: 1.2em; text-align: center; flex-shrink: 0; }
+.spine-glyph.s-green { color: var(--done); }
+.spine-glyph.s-amber { color: var(--amber); }
+.spine-glyph.s-red   { color: var(--fail); }
+.spine-glyph.s-blind, .spine-glyph.s-idle { color: var(--muted); }
+.spine-title { font-weight: 600; min-width: 9em; }
+.spine-summary { color: var(--text); flex: 1; }
+.spine-cost, .spine-effic { color: var(--muted); font-size: 12px; }
+.spine-chevron { color: var(--muted); flex-shrink: 0; }
+.spine-panel { padding: 4px 8px 10px 32px; }
+.spine-rollup-live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

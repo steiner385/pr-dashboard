@@ -40,6 +40,14 @@ const hook = (overrides?: Partial<DashboardHook>): DashboardHook =>
   ({ state: STATE, connected: true,
     notifySupported: true, notifyEnabled: false, toggleNotify: () => {}, ...overrides });
 
+// The repo board lives in the Pipeline tab, which is no longer the default
+// (Delivery is). Every test here exercises the board, so switch to it on render.
+const renderPipeline = (): ReturnType<typeof render> => {
+  const result = render(<App />);
+  fireEvent.click(screen.getByRole('tab', { name: 'Pipeline' }));
+  return result;
+};
+
 // ---------- localStorage helpers ----------
 
 /** Read the prdash.collapsed key from jsdom localStorage */
@@ -65,21 +73,21 @@ afterEach(() => {
 
 describe('Repo expand/collapse', () => {
   it('renders repo section headers as buttons with aria-expanded=true initially', () => {
-    render(<App />);
+    renderPipeline();
     const buttons = screen.getAllByRole('button', { name: /acme\/widgets/ });
     expect(buttons.length).toBeGreaterThanOrEqual(1);
     expect(buttons[0]).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('chevron ▾ is shown when expanded', () => {
-    render(<App />);
+    renderPipeline();
     // The button text should contain the down chevron
     const btn = screen.getAllByRole('button', { name: /acme\/widgets/ })[0]!;
     expect(btn.textContent).toContain('▾');
   });
 
   it('clicking the header button collapses the repo section', () => {
-    render(<App />);
+    renderPipeline();
     // PR rows should be visible initially
     expect(screen.getByText('#1')).toBeInTheDocument();
     expect(screen.getByText('#2')).toBeInTheDocument();
@@ -93,7 +101,7 @@ describe('Repo expand/collapse', () => {
   });
 
   it('collapsed header shows aria-expanded=false and chevron ▸', () => {
-    render(<App />);
+    renderPipeline();
     const btn = screen.getAllByRole('button', { name: /acme\/widgets/ })[0]!;
     fireEvent.click(btn);
     expect(btn).toHaveAttribute('aria-expanded', 'false');
@@ -112,7 +120,7 @@ describe('Repo expand/collapse', () => {
       ],
     };
     mockUseDashboard.mockReturnValue(hook({ state: stateWithQueue }));
-    render(<App />);
+    renderPipeline();
     // Queue train car visible before collapse (building car shows "▶ group")
     expect(screen.getByText('▶ group')).toBeInTheDocument();
 
@@ -123,7 +131,7 @@ describe('Repo expand/collapse', () => {
   });
 
   it('shows inline summary with PR count when collapsed', () => {
-    render(<App />);
+    renderPipeline();
     const btn = screen.getAllByRole('button', { name: /acme\/widgets/ })[0]!;
     fireEvent.click(btn);
     // Should show "2 PRs" (acme/widgets has 2 PRs)
@@ -131,7 +139,7 @@ describe('Repo expand/collapse', () => {
   });
 
   it('summary shows active count when nonzero (ci + queue are active)', () => {
-    render(<App />);
+    renderPipeline();
     const btn = screen.getAllByRole('button', { name: /acme\/widgets/ })[0]!;
     fireEvent.click(btn);
     // acme/widgets has 2 PRs: 1 ci (active) + 1 queue (active) → "2 active"
@@ -139,7 +147,7 @@ describe('Repo expand/collapse', () => {
   });
 
   it('summary shows failed count in fail color when nonzero', () => {
-    render(<App />);
+    renderPipeline();
     // octo/bridge has 1 parked/ci-failed PR
     const btn = screen.getAllByRole('button', { name: /octo\/bridge/ })[0]!;
     fireEvent.click(btn);
@@ -149,7 +157,7 @@ describe('Repo expand/collapse', () => {
   });
 
   it('summary omits active when count is zero', () => {
-    render(<App />);
+    renderPipeline();
     // octo/bridge has only a parked/ci-failed PR → active=0
     const btn = screen.getAllByRole('button', { name: /octo\/bridge/ })[0]!;
     fireEvent.click(btn);
@@ -157,7 +165,7 @@ describe('Repo expand/collapse', () => {
   });
 
   it('summary omits failed when count is zero', () => {
-    render(<App />);
+    renderPipeline();
     // acme/widgets has ci + queue PRs, no failed ones
     const btn = screen.getAllByRole('button', { name: /acme\/widgets/ })[0]!;
     fireEvent.click(btn);
@@ -165,7 +173,7 @@ describe('Repo expand/collapse', () => {
   });
 
   it('clicking again expands and shows PR rows', () => {
-    render(<App />);
+    renderPipeline();
     const btn = screen.getAllByRole('button', { name: /acme\/widgets/ })[0]!;
     fireEvent.click(btn); // collapse
     fireEvent.click(btn); // expand
@@ -177,14 +185,14 @@ describe('Repo expand/collapse', () => {
   // ---------- localStorage persistence ----------
 
   it('writes collapsed repo to localStorage on collapse', () => {
-    render(<App />);
+    renderPipeline();
     const btn = screen.getAllByRole('button', { name: /acme\/widgets/ })[0]!;
     fireEvent.click(btn);
     expect(readCollapsed()).toContain('acme/widgets');
   });
 
   it('removes repo from localStorage on expand', () => {
-    render(<App />);
+    renderPipeline();
     const btn = screen.getAllByRole('button', { name: /acme\/widgets/ })[0]!;
     fireEvent.click(btn); // collapse
     fireEvent.click(btn); // expand
@@ -194,7 +202,7 @@ describe('Repo expand/collapse', () => {
   it('reads initial collapsed state from localStorage on mount', () => {
     // Pre-seed localStorage with acme/widgets collapsed
     localStorage.setItem('prdash.collapsed', JSON.stringify(['acme/widgets']));
-    render(<App />);
+    renderPipeline();
     // PR rows for repo1 should not be visible
     expect(screen.queryByText('#1')).not.toBeInTheDocument();
     expect(screen.queryByText('#2')).not.toBeInTheDocument();
@@ -207,7 +215,7 @@ describe('Repo expand/collapse', () => {
 
   it('handles corrupt localStorage gracefully (all repos expanded)', () => {
     localStorage.setItem('prdash.collapsed', 'NOT_VALID_JSON{{');
-    render(<App />);
+    renderPipeline();
     // Should render without crashing and show all repos expanded
     expect(screen.getByText('#1')).toBeInTheDocument();
     expect(screen.getByText('#2')).toBeInTheDocument();
@@ -217,7 +225,7 @@ describe('Repo expand/collapse', () => {
   // ---------- filter interplay ----------
 
   it('filter-hidden count is computed on ALL prs regardless of collapsed state', () => {
-    render(<App />);
+    renderPipeline();
     // Collapse acme/widgets
     const btn = screen.getAllByRole('button', { name: /acme\/widgets/ })[0]!;
     fireEvent.click(btn);
@@ -237,7 +245,7 @@ describe('Repo expand/collapse', () => {
   });
 
   it('collapsed repo stays collapsed when filter changes', () => {
-    render(<App />);
+    renderPipeline();
     // Collapse acme/widgets
     const btn = screen.getAllByRole('button', { name: /acme\/widgets/ })[0]!;
     fireEvent.click(btn);
@@ -255,7 +263,7 @@ describe('Repo expand/collapse', () => {
   });
 
   it('chevron icon has aria-hidden', () => {
-    render(<App />);
+    renderPipeline();
     // Check that the chevron span inside the button has aria-hidden="true"
     const btn = screen.getAllByRole('button', { name: /acme\/widgets/ })[0]!;
     const hiddenEls = btn.querySelectorAll('[aria-hidden="true"]');

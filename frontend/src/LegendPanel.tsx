@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react';
 import { TILE_DEFINITIONS } from './StatusStrip';
-import { METRIC_DEFINITIONS, SUBLINE_TERMS } from './definitions';
+import { METRIC_DEFINITIONS, SUBLINE_TERMS, LANE_STATE_DEFINITIONS } from './definitions';
 
 interface LegendPanelProps {
   open: boolean;
@@ -102,6 +102,24 @@ export function LegendPanel({ open, onClose, returnFocusRef }: LegendPanelProps)
         </header>
 
         <div className="settings-body">
+          {/* Delivery spine — the 5-state lane vocabulary (spec §16); the
+              glyphs mirror the live rail rendering exactly. */}
+          <section className="settings-section">
+            <h3>Delivery spine</h3>
+            <p className="legend-caption">
+              The lifecycle rail colors the <b>glyph</b> only; lane text stays in the
+              default color. Worst lane wins the rollup pill at the top.
+            </p>
+            <dl className="legend-dl">
+              {Object.entries(LANE_STATE_DEFINITIONS).map(([key, def]) => (
+                <div className="legend-dl-row" key={key}>
+                  <dt>{def.label}</dt>
+                  <dd>{def.text}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+
           {/* (a) Pipeline track */}
           <section className="settings-section">
             <h3>Pipeline track</h3>

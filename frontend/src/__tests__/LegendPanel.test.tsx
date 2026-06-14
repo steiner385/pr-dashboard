@@ -148,6 +148,17 @@ describe('LegendPanel', () => {
   });
 });
 
+describe('LegendPanel — Delivery spine state vocabulary', () => {
+  it('renders a "Delivery spine" section listing the 5 lane states incl. ◌ blind', () => {
+    render(<LegendPanel open={true} onClose={() => {}} />);
+    expect(screen.getByRole('heading', { name: 'Delivery spine' })).toBeInTheDocument();
+    for (const label of ['● green', '◐ watch', '✗ red', '◌ blind', '· idle']) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+    expect(screen.getByText(/wired but no signal/)).toBeInTheDocument();
+  });
+});
+
 describe('LegendPanel — flake radar legend line (issue #37)', () => {
   it('documents the ⚐ flakes annotation in the job-bars section', () => {
     render(<LegendPanel open={true} onClose={() => {}} />);

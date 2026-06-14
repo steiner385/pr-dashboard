@@ -74,6 +74,7 @@ describe('App', () => {
   it('StatusStrip filter hides non-matching rows and shows (n hidden) in section header', () => {
     // repo1: 1 ci PR; repo2: 1 ci PR — filter by "running" (ci): all visible, no hidden
     render(<App />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Pipeline' }));
     const strip = screen.getByRole('group', { name: 'Status overview' });
     const runningTile = within(strip).getAllByRole('button')[0]!; // first tile = running
     fireEvent.click(runningTile);
@@ -92,6 +93,7 @@ describe('App', () => {
       { repo: 'octo/bridge', hasDeploy: false, prs: [queuePr], queue: null },
     ] } }));
     render(<App />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Pipeline' }));
     const strip = screen.getByRole('group', { name: 'Status overview' });
     const runningTile = within(strip).getAllByRole('button')[0]!; // first tile = running
     fireEvent.click(runningTile);
@@ -113,6 +115,7 @@ describe('App', () => {
       { repo: 'octo/bridge', hasDeploy: false, prs: [ciPr, mergedPr], queue: null },
     ] } }));
     render(<App />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Pipeline' }));
     const strip = screen.getByRole('group', { name: 'Status overview' });
     const tiles = within(strip).getAllByRole('button');
     const deployTile = tiles[2]!; // third tile = deploy (Awaiting prod)
@@ -133,6 +136,7 @@ describe('App', () => {
       { repo: 'acme/widgets', hasDeploy: true, prs: [prView(1), queuePr], queue: null },
     ] } }));
     render(<App />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Pipeline' }));
     const strip = screen.getByRole('group', { name: 'Status overview' });
     const runningTile = within(strip).getAllByRole('button')[0]!; // first tile = running
     // filter to running
@@ -158,16 +162,30 @@ vi.mock('../MetricsView', () => ({
 }));
 
 describe('App tab bar', () => {
-  it('renders a tablist with Pipeline selected by default; pipeline content visible', () => {
+  it('defaults to the Delivery tab and renders the spine', () => {
+    render(<App />);
+    expect(screen.getByRole('tab', { name: /delivery/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('spine-lane-pr-ci')).toBeInTheDocument();
+  });
+
+  it('renders Delivery | Pipeline | Metrics tabs with Delivery selected by default', () => {
     render(<App />);
     const tablist = screen.getByRole('tablist', { name: 'Dashboard views' });
     const tabs = within(tablist).getAllByRole('tab');
-    expect(tabs.map((t) => t.textContent)).toEqual(['Pipeline', 'Metrics']);
+    expect(tabs.map((t) => t.textContent)).toEqual(['Delivery', 'Pipeline', 'Metrics']);
     expect(tabs[0]).toHaveAttribute('aria-selected', 'true');
-    expect(tabs[1]).toHaveAttribute('aria-selected', 'false');
-    // pipeline content (status strip + repos) is rendered, metrics is not
-    expect(screen.getByRole('group', { name: 'Status overview' })).toBeInTheDocument();
+    // pipeline content (status strip) is only visible after switching to Pipeline
+    expect(screen.queryByRole('group', { name: 'Status overview' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('metrics-view-stub')).not.toBeInTheDocument();
+  });
+
+  it('switching to Pipeline shows the board and selects the Pipeline tab', () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Pipeline' }));
+    const tabs = within(screen.getByRole('tablist', { name: 'Dashboard views' })).getAllByRole('tab');
+    expect(tabs[1]).toHaveAttribute('aria-selected', 'true');
+    expect(tabs[0]).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByRole('group', { name: 'Status overview' })).toBeInTheDocument();
   });
 
   it('tabs wire aria-controls to tabpanel ids that exist in the DOM', () => {
@@ -277,15 +295,18 @@ describe('App kiosk mode (issue #20)', () => {
     vi.useRealTimers();
   });
 
-  it('?kiosk=1 hides the gear, legend, bell, and tab bar; status strip stays', () => {
+  it('?kiosk=1 hides the gear, legend, bell, and tab bar; the spine is pinned', () => {
     setUrl('?kiosk=1');
     render(<App />);
     expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Legend' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Browser notifications (this tab)' })).not.toBeInTheDocument();
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
-    // the glanceable summary strip stays
-    expect(screen.getByRole('group', { name: 'Status overview' })).toBeInTheDocument();
+    // the wall display pins the Delivery spine read-only
+    expect(screen.getByTestId('spine-lane-pr-ci')).toBeInTheDocument();
+    expect(document.getElementById('tabpanel-delivery')).not.toHaveAttribute('hidden');
+    expect(document.getElementById('tabpanel-pipeline')).toHaveAttribute('hidden');
+    expect(document.getElementById('tabpanel-metrics')).toHaveAttribute('hidden');
   });
 
   it('adds the kiosk class to the app root', () => {
@@ -299,86 +320,26 @@ describe('App kiosk mode (issue #20)', () => {
     expect(container.querySelector('main.app')!.className).not.toContain('kiosk');
   });
 
-  it('status tiles are non-interactive in kiosk (no buttons in the strip)', () => {
-    setUrl('?kiosk=1');
-    render(<App />);
-    const strip = screen.getByRole('group', { name: 'Status overview' });
-    expect(within(strip).queryAllByRole('button')).toHaveLength(0);
-    // counts/labels still render
-    expect(within(strip).getByText('CI running')).toBeInTheDocument();
-  });
-
-  it('PR rows are non-expandable in kiosk (click does not open the check panel)', () => {
-    setUrl('?kiosk=1');
-    const checkedPr: PrView = { ...prView(1), checks: [
-      { name: 'fast-checks / ESLint', status: 'COMPLETED', conclusion: 'SUCCESS', isRequired: true,
-        workflowName: null, elapsedSeconds: 180, expectedSeconds: 200, url: null,
-        expectedLowSeconds: null, expectedHighSeconds: null,
-        waitKind: null, blockedOn: null, waitingSeconds: null, expectedRunnerWaitSeconds: null, flakeRatePct: null, likelyFlake: false },
-    ] };
-    mockUseDashboard.mockReturnValue(hook({ state: { ...STATE, repos: [
-      { repo: 'acme/widgets', hasDeploy: true, prs: [checkedPr], queue: null },
-    ] } }));
-    render(<App />);
-    fireEvent.click(screen.getByText('#1'));
-    expect(screen.queryByText('fast-checks / ESLint')).not.toBeInTheDocument();
-  });
-
-  it('repo headers are plain headings (not collapse buttons) and persisted collapse is ignored', () => {
-    localStorage.setItem('prdash.collapsed', JSON.stringify(['acme/widgets']));
-    setUrl('?kiosk=1');
-    render(<App />);
-    expect(screen.queryByRole('button', { name: /acme\/widgets/ })).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'acme/widgets' })).toBeInTheDocument();
-    // collapsed state from localStorage must not hide rows on a wall display
-    expect(screen.getByText('#1')).toBeInTheDocument();
-  });
-
-  it('cycles repo → repo → metrics on the cycle timer, then wraps to the first repo', () => {
+  it('kiosk pins the Delivery spine and never rotates away from it over time', () => {
     setUrl('?kiosk=1&cycle=10');
     vi.useFakeTimers();
     render(<App />);
-    // initial view = first repo section (scrolled into view on mount)
-    expect((scrollIntoView.mock.contexts.at(-1) as HTMLElement).id).toBe('repo-section-0');
+    expect(document.getElementById('tabpanel-delivery')).not.toHaveAttribute('hidden');
 
-    act(() => { vi.advanceTimersByTime(10_000); });
-    expect((scrollIntoView.mock.contexts.at(-1) as HTMLElement).id).toBe('repo-section-1');
-    expect(document.getElementById('tabpanel-pipeline')).not.toHaveAttribute('hidden');
-
-    act(() => { vi.advanceTimersByTime(10_000); });
-    // final view = Metrics (trends panel visible)
-    expect(screen.getByTestId('metrics-view-stub')).toBeInTheDocument();
+    // advance well past several cycle ticks — the spine stays pinned, no rotation
+    act(() => { vi.advanceTimersByTime(60_000); });
+    expect(document.getElementById('tabpanel-delivery')).not.toHaveAttribute('hidden');
     expect(document.getElementById('tabpanel-pipeline')).toHaveAttribute('hidden');
-    expect(document.getElementById('tabpanel-metrics')).not.toHaveAttribute('hidden');
-
-    act(() => { vi.advanceTimersByTime(10_000); });
-    // wraps back to the pipeline / first repo
-    expect(document.getElementById('tabpanel-pipeline')).not.toHaveAttribute('hidden');
-    expect((scrollIntoView.mock.contexts.at(-1) as HTMLElement).id).toBe('repo-section-0');
+    expect(document.getElementById('tabpanel-metrics')).toHaveAttribute('hidden');
+    expect(screen.queryByTestId('metrics-view-stub')).not.toBeInTheDocument();
   });
 
-  it('pauses cycling while document.hidden, resumes when visible', () => {
-    setUrl('?kiosk=1&cycle=10');
-    vi.useFakeTimers();
-    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
-    render(<App />);
-    const callsAfterMount = scrollIntoView.mock.calls.length;
-    act(() => { vi.advanceTimersByTime(30_000); });
-    // no advancement while hidden
-    expect(scrollIntoView.mock.calls.length).toBe(callsAfterMount);
-    expect(document.getElementById('tabpanel-pipeline')).not.toHaveAttribute('hidden');
-    // tab becomes visible again → next tick advances
-    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
-    act(() => { vi.advanceTimersByTime(10_000); });
-    expect((scrollIntoView.mock.contexts.at(-1) as HTMLElement).id).toBe('repo-section-1');
-  });
-
-  it('does not run a cycle timer outside kiosk mode', () => {
+  it('does not switch tabs outside kiosk mode (Delivery stays the default)', () => {
     vi.useFakeTimers();
     render(<App />);
     act(() => { vi.advanceTimersByTime(120_000); });
-    expect(scrollIntoView).not.toHaveBeenCalled();
-    expect(document.getElementById('tabpanel-pipeline')).not.toHaveAttribute('hidden');
+    expect(document.getElementById('tabpanel-delivery')).not.toHaveAttribute('hidden');
+    expect(document.getElementById('tabpanel-pipeline')).toHaveAttribute('hidden');
   });
 });
 

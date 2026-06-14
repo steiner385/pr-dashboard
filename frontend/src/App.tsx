@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDashboard } from './useDashboard';
 import { readKioskConfig } from './kiosk';
-import { scrollBehavior } from './motion';
 import { PrRow } from './PrRow';
 import { StatusStrip, bucketPr, type Bucket } from './StatusStrip';
 import { QueueTrain } from './QueueTrain';
 import { SettingsPanel } from './SettingsPanel';
 import { LegendPanel } from './LegendPanel';
 import { MetricsView } from './MetricsView';
+import { DeliverySpine } from './spine/DeliverySpine';
 import { ErrorBoundary } from './ErrorBoundary';
 import type { PrView } from './types';
 
-type TabId = 'pipeline' | 'metrics';
+type TabId = 'delivery' | 'pipeline' | 'metrics';
 
 // ---- localStorage helpers (private-mode safe) ----
 
@@ -55,7 +55,9 @@ export function App() {
   const [activeFilter, setActiveFilter] = useState<Bucket | null>(null);
   const [collapsedRepos, setCollapsedRepos] = useState<Set<string>>(() => readCollapsedSet());
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [tab, setTab] = useState<TabId>('pipeline');
+  const [tab, setTab] = useState<TabId>('delivery');
+  // Delivery is the default tab, so it's "visited" from the first render.
+  const [deliveryVisited] = useState(true);
   // Mount MetricsView lazily (first visit) and keep it mounted afterwards, so
   // switching tabs doesn't refetch; the panel divs always exist in the DOM so
   // every aria-controls id resolves.
@@ -81,19 +83,11 @@ export function App() {
     return () => window.clearInterval(id);
   }, [kiosk, cycleSeconds]);
 
-  // Views: one per repo section (scrolled to its top), then the Metrics tab.
+  // Kiosk pins the Delivery spine (spec §17): the wall display shows the
+  // lifecycle rail read-only, with no tab rotation.
   useEffect(() => {
     if (!kiosk || repoCount === 0) return;
-    const view = cycleTick % (repoCount + 1);
-    if (view < repoCount) {
-      setTab('pipeline');
-      document.getElementById(`repo-section-${view}`)
-        ?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
-    } else {
-      setMetricsVisited(true);
-      setTab('metrics');
-      window.scrollTo({ top: 0, behavior: scrollBehavior() });
-    }
+    setTab('delivery');
   }, [kiosk, cycleTick, repoCount]);
 
   if (!state) return <main className="app"><p className="loading">Loading…</p></main>;
@@ -187,6 +181,12 @@ export function App() {
         returnFocusRef={legendRef}
       />
       <nav className="tab-bar" role="tablist" aria-label="Dashboard views">
+        <button type="button" role="tab" id="tab-delivery"
+          aria-selected={tab === 'delivery'} aria-controls="tabpanel-delivery"
+          className={tab === 'delivery' ? 'tab active' : 'tab'}
+          onClick={() => setTab('delivery')}>
+          Delivery
+        </button>
         <button type="button" role="tab" id="tab-pipeline"
           aria-selected={tab === 'pipeline'} aria-controls="tabpanel-pipeline"
           className={tab === 'pipeline' ? 'tab active' : 'tab'}
@@ -204,6 +204,12 @@ export function App() {
       )}
       {/* in kiosk the tab bar is gone, so the panels drop the tabpanel role —
           every aria-labelledby/aria-controls must resolve to a real node */}
+      <div id="tabpanel-delivery" hidden={tab !== 'delivery'}
+        {...(kiosk ? {} : { role: 'tabpanel', 'aria-labelledby': 'tab-delivery' })}>
+        <ErrorBoundary>
+          {deliveryVisited && <DeliverySpine state={state} kiosk={kiosk} />}
+        </ErrorBoundary>
+      </div>
       <div id="tabpanel-metrics" hidden={tab !== 'metrics'}
         {...(kiosk ? {} : { role: 'tabpanel', 'aria-labelledby': 'tab-metrics' })}>
         {/* one boundary instance per tab: a render crash in one panel must

@@ -157,6 +157,19 @@ export type MetricDefinitionKey = keyof typeof METRIC_DEFINITIONS;
 export const DEFS = METRIC_DEFINITIONS;
 
 /**
+ * The Delivery spine's 5-state lane vocabulary (spec §16). Each glyph mirrors
+ * the live `LANE_GLYPH` rendering so the legend and the rail can't drift; the
+ * LegendPanel renders these as the "Delivery spine" deep-dive section.
+ */
+export const LANE_STATE_DEFINITIONS = {
+  laneGreen: { label: '● green', text: 'stage healthy — nothing to do' },
+  laneAmber: { label: '◐ watch', text: 'working but slow/degraded — needs attention, not broken' },
+  laneRed: { label: '✗ red', text: 'broken here — the thing to look at' },
+  laneBlind: { label: '◌ blind', text: 'wired but no signal (no data / source down) — never read as green' },
+  laneIdle: { label: '· idle', text: 'nothing happening, and that is normal' },
+} as const satisfies Record<string, Definition>;
+
+/**
  * Row sub-line vocabulary (PrRow's muted status line) — `match` recognizes the
  * term inside a rendered sub line so the row can carry the right tooltip;
  * the LegendPanel lists the same entries verbatim.
