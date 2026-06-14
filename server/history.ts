@@ -112,6 +112,18 @@ export function addColumnIfMissing(db: Database.Database, table: string, columnD
 export const ETA_ACCURACY_MIN_ACTUAL_SECS = 60;
 export const ETA_ACCURACY_MIN_ACTUAL_FRACTION = 0.05;
 
+// Duration-sample recency (issue #36). `expected()`/`samples()` pull the last 20
+// SUCCESS samples; without a freshness bound a regime change (e.g. an ARC
+// cutover) takes 20 runs PER JOB to wash out, and the denominator set already
+// has a 14-day window — an asymmetry. Fix: prefer samples within
+// DURATION_FRESH_DAYS of the job's OWN newest sample (age-based washout, ~14d
+// not 20 runs), measured relative-to-newest so a dormant-but-valid job is never
+// blinded. Fall back to the last DURATION_FALLBACK_LIMIT any-age when fewer than
+// DURATION_FRESH_MIN are fresh, so a rarely-run job still gets an estimate.
+export const DURATION_FRESH_DAYS = 14;
+export const DURATION_FRESH_MIN = 5;
+export const DURATION_FALLBACK_LIMIT = 10;
+
 /** Minimum spacing between state samples for one repo (recordStateSample throttle). */
 const STATE_SAMPLE_MIN_MS = 15 * 60_000;
 /** State samples older than this are pruned whenever a new sample lands. */
@@ -342,7 +354,7 @@ export class HistoryStore {
       'INSERT OR IGNORE INTO check_durations (repo, check_name, event, duration_secs, completed_at, conclusion, head_sha, run_attempt, started_at, run_number) VALUES (?,?,?,?,?,?,?,?,?,?)'
     );
     this.stmtSelectDurations = this.db.prepare(
-      `SELECT duration_secs FROM check_durations
+      `SELECT duration_secs, completed_at FROM check_durations
        WHERE repo=? AND check_name=? AND event=? AND conclusion='SUCCESS'
        ORDER BY completed_at DESC LIMIT 20`
     );
@@ -676,10 +688,25 @@ export class HistoryStore {
     return pending.length;
   }
 
+  /** Last-20 SUCCESS durations for (repo, check, event), recency-filtered (issue
+   *  #36), newest first. Prefers samples within DURATION_FRESH_DAYS of the job's
+   *  OWN newest sample so a regime change washes out by age (~14d) not by count
+   *  (20 runs); falls back to the last DURATION_FALLBACK_LIMIT any-age when too
+   *  few are fresh, so a rarely-run job is never blinded. */
+  private recentDurations(repo: string, name: string, event: string): number[] {
+    const rows = this.stmtSelectDurations.all(repo, name, event) as
+      { duration_secs: number; completed_at: string }[];
+    if (rows.length === 0) return [];
+    const cutoff = Date.parse(rows[0]!.completed_at) - DURATION_FRESH_DAYS * 86400_000;
+    const fresh = rows.filter((r) => Date.parse(r.completed_at) >= cutoff);
+    const chosen = fresh.length >= DURATION_FRESH_MIN ? fresh : rows.slice(0, DURATION_FALLBACK_LIMIT);
+    return chosen.map((r) => r.duration_secs);
+  }
+
   expected(repo: string, name: string, event: string): Expected | null {
-    const rows = this.stmtSelectDurations.all(repo, name, event) as { duration_secs: number }[];
-    if (rows.length === 0) return null;
-    const sorted = rows.map((r) => r.duration_secs).sort((a, b) => a - b);
+    const vals = this.recentDurations(repo, name, event);
+    if (vals.length === 0) return null;
+    const sorted = [...vals].sort((a, b) => a - b);
     return {
       p10: percentile(sorted, 0.1), p50: percentile(sorted, 0.5), p90: percentile(sorted, 0.9),
       n: sorted.length,
@@ -696,10 +723,10 @@ export class HistoryStore {
     return { p99Secs: percentile(sorted, 0.99), n: sorted.length };
   }
 
-  /** Raw last-20 SUCCESS duration samples for (repo, check, event), newest first. */
+  /** Raw recency-filtered SUCCESS duration samples for (repo, check, event),
+   *  newest first (issue #36 — see recentDurations). */
   samples(repo: string, name: string, event: string): number[] {
-    const rows = this.stmtSelectDurations.all(repo, name, event) as { duration_secs: number }[];
-    return rows.map((r) => r.duration_secs);
+    return this.recentDurations(repo, name, event);
   }
 
   expectedSet(repo: string, event: string, now: Date, windowDays = 14): string[] {

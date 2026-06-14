@@ -220,6 +220,45 @@ describe('samples (raw last-20 SUCCESS durations)', () => {
   });
 });
 
+describe('duration recency window (issue #36)', () => {
+  // Record `count` SUCCESS samples of `durSecs` each on `day`, with distinct
+  // completed_at (the UNIQUE key) so none dedupe.
+  const burst = (name: string, day: string, durSecs: number, count: number) => {
+    for (let i = 0; i < count; i++) {
+      const start = `${day}T10:${String(i).padStart(2, '0')}:00Z`;
+      const end = new Date(Date.parse(start) + durSecs * 1000).toISOString();
+      h.recordCheckDuration(REPO, name, 'pull_request', start, end, 'SUCCESS');
+    }
+  };
+
+  it('drops samples older than 14d before the newest when ≥5 fresh remain (regime washout)', () => {
+    burst('CI', '2026-05-01', 6000, 4);   // stale: ~6 weeks before the fresh cluster
+    burst('CI', '2026-06-12', 300, 6);    // fresh: 6 within 14d of the newest
+    const e = h.expected(REPO, 'CI', 'pull_request')!;
+    expect(e.n).toBe(6);                  // only the fresh cluster
+    expect(e.p50).toBe(300);              // stale 6000s excluded
+    expect(h.samples(REPO, 'CI', 'pull_request')).not.toContain(6000);
+  });
+
+  it('falls back to the last 10 any-age when fewer than 5 are fresh (rarely-run job)', () => {
+    burst('Rare', '2026-05-01', 6000, 4); // stale
+    burst('Rare', '2026-06-12', 300, 3);  // only 3 fresh (< DURATION_FRESH_MIN)
+    const samples = h.samples(REPO, 'Rare', 'pull_request');
+    expect(samples).toHaveLength(7);      // last-10 any-age = all 7 (3 fresh + 4 stale)
+    expect(samples).toContain(6000);      // stale kept — better than going blind
+    expect(h.expected(REPO, 'Rare', 'pull_request')!.n).toBe(7);
+  });
+
+  it('washout is measured relative to the job’s own newest sample, not wall-clock (dormant job kept)', () => {
+    // A job that last ran months ago, but consistently — its whole cluster is
+    // within 14d of its OWN newest, so all samples survive (never blinded).
+    burst('Dormant', '2026-01-05', 420, 6);
+    const e = h.expected(REPO, 'Dormant', 'pull_request')!;
+    expect(e.n).toBe(6);
+    expect(e.p50).toBe(420);
+  });
+});
+
 describe('group runs (observed merge-group durations)', () => {
   it('records and returns median of last 20', () => {
     [600, 900, 1200].forEach((d, i) =>
