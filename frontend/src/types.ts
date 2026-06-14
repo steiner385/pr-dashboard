@@ -139,7 +139,12 @@ export interface RepoQueueView {
 export interface DashboardState {
   generatedAt: string; staleSince: string | null;
   repos: { repo: string; hasDeploy: boolean; prs: PrView[]; queue: RepoQueueView | null;
-    laneHealth?: { main: LaneStatus; lastGreenSha?: string | null; lastGreenAt?: string | null; mainSeries?: { ok: boolean | null }[] }; }[];
+    laneHealth?: { main: LaneStatus; lastGreenSha?: string | null; lastGreenAt?: string | null; mainSeries?: { ok: boolean | null }[] };
+    /** Advisory Deploy-lane snapshot (Spec 2): per-env live commit sha (from
+     *  /health) + awaiting-QA/awaiting-prod drift. Absent for repos with no
+     *  deploy config. Mirror of server estimator/deploy-status.ts. */
+    deploy?: { envs: { name: string; liveSha: string | null; reachable: boolean }[];
+      awaitingQa: number; awaitingProd: number }; }[];
 }
 
 // ---- Notifications (issue #19) ----
