@@ -15,11 +15,20 @@ describe('SpineLane', () => {
     const btn = screen.getByRole('button', { name: /Merge queue.*watch.*2 trains/ });
     expect(btn).toHaveAttribute('aria-expanded', 'false');
   });
-  it('keeps the expanded panel in the DOM (hidden) so aria-controls always resolves', () => {
+  it('keeps the panel element in the DOM (hidden) so aria-controls always resolves; body is lazy', () => {
     render(<SpineLane lane={lane({})} expanded={false} onToggle={() => {}} />);
-    const panel = screen.getByTestId('panel').closest('[id]')!;
+    const btn = screen.getByRole('button');
+    const panelId = btn.getAttribute('aria-controls')!;
+    const panel = document.getElementById(panelId)!;
+    // panel element resolves (WCAG 4.1.2) and is hidden while collapsed…
+    expect(panel).not.toBeNull();
     expect(panel).toHaveAttribute('hidden');
-    expect(screen.getByRole('button').getAttribute('aria-controls')).toBe(panel.id);
+    // …but the drill-down body is not mounted until the lane is expanded
+    expect(screen.queryByTestId('panel')).toBeNull();
+  });
+  it('mounts the panel body when expanded', () => {
+    render(<SpineLane lane={lane({})} expanded onToggle={() => {}} />);
+    expect(screen.getByTestId('panel')).toBeInTheDocument();
   });
   it('toggles on click', () => {
     const onToggle = vi.fn();

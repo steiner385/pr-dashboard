@@ -34,8 +34,13 @@ function SpineLaneInner({ lane, expanded, onToggle }: Props) {
         {body}
         <span className="spine-chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
       </button>
+      {/* Lazy panel body: the panel div (aria-controls target) is always in the
+          DOM so the reference resolves (WCAG 4.1.2), but its drill-down content
+          only mounts when expanded — a collapsed lane must not leak its PR rows
+          into the document (they would duplicate the main list's rows and their
+          `pr-{n}` ids, and surface under unrelated tabs/filters). */}
       <div id={panelId} className="spine-panel" hidden={!expanded}>
-        {lane.renderExpanded()}
+        {expanded && lane.renderExpanded()}
       </div>
     </li>
   );

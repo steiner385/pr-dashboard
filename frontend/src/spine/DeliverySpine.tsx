@@ -7,6 +7,8 @@ import { prCiLane } from './lanes/prCiLane';
 import { mergeQueueLane } from './lanes/mergeQueueLane';
 import { mainLane } from './lanes/mainLane';
 import { scrollBehavior } from '../motion';
+import { PrCiPanel } from './panels/PrCiPanel';
+import { MergeQueuePanel } from './panels/MergeQueuePanel';
 
 const LS_KEY = 'prdash.spine.expanded';
 function readExpanded(): Set<string> {
@@ -28,11 +30,11 @@ function buildLanes(state: DashboardState | null): Lane[] {
   return [
     {
       id: 'pr-ci', title: 'PR CI', glyphPosition: 'dot', wiredness: 'wired', gating: true,
-      status: prc.status, summary: prc.summary, renderExpanded: () => null,
+      status: prc.status, summary: prc.summary, renderExpanded: () => <PrCiPanel repos={repos} />,
     },
     {
       id: 'merge-queue', title: 'Merge queue', glyphPosition: 'dot', wiredness: 'wired', gating: true,
-      status: mq.status, summary: mq.summary, renderExpanded: () => null,
+      status: mq.status, summary: mq.summary, renderExpanded: () => <MergeQueuePanel repos={repos} />,
     },
     {
       id: 'main', title: 'main', glyphPosition: 'dot', wiredness: 'wired', gating: true,

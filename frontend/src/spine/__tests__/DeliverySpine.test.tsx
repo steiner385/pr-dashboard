@@ -5,7 +5,7 @@ import type { DashboardState } from '../../types';
 
 const state = (over: object): DashboardState => ({
   generatedAt: '', staleSince: null, repos: [{ repo: 'acme/widgets', hasDeploy: false,
-    prs: [{ number: 1, stage: { stage: 'ci', substate: 'ci-failed' } }], queue: null }], ...over,
+    prs: [{ number: 1, title: 't', url: 'u', stage: { stage: 'ci', substate: 'ci-failed', percent: null, etaSeconds: null, etaRangeSeconds: null, overdue: false }, queueAheadCount: null, checks: [] }], queue: null }], ...over,
 }) as unknown as DashboardState;
 
 describe('DeliverySpine', () => {
@@ -19,5 +19,15 @@ describe('DeliverySpine', () => {
   it('skeleton state when state is null (no crash, lanes present)', () => {
     render(<DeliverySpine state={null} kiosk={false} />);
     expect(screen.getAllByTestId(/spine-lane-/).length).toBeGreaterThan(0);
+  });
+  it('PR CI and Merge queue lanes expand to their panels', () => {
+    // state with a failed PR in CI so the PR CI lane is red and worth expanding
+    const st = {
+      generatedAt: '', staleSince: null, repos: [{ repo: 'acme/widgets', hasDeploy: false,
+        prs: [{ number: 1, title: 't', url: 'u', stage: { stage: 'ci', substate: 'ci-failed', percent: null, etaSeconds: null, etaRangeSeconds: null, overdue: false }, queueAheadCount: null, checks: [] }],
+        queue: null }],
+    } as unknown as DashboardState;
+    render(<DeliverySpine state={st} kiosk />);   // kiosk = all lanes expanded
+    expect(screen.getByTestId('spine-prci-row-1')).toBeInTheDocument();
   });
 });
