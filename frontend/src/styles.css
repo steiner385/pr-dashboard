@@ -635,3 +635,24 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
 .spine-flake-rate { min-width: 3em; text-align: right; }
 .spine-flake-soon { color: var(--muted, #888); margin-top: 6px; font-size: 12px; font-style: italic; }
 .spine-panel-note { color: var(--muted, #888); }
+
+/* Global CI-health header (above the tabs) — at-a-glance lane rollup + chips,
+   reusing the spine's --done/--amber/--fail/--muted glyph colors (.spine-glyph
+   .s-*) so the band and the Delivery detail can't drift. */
+.health-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  padding: 8px 0 10px; margin-bottom: 10px; border-bottom: 1px solid var(--border); }
+.health-rollup { font: inherit; cursor: pointer; display: inline-flex; align-items: center;
+  gap: 6px; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); font-weight: 600; }
+.health-rollup.r-red { border-color: var(--fail); }
+.health-rollup.r-amber { border-color: var(--amber); }
+.health-rollup.r-blind { border-color: var(--muted); }
+.health-rollup:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.health-lanes { display: flex; flex-wrap: wrap; gap: 4px 6px; list-style: none; margin: 0; padding: 0; }
+.health-lane { font: inherit; cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+  min-height: 32px; padding: 3px 9px; border-radius: 6px; border: 1px solid transparent;
+  background: none; color: var(--text); }
+.health-lane:hover { background: color-mix(in srgb, var(--text) 5%, transparent);
+  border-color: var(--border); }
+.health-lane.not-wired { opacity: 0.5; }
+.health-lane-title { font-size: 13px; }

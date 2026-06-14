@@ -264,6 +264,23 @@ describe('App tab bar', () => {
     expect(screen.getByRole('tab', { name: 'Pipeline' })).toHaveAttribute('aria-selected', 'true');
   });
 
+  // ---- global CI-health header (above the tabs) ----
+  it('shows the global CI-health header above the tabs', () => {
+    render(<App />);
+    expect(screen.getByRole('group', { name: 'Overall CI health' })).toBeInTheDocument();
+    const rollup = screen.getByTestId('health-rollup');
+    const tablist = screen.getByRole('tablist', { name: 'Dashboard views' });
+    // header precedes the tab bar in document order
+    expect(rollup.compareDocumentPosition(tablist) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('clicking a health-header lane chip opens the Delivery tab and mounts its detail', () => {
+    render(<App />);
+    fireEvent.click(screen.getByTestId('health-lane-pr-ci'));
+    expect(screen.getByRole('tab', { name: /delivery/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('spine-lane-pr-ci')).toBeInTheDocument();
+  });
+
   // ---- per-tab error boundary ----
 
   describe('per-tab error boundary', () => {
@@ -355,6 +372,12 @@ describe('App kiosk mode (issue #20)', () => {
     expect(document.getElementById('tabpanel-delivery')).not.toHaveAttribute('hidden');
     expect(document.getElementById('tabpanel-pipeline')).toHaveAttribute('hidden');
     expect(document.getElementById('tabpanel-metrics')).toHaveAttribute('hidden');
+  });
+
+  it('hides the global health header in kiosk (the spine carries its own rollup)', () => {
+    setUrl('?kiosk=1');
+    render(<App />);
+    expect(screen.queryByRole('group', { name: 'Overall CI health' })).not.toBeInTheDocument();
   });
 
   it('adds the kiosk class to the app root', () => {
