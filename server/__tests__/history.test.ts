@@ -1481,3 +1481,27 @@ describe('pruneConflatedGroupStatsOnce', () => {
     expect(h.medianGroupRun(REPO)).toBe(200);
   });
 });
+
+describe('main_commits + mainLaneHealth', () => {
+  it('lone fresh red → amber; two consecutive reds → red; null newest → blind; tracks last-green', () => {
+    h.recordMainCommit(REPO, 'sha1', '2026-06-10T10:00:00Z', 'SUCCESS', '2026-06-10T10:12:00Z');
+    h.recordMainCommit(REPO, 'sha2', '2026-06-10T11:00:00Z', 'FAILURE', '2026-06-10T11:12:00Z');
+    expect(h.mainLaneHealth(REPO, 36500).status).toBe('amber');       // newest red, but the one below it is green
+    expect(h.mainLaneHealth(REPO, 36500).lastGreenSha).toBe('sha1');
+    h.recordMainCommit(REPO, 'sha3', '2026-06-10T12:00:00Z', 'FAILURE', '2026-06-10T12:12:00Z');
+    expect(h.mainLaneHealth(REPO, 36500).status).toBe('red');         // two consecutive newest reds
+    h.recordMainCommit(REPO, 'sha4', '2026-06-10T13:00:00Z', null, null);
+    expect(h.mainLaneHealth(REPO, 36500).status).toBe('blind');       // newest not run yet — never green
+  });
+  it('newest green → green; empty → idle', () => {
+    expect(h.mainLaneHealth(REPO, 36500).status).toBe('idle');
+    h.recordMainCommit(REPO, 'a', '2026-06-10T10:00:00Z', 'FAILURE', '2026-06-10T10:05:00Z');
+    h.recordMainCommit(REPO, 'b', '2026-06-10T11:00:00Z', 'SUCCESS', '2026-06-10T11:05:00Z');
+    expect(h.mainLaneHealth(REPO, 36500).status).toBe('green');
+  });
+  it('re-recording the same commit upserts its conclusion', () => {
+    h.recordMainCommit(REPO, 'c', '2026-06-10T10:00:00Z', null, null);
+    h.recordMainCommit(REPO, 'c', '2026-06-10T10:00:00Z', 'SUCCESS', '2026-06-10T10:10:00Z');
+    expect(h.mainLaneHealth(REPO, 36500).status).toBe('green');
+  });
+});

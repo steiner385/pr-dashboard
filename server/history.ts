@@ -181,6 +181,9 @@ export class HistoryStore {
   private readonly stmtSelectObservedPool: Database.Statement;
   private readonly stmtSelectObservedPoolSibling: Database.Statement;
   private readonly stmtSelectObservedPools: Database.Statement;
+  // Delivery spine main lane (spec §4.1, §8.4): post-merge push:main verdicts
+  private readonly stmtUpsertMainCommit: Database.Statement;
+  private readonly stmtRecentMainCommits: Database.Statement;
 
   constructor(path: string) {
     this.db = new Database(path);
@@ -269,6 +272,19 @@ export class HistoryStore {
         applied_at TEXT NOT NULL,
         UNIQUE(repo, old_name, new_name)
       );
+      -- Delivery spine main lane (spec §4.1, §8.4): the post-merge push:main CI
+      -- verdict per main commit. One row per (repo, commit_sha); re-recording a
+      -- commit upserts its conclusion as the push:main run progresses (null →
+      -- SUCCESS/FAILURE). e2e_* columns are reserved for the later e2e lane.
+      CREATE TABLE IF NOT EXISTS main_commits (
+        repo TEXT NOT NULL, commit_sha TEXT NOT NULL,
+        merged_at TEXT, run_number INTEGER,
+        push_ci_conclusion TEXT, push_ci_completed_at TEXT,
+        e2e_conclusion TEXT, e2e_completed_at TEXT,
+        observed_at TEXT NOT NULL,
+        UNIQUE(repo, commit_sha)
+      );
+      CREATE INDEX IF NOT EXISTS idx_main_commits ON main_commits(repo, merged_at);
     `);
 
     // Migration: merged_prs gains created_at (PR lifespan metric). Fresh DBs get
@@ -530,6 +546,17 @@ export class HistoryStore {
     this.stmtSelectObservedPools = this.db.prepare(
       'SELECT repo, check_name, event, pool, github_hosted, last_seen FROM observed_pools'
     );
+    this.stmtUpsertMainCommit = this.db.prepare(
+      `INSERT INTO main_commits (repo, commit_sha, merged_at, push_ci_conclusion, push_ci_completed_at, observed_at)
+       VALUES (?,?,?,?,?,?)
+       ON CONFLICT(repo, commit_sha) DO UPDATE SET
+         merged_at=excluded.merged_at,
+         push_ci_conclusion=excluded.push_ci_conclusion,
+         push_ci_completed_at=excluded.push_ci_completed_at,
+         observed_at=excluded.observed_at`);
+    this.stmtRecentMainCommits = this.db.prepare(
+      `SELECT commit_sha, merged_at, push_ci_conclusion, push_ci_completed_at
+       FROM main_commits WHERE repo=? AND merged_at >= ? ORDER BY merged_at DESC LIMIT 20`);
   }
 
   /** `headSha`/`runAttempt` (issue #34): the PR/group head commit the check ran
@@ -699,6 +726,32 @@ export class HistoryStore {
   medianGroupRun(repo: string): number | null {
     const rows = this.stmtSelectGroupRuns.all(repo) as { duration_secs: number }[];
     return rows.length ? median(rows.map((r) => r.duration_secs)) : null;
+  }
+
+  /** Record the post-merge push:main CI verdict for one main commit (spec
+   *  §4.1, §8.4). Upserts on (repo, sha): re-recording a commit overwrites its
+   *  conclusion as the push:main run progresses (null → SUCCESS/FAILURE). */
+  recordMainCommit(repo: string, sha: string, mergedAt: string | null,
+    pushConclusion: string | null, pushCompletedAt: string | null): void {
+    this.stmtUpsertMainCommit.run(repo, sha, mergedAt, pushConclusion, pushCompletedAt, new Date().toISOString());
+  }
+
+  /** Main-branch health (spec §4.1, §8.4). The scan is bounded to the retention
+   *  window; a lone newest red over a green is amber (watch), two consecutive
+   *  newest reds is red, a newest with no conclusion is blind (never green). */
+  mainLaneHealth(repo: string, retentionDays = 7, now: Date = new Date()):
+    { status: 'green' | 'amber' | 'red' | 'blind' | 'idle'; lastGreenSha: string | null } {
+    const cutoff = new Date(now.getTime() - retentionDays * 86400_000).toISOString();
+    const rows = this.stmtRecentMainCommits.all(repo, cutoff) as
+      { commit_sha: string; push_ci_conclusion: string | null }[];
+    if (rows.length === 0) return { status: 'idle', lastGreenSha: null };
+    const lastGreen = rows.find((r) => r.push_ci_conclusion === 'SUCCESS')?.commit_sha ?? null;
+    const fail = (c: string | null) => c === 'FAILURE' || c === 'TIMED_OUT' || c === 'STARTUP_FAILURE';
+    const newest = rows[0];
+    if (newest.push_ci_conclusion == null) return { status: 'blind', lastGreenSha: lastGreen };
+    if (!fail(newest.push_ci_conclusion)) return { status: 'green', lastGreenSha: lastGreen };
+    const secondRed = rows[1] != null && fail(rows[1].push_ci_conclusion);
+    return { status: secondRed ? 'red' : 'amber', lastGreenSha: lastGreen };
   }
 
   /** Raw last-20 whole-group run durations for a repo, newest first —
