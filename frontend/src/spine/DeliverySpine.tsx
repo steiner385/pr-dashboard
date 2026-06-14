@@ -2,14 +2,8 @@ import { useMemo, useState } from 'react';
 import type { DashboardState, Lane } from '../types';
 import { SpineLane } from './SpineLane';
 import { rollup } from './laneStatus';
+import { buildLaneHealth } from './laneHealth';
 import { ErrorBoundary } from '../ErrorBoundary';
-import { prCiLane } from './lanes/prCiLane';
-import { mergeQueueLane } from './lanes/mergeQueueLane';
-import { mainLane } from './lanes/mainLane';
-import { deployLane } from './lanes/deployLane';
-import { scheduledLane } from './lanes/scheduledLane';
-import { failuresLane } from './lanes/failuresLane';
-import { costLane } from './lanes/costLane';
 import { scrollBehavior } from '../motion';
 import { PrCiPanel } from './panels/PrCiPanel';
 import { MergeQueuePanel } from './panels/MergeQueuePanel';
@@ -33,75 +27,22 @@ function readExpanded(): Set<string> {
 
 function buildLanes(state: DashboardState | null): Lane[] {
   const repos = state?.repos ?? [];
-  const prc = state ? prCiLane(repos) : { status: 'blind' as const, summary: 'loading…' };
-  const mq = state ? mergeQueueLane(repos) : { status: 'blind' as const, summary: 'loading…' };
-  const ml = state ? mainLane(repos) : { status: 'blind' as const, summary: 'loading…' };
-  const dp = state ? deployLane(repos) : { status: 'blind' as const, summary: 'loading…' };
-  const sl = state ? scheduledLane(repos) : { status: 'blind' as const, summary: 'loading…' };
-  const fl = state ? failuresLane(repos) : { status: 'blind' as const, summary: 'loading…' };
-  const cl = state ? costLane(state.cost) : { status: 'blind' as const, summary: 'loading…' };
-  // Advisory + not-wired whenever no repo ships a deploy snapshot, so the lane
-  // is excluded from the worst-wins rollup (it must never red the spine).
-  const deployWired = repos.some((r) => r.deploy);
-  // Scheduled is gating, but not-wired (excluded from the rollup) whenever no
-  // repo has discovered scheduled workflows — a spine with no nightly can't red.
-  const scheduledWired = repos.some((r) => r.scheduled && r.scheduled.discovered > 0);
-
-  // Per-lane cost chips (Spec 3): weave each linear lane's stage dollars in as a
-  // chip, omitted when that stage is unpriced (null) — never a false $0.
-  const days = state?.cost?.days ?? 0;
-  const stageDollars = (stage: 'pr' | 'queue' | 'main'): { dollars: number; days: number } | undefined => {
-    const s = state?.cost?.byStage.find((x) => x.stage === stage);
-    return s?.dollars != null ? { dollars: Math.round(s.dollars), days } : undefined;
+  // Health (status/summary/wiredness) comes from the shared source of truth so
+  // the spine and the global HealthHeader can't drift; the spine alone attaches
+  // the expanded-panel renderer per lane id.
+  const panelById: Record<string, () => import('react').ReactNode> = {
+    'pr-ci': () => <PrCiPanel repos={repos} />,
+    'merge-queue': () => <MergeQueuePanel repos={repos} />,
+    'main': () => <MainPanel repos={repos} />,
+    'deploy': () => <DeployPanel repos={repos} />,
+    'scheduled': () => <ScheduledPanel repos={repos} />,
+    'failures': () => <FailuresPanel repos={repos} />,
+    'cost': () => <CostPanel cost={state?.cost ?? null} />,
   };
-  // The Cost lane is advisory: not-wired (excluded from the rollup) whenever no
-  // rates are configured (blind), so it can never red/blind the spine.
-  const costWired = cl.status !== 'blind';
-
-  return [
-    {
-      id: 'pr-ci', title: 'PR CI', glyphPosition: 'dot', wiredness: 'wired', gating: true,
-      status: prc.status, summary: prc.summary, costChip: stageDollars('pr'),
-      renderExpanded: () => <PrCiPanel repos={repos} />,
-    },
-    {
-      id: 'merge-queue', title: 'Merge queue', glyphPosition: 'dot', wiredness: 'wired', gating: true,
-      status: mq.status, summary: mq.summary, costChip: stageDollars('queue'),
-      renderExpanded: () => <MergeQueuePanel repos={repos} />,
-    },
-    {
-      id: 'main', title: 'main', glyphPosition: 'dot', wiredness: 'wired', gating: true,
-      status: ml.status, summary: ml.summary, costChip: stageDollars('main'),
-      renderExpanded: () => <MainPanel repos={repos} />,
-    },
-    {
-      id: 'deploy', title: 'Deploy', glyphPosition: 'dot',
-      wiredness: deployWired ? 'wired' : 'not-wired', gating: false,
-      status: dp.status, summary: dp.summary, renderExpanded: () => <DeployPanel repos={repos} />,
-    },
-    {
-      id: 'scheduled', title: 'Scheduled', glyphPosition: 'dot',
-      wiredness: scheduledWired ? 'wired' : 'not-wired', gating: true,
-      status: sl.status, summary: sl.summary,
-      renderExpanded: () => <ScheduledPanel repos={repos} />,
-    },
-    {
-      // Cross-cutting advisory lane (Spec 5): flake intelligence from the
-      // dashboard's own check_durations history. gating:false + amber-at-most
-      // (failuresLane never reds), so it can never escalate the worst-wins
-      // rollup; always wired (idle when clean is excluded from attention).
-      id: 'failures', title: 'Failures & flake', glyphPosition: 'crosscut',
-      wiredness: 'wired', gating: false,
-      status: fl.status, summary: fl.summary, costChip: undefined,
-      renderExpanded: () => <FailuresPanel repos={repos} />,
-    },
-    {
-      id: 'cost', title: 'Cost', glyphPosition: 'crosscut',
-      wiredness: costWired ? 'wired' : 'not-wired', gating: false,
-      status: cl.status, summary: cl.summary, costChip: undefined,
-      renderExpanded: () => <CostPanel cost={state?.cost ?? null} />,
-    },
-  ];
+  return buildLaneHealth(state).map((h) => ({
+    ...h,
+    renderExpanded: panelById[h.id] ?? (() => null),
+  }));
 }
 
 export function DeliverySpine({ state, kiosk }: { state: DashboardState | null; kiosk: boolean }) {

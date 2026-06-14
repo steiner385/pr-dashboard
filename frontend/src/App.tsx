@@ -8,7 +8,9 @@ import { SettingsPanel } from './SettingsPanel';
 import { LegendPanel } from './LegendPanel';
 import { MetricsView } from './MetricsView';
 import { DeliverySpine } from './spine/DeliverySpine';
+import { HealthHeader } from './HealthHeader';
 import { ErrorBoundary } from './ErrorBoundary';
+import { scrollBehavior } from './motion';
 import type { PrView } from './types';
 
 type TabId = 'delivery' | 'pipeline' | 'metrics';
@@ -111,6 +113,17 @@ export function App() {
     if (next === 'delivery') setDeliveryVisited(true);
     if (next === 'metrics') setMetricsVisited(true);
   }, []);
+
+  // Global health header → detail: open the Delivery tab and bring the lane into
+  // view once it's mounted (rAF, after the panel commits this render).
+  const jumpToLane = useCallback((laneId: string | null) => {
+    selectTab('delivery');
+    if (!laneId) return;
+    requestAnimationFrame(() => {
+      document.getElementById(`spine-lane-${laneId}`)
+        ?.scrollIntoView?.({ behavior: scrollBehavior(), block: 'start' });
+    });
+  }, [selectTab]);
 
   // Reflect the active tab in the URL hash (history entry per switch, so
   // back/forward steps through tabs). Skip in kiosk — it pins one view and uses
@@ -223,6 +236,9 @@ export function App() {
         onClose={handleLegendClose}
         returnFocusRef={legendRef}
       />
+      <ErrorBoundary>
+        <HealthHeader state={state} onJumpToLane={jumpToLane} />
+      </ErrorBoundary>
       <nav className="tab-bar" role="tablist" aria-label="Dashboard views">
         <button type="button" role="tab" id="tab-pipeline"
           aria-selected={tab === 'pipeline'} aria-controls="tabpanel-pipeline"
