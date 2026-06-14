@@ -600,3 +600,11 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
 .spine-main-spark { display: flex; gap: 2px; margin-top: 4px; }
 .spine-main-spark-bar { width: 8px; height: 16px; border-radius: 2px; display: inline-block; }
 .spine-main-lastgreen { color: var(--text); }
+.spine-deploy-envs { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; }
+.spine-deploy-env { display: inline-flex; align-items: center; gap: 4px; }
+.spine-deploy-env-name { color: var(--text); }
+.spine-deploy-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.spine-deploy-dot.ok { background: var(--done); }
+.spine-deploy-dot.off { background: var(--muted, #888); }
+.spine-deploy-sha-none { color: var(--muted, #888); font-style: italic; }
+.spine-deploy-awaiting { color: var(--muted, #888); margin-top: 4px; font-size: 12px; }
