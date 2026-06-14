@@ -7,9 +7,37 @@ export function canonicalizeCheckName(raw: string): string {
     .trim();
 }
 
+/**
+ * Drop checks from SUPERSEDED workflow runs before per-name dedupe. GitHub can
+ * surface checks from more than one run of the same workflow on a commit (a
+ * re-trigger, or a concurrency-cancel + restart): #9681 had CI run #9106 whose
+ * `ci` rollup fast-FAILED, plus the live run #9107 still in progress that hadn't
+ * produced `ci` yet. Per-name dedupe (`latestRunMembers`) can't fix this — the
+ * only `ci` member is the stale failed one, so it survives and the PR reads
+ * CI-failed while GitHub's own rollup is PENDING. Fix: within each
+ * (workflowName, event) group keep only the latest run (max runNumber) and drop
+ * EVERY check from older runs, even names the latest run hasn't produced yet.
+ * Only checks with real identity (non-null workflowName AND runNumber)
+ * participate — legacy/StatusContext checks keep prior behavior so a null
+ * group can't cross-supersede unrelated names.
+ */
+function dropSupersededRuns(checks: CheckRun[]): CheckRun[] {
+  const maxRun = new Map<string, number>();
+  for (const c of checks) {
+    if (c.workflowName == null || c.runNumber == null) continue;
+    const key = `${c.workflowName}::${c.event}`;
+    const cur = maxRun.get(key);
+    if (cur == null || c.runNumber > cur) maxRun.set(key, c.runNumber);
+  }
+  return checks.filter((c) => {
+    if (c.workflowName == null || c.runNumber == null) return true;
+    return c.runNumber === maxRun.get(`${c.workflowName}::${c.event}`);
+  });
+}
+
 export function dedupeChecks(checks: CheckRun[]): CheckRun[] {
   const groups = new Map<string, CheckRun[]>();
-  for (const c of checks) {
+  for (const c of dropSupersededRuns(checks)) {
     // workflowName in the key keeps same-named jobs in different workflows apart
     // (e.g. `ci-gate` in `Auto-merge PRs` vs anything in `CI`); null/'' groups
     // old data without workflow identity exactly as before.

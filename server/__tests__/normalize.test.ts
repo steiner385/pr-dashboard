@@ -200,6 +200,39 @@ describe('cross-run re-run families (issue #61)', () => {
   });
 });
 
+describe('superseded workflow runs (stale failed rollup — #9681)', () => {
+  it('drops ALL checks from an older run when a newer run of the same workflow exists — even a check the newer run has not produced yet', () => {
+    // An older CI run fast-failed its `ci` rollup (concurrency cancel); the live
+    // newer run is still in progress and hasn't produced `ci` yet. The stale
+    // failed `ci` must NOT survive (GitHub's own rollup is PENDING).
+    const out = dedupeChecks([
+      run({ name: 'ci', workflowName: 'CI', conclusion: 'FAILURE', status: 'COMPLETED', runNumber: 9106 }),
+      run({ name: 'Prepare', workflowName: 'CI', conclusion: 'CANCELLED', status: 'COMPLETED', runNumber: 9106 }),
+      run({ name: 'Prepare', workflowName: 'CI', conclusion: null, status: 'IN_PROGRESS', completedAt: null, runNumber: 9107 }),
+    ]);
+    expect(out.find((c) => c.name === 'ci')).toBeUndefined();   // stale failed ci is gone
+    const prep = out.find((c) => c.name === 'Prepare')!;
+    expect(prep.status).toBe('IN_PROGRESS');                    // live run's Prepare wins
+    expect(prep.runNumber).toBe(9107);
+  });
+
+  it('supersedes per (workflow, event) — different workflows on the same commit stay independent', () => {
+    const out = dedupeChecks([
+      run({ name: 'ci', workflowName: 'CI', conclusion: 'SUCCESS', runNumber: 50 }),
+      run({ name: 'ci-gate', workflowName: 'Auto-merge PRs', conclusion: 'CANCELLED', status: 'COMPLETED', runNumber: 313 }),
+    ]);
+    expect(out.map((c) => c.name).sort()).toEqual(['ci', 'ci-gate']);
+  });
+
+  it('does not supersede legacy checks lacking workflow identity (null workflowName)', () => {
+    const out = dedupeChecks([
+      run({ name: 'a', workflowName: null, runNumber: 1 }),
+      run({ name: 'b', workflowName: null, runNumber: 9 }),
+    ]);
+    expect(out.map((c) => c.name).sort()).toEqual(['a', 'b']);  // both kept; no cross-name supersession
+  });
+});
+
 describe('familyDisplayName', () => {
   it('families label with the matrix denominator, not the surviving shard', () => {
     const fam = dedupeChecks([

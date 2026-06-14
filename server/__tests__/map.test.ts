@@ -30,8 +30,11 @@ describe('mapRollupContexts', () => {
   it('keeps same-named checks from different workflows as separate runs', () => {
     const out = mapRollupContexts([
       { ...CHECK, name: 'ci', checkSuite: { workflowRun: { event: 'pull_request', runNumber: 7990, workflow: { name: 'CI' } } } },
+      // ci-gate and ci are two jobs of the SAME Auto-merge run → share runNumber
+      // (different runNumbers would mean one run superseded the other; see the
+      // superseded-runs handling in normalize.dedupeChecks).
       { ...CHECK, name: 'ci-gate', checkSuite: { workflowRun: { event: 'pull_request', runNumber: 511, workflow: { name: 'Auto-merge PRs' } } } },
-      { ...CHECK, name: 'ci', checkSuite: { workflowRun: { event: 'pull_request', runNumber: 510, workflow: { name: 'Auto-merge PRs' } } } },
+      { ...CHECK, name: 'ci', checkSuite: { workflowRun: { event: 'pull_request', runNumber: 511, workflow: { name: 'Auto-merge PRs' } } } },
     ]);
     expect(out).toHaveLength(3);
     const cis = out.filter((c) => c.name === 'ci');
