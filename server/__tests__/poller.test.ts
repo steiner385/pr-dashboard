@@ -4482,6 +4482,9 @@ describe('Poller queue ops console (#39) + merge ETA simulation (#40)', () => {
    *  (group_runs is observation-biased), so also seed 5 merged PRs forming
    *  3 trains: [pair 60s apart], [exact-90s pair], [singleton] → 3/24 ≈ 0.1. */
   function seedTrainHistory() {
+    // Steady-state history: the one-time de-conflation prune already ran on a
+    // prior boot, so seeded group data must survive Poller construction.
+    history.setMeta('deconflation_prune_v1', 'test');
     history.recordGroupRun('acme/widgets', 600, '2026-06-10T08:00:00Z');
     history.recordGroupRun('acme/widgets', 600, '2026-06-10T09:00:00Z');
     history.recordGroupRun('acme/widgets', 600, '2026-06-10T10:00:00Z');

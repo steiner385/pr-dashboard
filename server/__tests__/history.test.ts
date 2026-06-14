@@ -1467,3 +1467,17 @@ describe('applyCheckAliases — carry learned history across a check rename', ()
     expect(h.applyCheckAliases(REPO, undefined)).toBe(0);
   });
 });
+
+describe('pruneConflatedGroupStatsOnce', () => {
+  it('clears group_runs + group_failures once, then is a no-op', () => {
+    h.recordGroupRun(REPO, 120, '2026-06-10T10:00:00Z');
+    h.recordGroupFailure(REPO, 'ci', 'sha1', '2026-06-10T10:00:00Z');
+    expect(h.pruneConflatedGroupStatsOnce()).toBe(true);              // ran
+    expect(h.medianGroupRun(REPO)).toBeNull();
+    expect(h.groupFailuresSince('2026-06-01T00:00:00Z').filter((f) => f.repo === REPO)).toHaveLength(0);
+    // a fresh row after the prune survives, and a second call does nothing
+    h.recordGroupRun(REPO, 200, '2026-06-11T10:00:00Z');
+    expect(h.pruneConflatedGroupStatsOnce()).toBe(false);            // already done
+    expect(h.medianGroupRun(REPO)).toBe(200);
+  });
+});

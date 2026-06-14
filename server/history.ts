@@ -678,6 +678,17 @@ export class HistoryStore {
     return rows.length ? median(rows.map((r) => r.gap_secs)) : null;
   }
 
+  /** One-time cleanup of group_runs/group_failures rows written before the
+   *  merge_group↔push:main de-conflation fix (every pre-fix row may be
+   *  contaminated; 7-day retention re-accumulates clean). Idempotent via a meta
+   *  flag. Returns true the first time it actually pruned. */
+  pruneConflatedGroupStatsOnce(): boolean {
+    if (this.getMeta('deconflation_prune_v1')) return false;
+    this.db.exec('DELETE FROM group_runs; DELETE FROM group_failures;');
+    this.setMeta('deconflation_prune_v1', new Date().toISOString());
+    return true;
+  }
+
   /** Observed wall-clock duration of a whole merge-group CI run. Rejects ≤0/NaN. */
   recordGroupRun(repo: string, durationSecs: number, completedAt: string): boolean {
     if (!(durationSecs > 0)) return false; // rejects ≤0 and NaN

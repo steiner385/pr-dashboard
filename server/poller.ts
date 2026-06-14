@@ -564,6 +564,7 @@ export class Poller extends EventEmitter {
     // The poller IS the API's event bus — relay notifier events so the SSE
     // layer needs only one EventEmitter subscription target.
     deps.notifier?.on('notification', (ev) => this.emit('notification', ev));
+    this.deps.history.pruneConflatedGroupStatsOnce();
     this.restorePersisted();
   }
 
