@@ -676,3 +676,31 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
   border-color: var(--border); }
 .health-lane.not-wired { opacity: 0.5; }
 .health-lane-title { font-size: 13px; }
+
+/* ============================================================================
+   Responsive layout (phones, ≤560px). The app is desktop-first; these rules
+   stop wide content from forcing horizontal page scroll. No behavior changes —
+   wide content reflows or scrolls within its own container. Kiosk (768–1023px)
+   is above this breakpoint and unaffected.
+   ============================================================================ */
+@media (max-width: 560px) {
+  /* reclaim horizontal space from the page gutter */
+  .app { padding: 12px 12px 48px; }
+
+  /* Wide metric tables scroll within their own box instead of widening the page
+     (display:block turns the table into a horizontal scroll container while the
+     column layout is preserved by the anonymous table box). */
+  .metric-table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* Cost runner-minute rows: the fixed-width name + instance-type chip overflow
+     a phone. Let the name flex down and narrow the secondary chip. */
+  .cost-pool { gap: 6px; }
+  .cost-pool .metric-job-name { width: auto; flex: 1 1 0; min-width: 56px; }
+  .cost-pool-instance { width: 64px; }
+
+  /* Metro stage track: nodes are flex-shrink:0 × 70px, so a long pipeline
+     overflows. Narrow them and let the track scroll as a backstop. */
+  .track { overflow-x: auto; padding-bottom: 2px; }
+  .node { width: 52px; }
+  .seg { min-width: 10px; }
+}
