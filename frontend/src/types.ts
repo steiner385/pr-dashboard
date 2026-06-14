@@ -145,6 +145,18 @@ export interface DashboardState {
      *  deploy config. Mirror of server estimator/deploy-status.ts. */
     deploy?: { envs: { name: string; liveSha: string | null; reachable: boolean }[];
       awaitingQa: number; awaitingProd: number }; }[];
+  /** Cross-cutting global CI cost summary (Cost lane, Spec 3) — top-level, not
+   *  per-repo. Priced runner-minutes over a 7-day window across all repos,
+   *  split by pipeline stage. `dollars` is null for an unpriced stage subset;
+   *  `totalDollars`/`retryWastePct` are null in minutes-only mode (no rate
+   *  configured) — never a fabricated $0. Mirror of server metrics.ts
+   *  CostSummary. Optional to tolerate pre-upgrade payloads. */
+  cost?: {
+    totalDollars: number | null;
+    days: number;
+    byStage: { stage: 'pr' | 'queue' | 'main' | 'scheduled'; dollars: number | null; minutes: number }[];
+    retryWastePct: number | null;
+  };
 }
 
 // ---- Notifications (issue #19) ----

@@ -3,6 +3,7 @@ import { prCiLane } from '../lanes/prCiLane';
 import { mergeQueueLane } from '../lanes/mergeQueueLane';
 import { mainLane } from '../lanes/mainLane';
 import { deployLane } from '../lanes/deployLane';
+import { costLane } from '../lanes/costLane';
 import type { DashboardState } from '../../types';
 
 const repo = (over: object) => ({ repo: 'acme/widgets', hasDeploy: false, prs: [], queue: null, ...over });
@@ -67,5 +68,53 @@ describe('deployLane', () => {
     const repos = [dep({ envs: [{ name: 'qa', liveSha: 's', reachable: true }], awaitingProd: 99 })];
     const out = deployLane(repos as unknown as DashboardState['repos']);
     expect(['green', 'blind']).toContain(out.status);
+  });
+});
+
+describe('costLane', () => {
+  const cost = (over: object): DashboardState['cost'] => ({
+    totalDollars: 152, days: 7, retryWastePct: 8,
+    byStage: [
+      { stage: 'pr', dollars: 60, minutes: 600 },
+      { stage: 'queue', dollars: 38, minutes: 380 },
+      { stage: 'main', dollars: 24, minutes: 240 },
+      { stage: 'scheduled', dollars: 30, minutes: 300 },
+    ],
+    ...over,
+  });
+
+  it('is blind/not-wired when cost is absent', () => {
+    const out = costLane(undefined);
+    expect(out.status).toBe('blind');
+    expect(out.summary).toMatch(/no rates/i);
+  });
+
+  it('is blind/not-wired when every stage dollar is null (minutes-only mode)', () => {
+    const out = costLane(cost({
+      totalDollars: null, retryWastePct: null,
+      byStage: [
+        { stage: 'pr', dollars: null, minutes: 600 },
+        { stage: 'queue', dollars: null, minutes: 380 },
+        { stage: 'main', dollars: null, minutes: 240 },
+        { stage: 'scheduled', dollars: null, minutes: 300 },
+      ],
+    }));
+    expect(out.status).toBe('blind');
+    expect(out.summary).toMatch(/no rates/i);
+  });
+
+  it('is green with a total + per-stage percent split when priced', () => {
+    const out = costLane(cost({}));
+    expect(out.status).toBe('green');
+    expect(out.summary).toMatch(/\$152·7d/);
+    expect(out.summary).toMatch(/PR 39%/);     // 60/152 ≈ 39%
+    expect(out.summary).toMatch(/queue 25%/);  // 38/152 = 25%
+    expect(out.summary).toMatch(/main 16%/);   // 24/152 ≈ 16%
+    expect(out.summary).toMatch(/nightly 20%/);// 30/152 ≈ 20%
+  });
+
+  it('never returns red or amber', () => {
+    expect(['green', 'blind']).toContain(costLane(cost({})).status);
+    expect(['green', 'blind']).toContain(costLane(undefined).status);
   });
 });

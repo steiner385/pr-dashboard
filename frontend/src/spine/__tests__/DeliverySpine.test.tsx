@@ -45,4 +45,40 @@ describe('DeliverySpine', () => {
     expect(env).toHaveTextContent('qa');
     expect(env).toHaveTextContent('a1b2c3d');
   });
+
+  it('renders a Cost lane row (always present)', () => {
+    render(<DeliverySpine state={state({})} kiosk={false} />);
+    expect(screen.getByTestId('spine-lane-cost')).toBeInTheDocument();
+  });
+
+  it('weaves a cost chip into the PR CI lane when state.cost has stage dollars', () => {
+    const st = {
+      generatedAt: '', staleSince: null,
+      repos: [{ repo: 'acme/widgets', hasDeploy: false, prs: [], queue: null }],
+      cost: { totalDollars: 152, days: 7, retryWastePct: 8, byStage: [
+        { stage: 'pr', dollars: 60, minutes: 600 },
+        { stage: 'queue', dollars: 38, minutes: 380 },
+        { stage: 'main', dollars: 24, minutes: 240 },
+        { stage: 'scheduled', dollars: 30, minutes: 300 },
+      ] },
+    } as unknown as DashboardState;
+    render(<DeliverySpine state={st} kiosk={false} />);
+    const prCi = screen.getByTestId('spine-lane-pr-ci');
+    expect(prCi).toHaveTextContent(/\$60·7d/);
+  });
+
+  it('omits the cost chip from a linear lane when that stage dollars is null', () => {
+    const st = {
+      generatedAt: '', staleSince: null,
+      repos: [{ repo: 'acme/widgets', hasDeploy: false, prs: [], queue: null }],
+      cost: { totalDollars: null, days: 7, retryWastePct: null, byStage: [
+        { stage: 'pr', dollars: null, minutes: 600 },
+        { stage: 'queue', dollars: null, minutes: 380 },
+        { stage: 'main', dollars: null, minutes: 240 },
+        { stage: 'scheduled', dollars: null, minutes: 300 },
+      ] },
+    } as unknown as DashboardState;
+    render(<DeliverySpine state={st} kiosk={false} />);
+    expect(screen.getByTestId('spine-lane-pr-ci')).not.toHaveTextContent(/·7d/);
+  });
 });
