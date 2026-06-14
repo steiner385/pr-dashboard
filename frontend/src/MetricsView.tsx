@@ -783,6 +783,11 @@ export function MetricsView({ now, focusCostNonce }: {
                   value={rc.requiredConfigured ? `${rc.requiredFailed}` : '–'}
                   delta={rc.requiredConfigured ? `of ${rc.total} run${rc.total === 1 ? '' : 's'}`
                     : 'set requiredCheckPrefixes'} />
+                <MetricStat label="admin-bypass rate" def={DEFS.queueEffAdminBypass}
+                  value={q.adminBypass.rate != null ? fmtPct(q.adminBypass.rate * 100) : '–'}
+                  delta={q.adminBypass.merges > 0
+                    ? `${q.adminBypass.bypasses} of ${q.adminBypass.merges} known`
+                    : 'awaiting merge data'} />
               </div>
               {!rc.requiredConfigured && rc.runFailed > 0 && (
                 <p className="metric-note">

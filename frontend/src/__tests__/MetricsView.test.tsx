@@ -41,7 +41,8 @@ const PAYLOAD: MetricsPayload = {
   queueEfficiency: [
     { repo: 'acme/widgets', mergeGroupRuns: 13, queueMerges: 2, runsPerMerge: 6.5,
       runConclusion: { total: 13, runFailed: 11, requiredFailed: 1, advisoryNoise: 10,
-        requiredConfigured: true } },
+        requiredConfigured: true },
+      adminBypass: { merges: 20, bypasses: 3, rate: 0.15 } },
   ],
   slowestJobs: [
     { repo: 'acme/widgets', jobs: [
@@ -404,13 +405,17 @@ describe('MetricsView', () => {
     expect(within(block).getByText('of 11 failed runs')).toBeInTheDocument();
     // required-gate failures shown (prefixes configured) — not the config hint
     expect(within(block).queryByText('set requiredCheckPrefixes')).not.toBeInTheDocument();
+    // admin-bypass rate: 3 of 20 known merges = 15%
+    expect(within(block).getByText('15%')).toBeInTheDocument();
+    expect(within(block).getByText('3 of 20 known')).toBeInTheDocument();
   });
 
   it('queue-efficiency hides the required split and prompts config when prefixes are unset', async () => {
     mockFetchOk({ ...PAYLOAD, queueEfficiency: [
       { repo: 'acme/widgets', mergeGroupRuns: 5, queueMerges: 1, runsPerMerge: 5,
         runConclusion: { total: 5, runFailed: 3, requiredFailed: 0, advisoryNoise: 3,
-          requiredConfigured: false } }] });
+          requiredConfigured: false },
+        adminBypass: { merges: 0, bypasses: 0, rate: null } }] });
     render(<MetricsView now={NOW} />);
     const block = await screen.findByTestId('queue-eff-acme/widgets');
     expect(within(block).getByText('set requiredCheckPrefixes')).toBeInTheDocument();

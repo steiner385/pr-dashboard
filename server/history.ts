@@ -16,11 +16,15 @@ export interface MergedPrInput {
    *  poller last observed while the PR sat in the queue. Optional like
    *  firstGreenAt; null for PRs merged outside the queue. */
   enqueuedAt?: string | null;
+  /** GitHub login that merged the PR (admin-bypass metric, issue #23). Null
+   *  for pre-migration rows and PRs whose merger GitHub didn't report. */
+  mergedBy?: string | null;
 }
 export interface MergedPrRecord extends MergedPrInput {
   createdAt: string | null;
   firstGreenAt: string | null; enqueuedAt: string | null;
   qaLiveAt: string | null; prodLiveAt: string | null;
+  mergedBy: string | null;
 }
 
 /** One merged_prs row projected for the lead-time decomposition (issue #44). */
@@ -332,6 +336,10 @@ export class HistoryStore {
     // (segments are computed per-pair over rows that have both ends).
     addColumnIfMissing(this.db, 'merged_prs', 'first_green_at TEXT');
     addColumnIfMissing(this.db, 'merged_prs', 'enqueued_at TEXT');
+    // Migration (issue #23): merged_prs gains merged_by — the GitHub login that
+    // merged the PR, for the admin-bypass rate. Old rows stay null and are
+    // excluded from the ratio (it ramps up as new merges are observed).
+    addColumnIfMissing(this.db, 'merged_prs', 'merged_by TEXT');
     // Migration (issue #34): check_durations gains head_sha + run_attempt —
     // shared plumbing for flake radar / spot-reclaim ledger / attempt
     // waterfalls. Both nullable; the UNIQUE constraint is unchanged.
@@ -386,13 +394,14 @@ export class HistoryStore {
     );
     this.stmtUpsertPr = this.db.prepare(
       `INSERT INTO merged_prs (repo, number, title, url, merged_at, merge_commit_sha, created_at,
-         first_green_at, enqueued_at)
-       VALUES (?,?,?,?,?,?,?,?,?)
+         first_green_at, enqueued_at, merged_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(repo, number) DO UPDATE SET title=excluded.title,
          merge_commit_sha=COALESCE(excluded.merge_commit_sha, merge_commit_sha),
          created_at=COALESCE(excluded.created_at, created_at),
          first_green_at=COALESCE(excluded.first_green_at, first_green_at),
-         enqueued_at=COALESCE(excluded.enqueued_at, enqueued_at)`
+         enqueued_at=COALESCE(excluded.enqueued_at, enqueued_at),
+         merged_by=COALESCE(excluded.merged_by, merged_by)`
     );
     // Two separate statements — SQLite prepared statements cannot switch column names dynamically.
     this.stmtMarkQaLive = this.db.prepare(
@@ -495,7 +504,7 @@ export class HistoryStore {
        FROM group_runs WHERE completed_at >= ? ORDER BY repo, completed_at`
     );
     this.stmtSelectMergedSince = this.db.prepare(
-      `SELECT repo, merged_at, created_at, qa_live_at
+      `SELECT repo, merged_at, created_at, qa_live_at, merged_by
        FROM merged_prs WHERE merged_at >= ? ORDER BY repo, merged_at`
     );
     // Trains/hour (queue ops): per-repo merge timestamps for train clustering.
@@ -752,7 +761,7 @@ export class HistoryStore {
 
   upsertMergedPr(pr: MergedPrInput): void {
     this.stmtUpsertPr.run(pr.repo, pr.number, pr.title, pr.url, pr.mergedAt, pr.mergeCommitSha,
-      pr.createdAt ?? null, pr.firstGreenAt ?? null, pr.enqueuedAt ?? null);
+      pr.createdAt ?? null, pr.firstGreenAt ?? null, pr.enqueuedAt ?? null, pr.mergedBy ?? null);
   }
 
   markEnvLive(repo: string, number: number, env: 'qa' | 'prod', at: string): void {
@@ -782,6 +791,7 @@ export class HistoryStore {
       firstGreenAt: (r.first_green_at as string) ?? null,
       enqueuedAt: (r.enqueued_at as string) ?? null,
       qaLiveAt: (r.qa_live_at as string) ?? null, prodLiveAt: (r.prod_live_at as string) ?? null,
+      mergedBy: (r.merged_by as string) ?? null,
     }));
   }
 
@@ -1343,10 +1353,12 @@ export class HistoryStore {
   }
 
   /** Merged PRs at/after `since` (full timestamps — bucketing happens in metrics). */
-  mergedSince(since: string): { repo: string; mergedAt: string; createdAt: string | null; qaLiveAt: string | null }[] {
+  mergedSince(since: string): { repo: string; mergedAt: string; createdAt: string | null;
+    qaLiveAt: string | null; mergedBy: string | null }[] {
     const rows = this.stmtSelectMergedSince.all(since) as Record<string, unknown>[];
     return rows.map((r) => ({ repo: r.repo as string, mergedAt: r.merged_at as string,
-      createdAt: (r.created_at as string) ?? null, qaLiveAt: (r.qa_live_at as string) ?? null }));
+      createdAt: (r.created_at as string) ?? null, qaLiveAt: (r.qa_live_at as string) ?? null,
+      mergedBy: (r.merged_by as string) ?? null }));
   }
 
   /** Lead-time decomposition rows (issue #44): merged_prs rows merged at/after

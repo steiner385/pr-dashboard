@@ -1583,4 +1583,18 @@ describe('queue efficiency (issue #23)', () => {
     expect(qe!.queueMerges).toBe(0);
     expect(qe!.runsPerMerge).toBeNull();
   });
+
+  it('admin-bypass rate = non-[bot] merges ÷ merges with a known merger', () => {
+    const mergeBy = (n: number, by: string | null) => h.upsertMergedPr({ repo: REPO, number: n,
+      title: `pr ${n}`, url: `u/${n}`, mergedAt: '2026-06-10T11:00:00Z',
+      mergeCommitSha: `m${n}`, mergedBy: by });
+    mergeBy(1, 'queue-bot[bot]'); mergeBy(2, 'queue-bot[bot]'); mergeBy(3, 'queue-bot[bot]');
+    mergeBy(4, 'alice');     // human admin merge — bypassed the queue
+    mergeBy(5, null);        // unknown merger — excluded from the ratio
+    const [qe] = run(['ci']);
+    expect(qe!.queueMerges).toBe(5);          // every merge counts toward runs/merge
+    expect(qe!.adminBypass.merges).toBe(4);   // …but only known-merger rows feed the bypass rate
+    expect(qe!.adminBypass.bypasses).toBe(1); // alice
+    expect(qe!.adminBypass.rate).toBeCloseTo(0.25, 6);
+  });
 });

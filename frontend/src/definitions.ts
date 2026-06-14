@@ -143,6 +143,8 @@ export const METRIC_DEFINITIONS = {
     text: 'merge_group runs whose run-level conclusion read FAILED but the required gate (checks matching requiredCheckPrefixes) actually PASSED — i.e. only a non-required advisory job failed. GitHub marks the whole run failed when any job fails, so without this split the run-failure count is unreadable. A high share means advisory jobs should be removed from merge_group' },
   queueEffRequiredFailed: { label: 'required-gate failures',
     text: 'merge_group runs where a REQUIRED check (matching requiredCheckPrefixes) failed — the real gate failures, distinct from advisory noise. Needs requiredCheckPrefixes configured for the repo; without it the required/advisory split can’t be computed and every failure reads as advisory' },
+  queueEffAdminBypass: { label: 'admin-bypass rate',
+    text: 'fraction of merged PRs NOT merged by the queue bot — i.e. a human/admin merged directly, bypassing the merge queue. Classified by who merged (mergedBy), counting only merges whose merger is known (the metric ramps up as new merges are observed — rows predating the merged_by column are excluded). Sustained >10% is a queue-confidence alarm: people are routing around the queue' },
 
   // ---- merge velocity panel ----
   velocityMerged: { label: 'merged',

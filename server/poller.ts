@@ -783,6 +783,7 @@ export class Poller extends EventEmitter {
       this.recordEtaAccuracyOnMerge(key, repo, node.mergedAt);
       history.upsertMergedPr({ repo, number: node.number, title: node.title, url: node.url,
         mergedAt: node.mergedAt, mergeCommitSha: node.mergeCommit?.oid ?? null,
+        mergedBy: node.mergedBy?.login ?? null,
         createdAt: node.createdAt ?? null, ...leadTime });
       this.prs.delete(key); // no longer an open PR snapshot
     } else {
@@ -1007,6 +1008,7 @@ export class Poller extends EventEmitter {
           this.recordEtaAccuracyOnMerge(key, repo, snap.mergedAt);
           history.upsertMergedPr({ repo, number: snap.number, title: snap.title, url: snap.url,
             mergedAt: snap.mergedAt, mergeCommitSha: snap.mergeCommitSha,
+            mergedBy: node.mergedBy?.login ?? null,
             createdAt: snap.createdAt, ...leadTime });
           this.prs.delete(key);
         } else if (snap.queue) {

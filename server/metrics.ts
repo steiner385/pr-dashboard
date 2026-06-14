@@ -57,7 +57,8 @@ export interface MetricsPayload {
   queueEfficiency: { repo: string;
     mergeGroupRuns: number; queueMerges: number; runsPerMerge: number | null;
     runConclusion: { total: number; runFailed: number; requiredFailed: number;
-      advisoryNoise: number; requiredConfigured: boolean } }[];
+      advisoryNoise: number; requiredConfigured: boolean };
+    adminBypass: { merges: number; bypasses: number; rate: number | null } }[];
   slowestJobs: { repo: string; jobs: { name: string; event: string; p50: number; p90: number;
     variability: number; n: number;
     trend: { bucket: string; p50: number; p90: number; n: number }[] }[] }[]; // top 10 by p50, variability = p90/p50
@@ -601,7 +602,15 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
       if (v.requiredFailed) requiredFailed++;
       if (v.runFailed && !v.requiredFailed) advisoryNoise++;
     }
-    const queueMerges = (mergedByRepo.get(repo) ?? []).length;
+    const repoMerges = mergedByRepo.get(repo) ?? [];
+    const queueMerges = repoMerges.length;
+    // Admin-bypass rate (issue #23): fraction of merges NOT done by the queue
+    // bot. A login ending in '[bot]' is automated (the merge queue / automerge
+    // app); anything else is a human/admin merge that bypassed the queue.
+    // Only merges with a known merger count — the metric ramps up as new merges
+    // are observed (old rows predate the merged_by column).
+    const knownMerges = repoMerges.filter((m) => m.mergedBy != null);
+    const bypasses = knownMerges.filter((m) => !m.mergedBy!.endsWith('[bot]')).length;
     return {
       repo,
       mergeGroupRuns: runs.size,
@@ -612,6 +621,10 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
       runConclusion: {
         total: runs.size, runFailed, requiredFailed, advisoryNoise,
         requiredConfigured: prefixes.length > 0,
+      },
+      adminBypass: {
+        merges: knownMerges.length, bypasses,
+        rate: knownMerges.length > 0 ? bypasses / knownMerges.length : null,
       },
     };
   }).filter((q) => q.mergeGroupRuns > 0 || q.queueMerges > 0);

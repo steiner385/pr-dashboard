@@ -23,6 +23,7 @@ fragment PrCore on PullRequest {
   number title url isDraft createdAt mergedAt
   repository { nameWithOwner }
   mergeCommit { oid }
+  mergedBy { login }
 }`;
 
 export function buildSweepQuery(owners: string[], mergedSince: string): string {

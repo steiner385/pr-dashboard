@@ -87,6 +87,17 @@ describe('check durations', () => {
 });
 
 describe('merged PRs', () => {
+  it('round-trips mergedBy (admin-bypass metric, #23) through upsert and mergedSince', () => {
+    h.upsertMergedPr({ repo: REPO, number: 7001, title: 't', url: 'u',
+      mergedAt: '2026-06-10T12:00:00Z', mergeCommitSha: 'a', mergedBy: 'kindash-automerge[bot]' });
+    h.upsertMergedPr({ repo: REPO, number: 7002, title: 't', url: 'u',
+      mergedAt: '2026-06-10T12:01:00Z', mergeCommitSha: 'b', mergedBy: 'alice' });
+    h.upsertMergedPr({ repo: REPO, number: 7003, title: 't', url: 'u',
+      mergedAt: '2026-06-10T12:02:00Z', mergeCommitSha: 'c' });   // no merger → null
+    expect(h.mergedSince('2026-06-10T00:00:00Z').map((r) => r.mergedBy))
+      .toEqual(['kindash-automerge[bot]', 'alice', null]);
+  });
+
   it('upserts, lists undeployed, marks env live', () => {
     h.upsertMergedPr({ repo: REPO, number: 8951, title: 'feat: allowance UI', url: 'u',
       mergedAt: '2026-06-10T12:00:00Z', mergeCommitSha: 'abc123' });
