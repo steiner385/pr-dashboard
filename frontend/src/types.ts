@@ -138,7 +138,8 @@ export interface RepoQueueView {
 }
 export interface DashboardState {
   generatedAt: string; staleSince: string | null;
-  repos: { repo: string; hasDeploy: boolean; prs: PrView[]; queue: RepoQueueView | null }[];
+  repos: { repo: string; hasDeploy: boolean; prs: PrView[]; queue: RepoQueueView | null;
+    laneHealth?: { main: LaneStatus }; }[];
 }
 
 // ---- Notifications (issue #19) ----

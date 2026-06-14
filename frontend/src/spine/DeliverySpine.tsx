@@ -5,6 +5,7 @@ import { rollup } from './laneStatus';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { prCiLane } from './lanes/prCiLane';
 import { mergeQueueLane } from './lanes/mergeQueueLane';
+import { mainLane } from './lanes/mainLane';
 import { scrollBehavior } from '../motion';
 
 const LS_KEY = 'prdash.spine.expanded';
@@ -23,6 +24,7 @@ function buildLanes(state: DashboardState | null): Lane[] {
   const repos = state?.repos ?? [];
   const prc = state ? prCiLane(repos) : { status: 'blind' as const, summary: 'loading…' };
   const mq = state ? mergeQueueLane(repos) : { status: 'blind' as const, summary: 'loading…' };
+  const ml = state ? mainLane(repos) : { status: 'blind' as const, summary: 'loading…' };
   return [
     {
       id: 'pr-ci', title: 'PR CI', glyphPosition: 'dot', wiredness: 'wired', gating: true,
@@ -31,6 +33,10 @@ function buildLanes(state: DashboardState | null): Lane[] {
     {
       id: 'merge-queue', title: 'Merge queue', glyphPosition: 'dot', wiredness: 'wired', gating: true,
       status: mq.status, summary: mq.summary, renderExpanded: () => null,
+    },
+    {
+      id: 'main', title: 'main', glyphPosition: 'dot', wiredness: 'wired', gating: true,
+      status: ml.status, summary: ml.summary, renderExpanded: () => null,
     },
   ];
 }

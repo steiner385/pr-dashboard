@@ -13,6 +13,7 @@ describe('DeliverySpine', () => {
     render(<DeliverySpine state={state({})} kiosk={false} />);
     expect(screen.getByTestId('spine-lane-pr-ci')).toBeInTheDocument();
     expect(screen.getByTestId('spine-lane-merge-queue')).toBeInTheDocument();
+    expect(screen.getByTestId('spine-lane-main')).toBeInTheDocument();
     expect(screen.getByTestId('spine-rollup')).toHaveTextContent(/need attention/i);
   });
   it('skeleton state when state is null (no crash, lanes present)', () => {
