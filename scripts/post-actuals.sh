@@ -7,7 +7,11 @@
 #   PRDASH_URL            dashboard base URL   (default http://127.0.0.1:4400)
 #   ACTUALS_SCOPE         scope label          (default fleet)
 #   ACTUALS_SOURCE        source label         (default aws-ce)
-#   ACTUALS_FILTER_JSON   aws ce --filter JSON (default: EC2 compute service)
+#   ACTUALS_FILTER_JSON   aws ce --filter JSON
+#                         (default: the core CI infra SERVICES — EC2 compute,
+#                          EC2 other [EBS/credits/transfer], EKS, VPC/NAT — so
+#                          `fleet` reconciles to the TRUE CI bill, not just
+#                          EC2-Compute, which was ~71% of it. #99)
 #
 # Requires: aws CLI with ce:GetCostAndUsage, python3, curl.
 # Cost Explorer charges ~$0.01 per request; one request per invocation.
@@ -16,7 +20,9 @@ DAYS="${1:-3}"
 URL="${PRDASH_URL:-http://127.0.0.1:4400}"
 SCOPE="${ACTUALS_SCOPE:-fleet}"
 SOURCE="${ACTUALS_SOURCE:-aws-ce}"
-FILTER="${ACTUALS_FILTER_JSON:-{\"Dimensions\":{\"Key\":\"SERVICE\",\"Values\":[\"Amazon Elastic Compute Cloud - Compute\"]}}}"
+# `fleet` = the sum across the core CI infra services (one CE request, one row
+# per day). EC2-Compute alone understated the bill by ~27% (#99).
+FILTER="${ACTUALS_FILTER_JSON:-{\"Dimensions\":{\"Key\":\"SERVICE\",\"Values\":[\"Amazon Elastic Compute Cloud - Compute\",\"EC2 - Other\",\"Amazon Elastic Container Service for Kubernetes\",\"Amazon Virtual Private Cloud\"]}}}"
 START=$(date -u -d "$DAYS days ago" +%F)
 END=$(date -u -d "tomorrow" +%F)   # CE end is exclusive; include today’s partial (upserted again tomorrow)
 

@@ -130,7 +130,7 @@ export const METRIC_DEFINITIONS = {
   prCiCost: { label: 'CI cost this run',
     text: 'elapsed runner-minutes of the current head’s checks (running checks count started → now; foreign-workflow spans excluded). $ prices each check via its runs-on pool (poolMeta > costPerMinute > ‘default’, ÷ podsPerNode); minutes-only when no rates are configured. ‘(partial)’ flags that some checks ran on unpriced pools — the $ undercounts' },
   costActualsActual: { label: 'actual spend',
-    text: 'operator-imported daily spend for this scope (POST /api/cost/actuals — e.g. an AWS Cost Explorer cron; provider-agnostic). Scope ‘fleet’ is the whole bill; a pool scope is that pool’s share' },
+    text: 'operator-imported daily spend for this scope (POST /api/cost/actuals — e.g. an AWS Cost Explorer cron; provider-agnostic). Scope ‘fleet’ is the whole CI-infra bill — EC2 compute + other (EBS/credits/transfer), EKS, and VPC/NAT (not just EC2-Compute, which was ~71% of it); a pool scope is that pool’s share' },
   costActualsAttributed: { label: 'attributed',
     text: 'the per-day sum of priced job dollars (minutes × pool rate) over tracked CI jobs — what the dashboard can explain. Null until rates are configured' },
   costActualsCoverage: { label: 'attribution coverage',
