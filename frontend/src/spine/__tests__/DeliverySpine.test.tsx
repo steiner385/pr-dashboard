@@ -25,9 +25,11 @@ describe('DeliverySpine', () => {
     const st = {
       generatedAt: '', staleSince: null, repos: [{ repo: 'acme/widgets', hasDeploy: false,
         prs: [{ number: 1, title: 't', url: 'u', stage: { stage: 'ci', substate: 'ci-failed', percent: null, etaSeconds: null, etaRangeSeconds: null, overdue: false }, queueAheadCount: null, checks: [] }],
-        queue: null }],
+        queue: null,
+        laneHealth: { main: 'green', lastGreenSha: 'abc1234', lastGreenAt: '2026-06-10T10:00:00Z', mainSeries: [{ ok: true }, { ok: false }] } }],
     } as unknown as DashboardState;
     render(<DeliverySpine state={st} kiosk />);   // kiosk = all lanes expanded
     expect(screen.getByTestId('spine-prci-row-1')).toBeInTheDocument();
+    expect(screen.getAllByTestId('spine-main-spark-bar')).toHaveLength(2);
   });
 });

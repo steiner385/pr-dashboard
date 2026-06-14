@@ -9,6 +9,7 @@ import { mainLane } from './lanes/mainLane';
 import { scrollBehavior } from '../motion';
 import { PrCiPanel } from './panels/PrCiPanel';
 import { MergeQueuePanel } from './panels/MergeQueuePanel';
+import { MainPanel } from './panels/MainPanel';
 
 const LS_KEY = 'prdash.spine.expanded';
 function readExpanded(): Set<string> {
@@ -38,7 +39,7 @@ function buildLanes(state: DashboardState | null): Lane[] {
     },
     {
       id: 'main', title: 'main', glyphPosition: 'dot', wiredness: 'wired', gating: true,
-      status: ml.status, summary: ml.summary, renderExpanded: () => null,
+      status: ml.status, summary: ml.summary, renderExpanded: () => <MainPanel repos={repos} />,
     },
   ];
 }
