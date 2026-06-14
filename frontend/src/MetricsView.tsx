@@ -505,16 +505,18 @@ export function MetricsView({ now }: {
                   value={a.totalAttributedDollars != null
                     ? fmtDollars(a.totalAttributedDollars) : '–'} />
                 <MetricStat label="coverage" def={DEFS.costActualsCoverage}
-                  value={a.recentCoveragePct != null ? fmtPct(a.recentCoveragePct)
-                    : a.coveragePct != null ? fmtPct(a.coveragePct) : '–'} />
+                  value={a.coveragePct != null ? fmtPct(a.coveragePct)
+                    : a.recentCoveragePct != null ? fmtPct(a.recentCoveragePct) : '–'}
+                  delta="window cumulative" />
               </div>
-              {(a.recentCoveragePct ?? a.coveragePct) != null && (
+              {(a.coveragePct ?? a.recentCoveragePct) != null && (
                 <p className="metric-note cost-coverage-headline"
                   title={defTitle(DEFS.costActualsCoverage)}
                   data-testid={`cost-coverage-${a.scope}`}>
-                  jobs explain {fmtPct((a.recentCoveragePct ?? a.coveragePct)!)} of {a.scope} spend
-                  {a.recentCoverageDate ? ` (${a.recentCoverageDate})` : ''} — the rest
-                  is idle runner capacity, node overhead, and unpriced pools
+                  jobs explain {fmtPct((a.coveragePct ?? a.recentCoveragePct)!)} of {a.scope} spend
+                  this window — the rest ({fmtDollars(a.totalActualDollars - (a.totalAttributedDollars ?? 0))})
+                  is idle runner capacity, node boot/teardown, and unpriced pools that no single job owns.
+                  Actual spend is the bill; coverage is how completely we can explain it
                 </p>
               )}
               <ChartBlock label="actual vs attributed $ per day">

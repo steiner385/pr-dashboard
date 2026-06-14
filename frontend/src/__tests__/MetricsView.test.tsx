@@ -1079,6 +1079,29 @@ describe('MetricsView — cost actuals + attribution coverage (phase 2)', () => 
       .toContain('jobs explain 90% of kindash-arc spend');
   });
 
+  it('headlines the STABLE cumulative coverage, not the noisy most-recent day', async () => {
+    // cumulative (90%) and recent-day (30%) deliberately differ — the headline
+    // and tile must show the cumulative window figure, never the jumpy day value.
+    const diverging: NonNullable<MetricsPayload['costActuals']> = [
+      { scope: 'fleet',
+        days: [
+          { date: '2026-06-12', actualDollars: 100, attributedDollars: 150, coveragePct: 150 },
+          { date: '2026-06-13', actualDollars: 100, attributedDollars: 30, coveragePct: 30 },
+        ],
+        totalActualDollars: 200, totalAttributedDollars: 180, coveragePct: 90,
+        recentCoveragePct: 30, recentCoverageDate: '2026-06-13' },
+    ];
+    mockFetchOk({ ...PAYLOAD, costActuals: diverging });
+    render(<MetricsView now={NOW} />);
+    const panel = await costPanel();
+    const headline = within(panel).getByTestId('cost-coverage-fleet');
+    expect(headline.textContent).toContain('jobs explain 90% of fleet spend');   // cumulative
+    expect(headline.textContent).not.toContain('30%');                            // not the recent day
+    expect(headline.textContent).toContain('$20.00');                             // unexplained = 200 − 180
+    const block = within(panel).getByTestId('cost-actuals-fleet');
+    expect(within(block).getByText('window cumulative')).toBeInTheDocument();
+  });
+
   it('tolerates a pre-upgrade payload without costActuals (no actuals block, panel intact)', async () => {
     mockFetchOk(PAYLOAD); // no costActuals key at all
     render(<MetricsView now={NOW} />);
