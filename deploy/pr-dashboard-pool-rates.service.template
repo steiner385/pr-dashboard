@@ -1,0 +1,11 @@
+[Unit]
+Description=Relay AWS per-capacity-type EC2 cost into pr-dashboard pool rates
+After=network-online.target pr-dashboard.service pr-dashboard-actuals.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=__APP_ROOT__
+# Derives spot/on-demand $/min from Cost Explorer + the dashboard's runner-minutes,
+# writes config.json poolMeta, and reloads the dashboard. ~$0.01 CE charge/run.
+ExecStart=__APP_ROOT__/scripts/relay-pool-rates.sh 30

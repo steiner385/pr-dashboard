@@ -376,6 +376,35 @@ Wire it as a systemd user timer with the templates in `deploy/`
 enable with `systemctl --user enable --now pr-dashboard-actuals.timer`).
 Any other cost source works too — the endpoint just takes `{date, dollars}`.
 
+## Pool-rate relay (true per-capacity $/min)
+
+Where the actuals cron feeds the *fleet total* (the denominator of the
+coverage view), `scripts/relay-pool-rates.sh [days]` feeds the *per-pool
+rates* (the numerator). It asks Cost Explorer for EC2-Compute split by
+`PURCHASE_TYPE` (spot vs on-demand), reads the dashboard's own per-pool
+runner-minutes from `/api/metrics`, and writes a real
+`dollarsPerMinute` into each pool's `config.json` `poolMeta` —
+`type $ ÷ that type's runner-minutes`. Spot pools land on the cheap spot
+rate, on-demand pools on the dearer one, automatically. GitHub-hosted
+pools (`ubuntu-latest`) are on a separate bill and are skipped.
+
+It's **self-correcting**: the rate's denominator is the same minute
+snapshot the dashboard prices against, so attributed-$ reconciles to
+actual-$ by construction. Cumulative fleet coverage settles at the
+honest EC2-Compute ÷ total-fleet ratio (~90% — the gap is non-compute
+EC2-Other/EKS/VPC, which isn't per-runner-minute attributable). Two
+expected wrinkles: (1) coverage spikes briefly right after the relay's
+reload while pool-learning re-warms the volatile `unknown` pool, then
+settles within ~30s; (2) *per-day* coverage is noisy because a blended
+monthly $/min won't match each day's CE allocation — read the
+*cumulative* number. `DRY_RUN=1` prints the rates without writing.
+
+Wire it as a daily systemd user timer with the `deploy/` templates
+(`pr-dashboard-pool-rates.{service,timer}.template` — render
+`__APP_ROOT__`, enable with
+`systemctl --user enable --now pr-dashboard-pool-rates.timer`). It runs
+at 06:30, after the actuals feed, so CE has settled for the day.
+
 ## Kiosk mode (wall displays)
 
 Append `?kiosk=1` to the dashboard URL for a read-only, at-a-distance view

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily AWS→pool-rate relay for pr-dashboard
+
+[Timer]
+# 06:30 — after the 06:15 actuals feed, so Cost Explorer has settled for the day.
+# The relay restarts the dashboard once to apply the new poolMeta rates.
+OnCalendar=*-*-* 06:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
