@@ -34,6 +34,7 @@ import { computeRepoDeploy, type RepoDeployStatus } from './estimator/deploy-sta
 import { diffCiGraphs, type WorkflowImpact } from './workflow-impact';
 import { splitOidChecks } from './oid-checks';
 import { computeCostSummary, type CostSummary } from './metrics';
+import { parseScheduledWorkflows, scheduledRunsApiPath, type ScheduledRunsApiResponse } from './scheduled';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -403,12 +404,22 @@ export interface DashboardState {
   generatedAt: string;
   staleSince: string | null;
   repos: { repo: string; hasDeploy: boolean; prs: PrView[]; queue: RepoQueueView | null;
-    laneHealth?: RepoLaneHealth; deploy?: RepoDeployStatus }[];
+    laneHealth?: RepoLaneHealth; deploy?: RepoDeployStatus; scheduled?: RepoScheduledStatus }[];
   /** Cross-cutting global cost summary (Cost lane, Spec 3) — top-level, not
    *  per-repo, because cost is cross-cutting. Computed once per cycle in
    *  refreshCostSummary and cached (spec §15: buildState never hits SQLite).
    *  Absent until the first refresh. Mirror of metrics.ts CostSummary. */
   cost?: CostSummary;
+}
+
+/** Per-repo scheduled-lane snapshot attached to DashboardState.repos[] (Spec 4).
+ *  `runs` is the newest recorded run per scheduled workflow; `discovered` is the
+ *  count of scheduled workflows found (so the lane can show blind vs idle even
+ *  before any run is recorded). Absent for repos with no scheduled workflows. */
+export interface RepoScheduledStatus {
+  runs: { workflow: string; conclusion: string | null; status: string | null;
+    createdAt: string | null; htmlUrl: string | null }[];
+  discovered: number;
 }
 
 interface PollerDeps {
@@ -459,6 +470,16 @@ const COST_SUMMARY_INTERVAL_MS = 3 * 60_000;
  *  this often per repo — the push job set is near-static, so 6h is plenty to
  *  fill it in without spamming the list call. */
 const PUSH_POOL_LEARN_INTERVAL_MS = 6 * 3600_000;
+
+/** Re-discover a repo's scheduled (cron) workflows at most this often — the
+ *  set of `.github/workflows/*` files with an `on: schedule:` trigger is
+ *  near-static, so a daily re-list is plenty (Scheduled lane, Spec 4). */
+const SCHEDULED_DISCOVERY_INTERVAL_MS = 24 * 3600_000;
+
+/** Re-poll a repo's scheduled-workflow runs at most this often per repo. One
+ *  `?per_page=8` REST request per discovered workflow per eligible cycle; ~1/hr
+ *  keeps the cost trivial (nightly/weekly cadence moves far slower). */
+const SCHEDULED_RUNS_INTERVAL_MS = 3600_000;
 
 /** Stages whose first ETA prediction is scored against the actual stage duration —
  *  the same set the conformal-lite range calibration applies to (single source
@@ -567,6 +588,10 @@ export class Poller extends EventEmitter {
   private workflowImpactCache = new Map<string, WorkflowImpact | null>(); // repo\0headSha → derived-graph diff (#49)
   private laneHealthCache = new Map<string, RepoLaneHealth>();            // repo → per-cycle main-lane health (spec §15)
   private deployStatusCache = new Map<string, RepoDeployStatus>();        // repo → per-deploy-cycle deploy status (Deploy lane, spec §15)
+  private scheduledCache = new Map<string, RepoScheduledStatus>();        // repo → per-cycle scheduled-lane snapshot (Scheduled lane, Spec 4)
+  private discoveredScheduled = new Map<string, string[]>();              // repo → discovered scheduled workflow file basenames (Spec 4)
+  private scheduledDiscoveryThrottle = new RetryThrottle(SCHEDULED_DISCOVERY_INTERVAL_MS); // 24h on success, backoff on failure
+  private scheduledRunsThrottle = new RetryThrottle(SCHEDULED_RUNS_INTERVAL_MS);           // ~1h per repo on success, backoff on failure
   private costSummaryCache: CostSummary | undefined;                     // global per-stage cost (Cost lane, Spec 3); buildState reads this (spec §15)
   private costSummaryAt = 0;                                              // epoch ms of the last cost recompute (throttled — cost moves slowly)
   private lastHourlyScanAt = 0;                           // epoch ms of the last hourly scan pass (#41/#45)
@@ -848,6 +873,11 @@ export class Poller extends EventEmitter {
     for (const key of tracked) liveRepos.add(key.slice(0, key.lastIndexOf('#')));
     for (const repo of this.laneHealthCache.keys()) {
       if (!liveRepos.has(repo)) this.laneHealthCache.delete(repo);
+    }
+    // scheduled-lane discovery (Spec 4) is keyed by repo — drop repos no longer
+    // surfaced (scheduledCache is cleared+rebuilt each cycle, so it self-prunes).
+    for (const repo of this.discoveredScheduled.keys()) {
+      if (!liveRepos.has(repo)) this.discoveredScheduled.delete(repo);
     }
     // notifier debounce state lives per PR key — same lifecycle as `stages`
     this.deps.notifier?.prune(new Set([...openKeys, ...tracked]));
@@ -1217,6 +1247,9 @@ export class Poller extends EventEmitter {
     await this.refreshDerivedGraphs();
     // Push-only job pool learning shares this cycle too (6h per-repo throttle inside).
     await this.refreshPushPools();
+    // Scheduled-lane discovery + run polling shares this SLOW cycle (Scheduled
+    // lane, Spec 4) — 24h discovery / ~1h run-poll per-repo throttles inside.
+    await this.refreshScheduled();
     const now = this.now();
     // expire old throttle entries so the map stays bounded
     for (const [k, at] of this.ancestryCheckedAt) {
@@ -1688,6 +1721,99 @@ export class Poller extends EventEmitter {
     }
   }
 
+  /**
+   * Scheduled lane (Spec 4): for every surfaced repo, discover its cron-scheduled
+   * workflows (24h throttle) and REST-poll their recent runs (~1h throttle),
+   * recording run-level rows into the SEPARATE `scheduled_runs` table (never the
+   * estimator's check_durations). Then repopulate the per-cycle `scheduledCache`
+   * from `latestScheduledRuns` so buildState only reads the cache (spec §15).
+   *
+   * Best-effort + failure-aware (the RetryThrottle pattern): a failed discovery
+   * or run-poll arms a capped backoff so the next eligible deploy cycle retries;
+   * a RateLimitError pauses the poller (PR data is the priority dataset).
+   */
+  private async refreshScheduled(): Promise<void> {
+    const nowMs = this.now().getTime();
+    for (const repo of [...this.trackedRepos()].sort()) {
+      if (this.deps.config.exclude.includes(repo)) continue;
+      const [owner, name] = repo.split('/');
+      const client = this.routedClient(owner ?? '');
+      if (!client) continue; // owner has no installation — skip without arming
+
+      // 1) Discovery (24h): list .github/workflows/* and keep the cron-scheduled.
+      if (this.scheduledDiscoveryThrottle.due(repo, nowMs)) {
+        const branch = this.effectiveDeploy()[repo]?.defaultBranch;
+        try {
+          const files = await this.listWorkflowFiles(repo, branch);
+          if (files === undefined) continue; // no installation — no backoff
+          const basenames = parseScheduledWorkflows(files)
+            .map((p) => p.split('/').pop() ?? p);
+          this.discoveredScheduled.set(repo, basenames);
+          this.scheduledDiscoveryThrottle.success(repo, nowMs);
+        } catch (e) {
+          if (e instanceof RateLimitError) { this.notePause(e.retryAfterSeconds); return; }
+          this.scheduledDiscoveryThrottle.failure(repo, nowMs);
+        }
+      }
+
+      // 2) Run poll (~1h): one runs?per_page=8 REST call per discovered workflow.
+      const workflows = this.discoveredScheduled.get(repo) ?? [];
+      if (workflows.length && this.scheduledRunsThrottle.due(repo, nowMs)) {
+        let ok = true;
+        for (const file of workflows) {
+          try {
+            const resp = await client.restGet<ScheduledRunsApiResponse>(
+              scheduledRunsApiPath(owner ?? '', name ?? '', file));
+            this.recordScheduledRunsResponse(repo, file, resp);
+          } catch (e) {
+            if (e instanceof RateLimitError) { this.notePause(e.retryAfterSeconds); return; }
+            ok = false; // some workflow failed — retry the repo next eligible cycle
+          }
+        }
+        if (ok) this.scheduledRunsThrottle.success(repo, nowMs);
+        else this.scheduledRunsThrottle.failure(repo, nowMs);
+      }
+    }
+    this.refreshScheduledCache();
+  }
+
+  /** Persist one workflow's recent-runs REST response into scheduled_runs
+   *  (run-level upserts). Tolerant of a missing/empty list or rows missing ids. */
+  private recordScheduledRunsResponse(repo: string, workflow: string,
+    resp: ScheduledRunsApiResponse): void {
+    const observedAt = this.now().toISOString();
+    for (const run of resp.workflow_runs ?? []) {
+      if (run?.id == null) continue;
+      this.deps.history.recordScheduledRun({
+        repo, workflow, runId: run.id, runAttempt: run.run_attempt ?? 1,
+        runNumber: run.run_number ?? null,
+        conclusion: run.conclusion ?? null, status: run.status ?? null,
+        createdAt: run.created_at ?? null, htmlUrl: run.html_url ?? null,
+        observedAt });
+    }
+  }
+
+  /**
+   * Repopulate the per-cycle scheduled-lane cache (Scheduled lane, Spec 4) —
+   * buildState only reads this, never SQLite. A repo gets an entry only when it
+   * has discovered scheduled workflows (so a repo with none stays absent → no
+   * scheduled field → lane renders not-wired for it). `discovered` carries the
+   * workflow count so the lane can distinguish blind (workflows, no runs) from
+   * idle (no workflows).
+   */
+  private refreshScheduledCache(): void {
+    this.scheduledCache.clear();
+    const now = this.now();
+    for (const repo of this.trackedRepos()) {
+      const discovered = this.discoveredScheduled.get(repo) ?? [];
+      if (discovered.length === 0) continue;
+      this.scheduledCache.set(repo, {
+        runs: this.deps.history.latestScheduledRuns(repo, this.deps.config.retentionDays, now),
+        discovered: discovered.length,
+      });
+    }
+  }
+
   /** Re-read + re-derive a repo's ci.yml at most once per 24h — armed ONLY when
    *  the read succeeds. A failed fetch/read arms a capped exponential backoff
    *  (1m..10m) so later deploy cycles retry.
@@ -1941,6 +2067,9 @@ export class Poller extends EventEmitter {
           // pure cache read — deploy status computed once per deploy cycle in
           // refreshDeployStatus; absent for repos without a deploy config
           deploy: this.deployStatusCache.get(repo),
+          // pure cache read — scheduled-lane snapshot computed once per deploy
+          // cycle in refreshScheduled; absent for repos with no scheduled workflows
+          scheduled: this.scheduledCache.get(repo),
         };
       })
       .sort((a, b) => a.repo.localeCompare(b.repo));

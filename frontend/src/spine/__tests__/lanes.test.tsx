@@ -4,6 +4,7 @@ import { mergeQueueLane } from '../lanes/mergeQueueLane';
 import { mainLane } from '../lanes/mainLane';
 import { deployLane } from '../lanes/deployLane';
 import { costLane } from '../lanes/costLane';
+import { scheduledLane } from '../lanes/scheduledLane';
 import type { DashboardState } from '../../types';
 
 const repo = (over: object) => ({ repo: 'acme/widgets', hasDeploy: false, prs: [], queue: null, ...over });
@@ -116,5 +117,59 @@ describe('costLane', () => {
   it('never returns red or amber', () => {
     expect(['green', 'blind']).toContain(costLane(cost({})).status);
     expect(['green', 'blind']).toContain(costLane(undefined).status);
+  });
+});
+
+describe('scheduledLane', () => {
+  const run = (workflow: string, conclusion: string | null, over: object = {}) =>
+    ({ workflow, conclusion, status: conclusion ? 'completed' : 'in_progress',
+      createdAt: '2026-06-13T06:00:00Z', htmlUrl: `https://x/${workflow}`, ...over });
+  const sched = (over: object) => repo({ scheduled: { runs: [], discovered: 0, ...over } });
+
+  it('is idle when no repo has scheduled workflows', () => {
+    expect(scheduledLane([repo({})] as unknown as DashboardState['repos']).status).toBe('idle');
+  });
+
+  it('is blind when workflows are discovered but no runs are recorded', () => {
+    const out = scheduledLane([sched({ discovered: 4, runs: [] })] as unknown as DashboardState['repos']);
+    expect(out.status).toBe('blind');
+    expect(out.summary).toMatch(/no runs/i);
+  });
+
+  it('is red when the latest run of ANY workflow failed', () => {
+    const out = scheduledLane([sched({
+      discovered: 2, runs: [run('nightly.yml', 'success'), run('weekly.yml', 'failure')],
+    })] as unknown as DashboardState['repos']);
+    expect(out.status).toBe('red');
+    expect(out.summary).toMatch(/nightly/);
+    expect(out.summary).toMatch(/✗/);
+  });
+
+  it('is green when every latest run is SUCCESS, with a glyph summary', () => {
+    const out = scheduledLane([sched({
+      discovered: 2, runs: [run('nightly.yml', 'success'), run('weekly.yml', 'success')],
+    })] as unknown as DashboardState['repos']);
+    expect(out.status).toBe('green');
+    expect(out.summary).toMatch(/✓/);
+  });
+
+  it('is amber for in-progress / cancelled latest runs (not failing, not all green)', () => {
+    expect(scheduledLane([sched({ discovered: 1, runs: [run('a.yml', null)] })] as unknown as DashboardState['repos']).status).toBe('amber');
+    expect(scheduledLane([sched({ discovered: 1, runs: [run('a.yml', 'cancelled')] })] as unknown as DashboardState['repos']).status).toBe('amber');
+  });
+
+  it('aggregates across repos — one failing repo reds the lane', () => {
+    const repos = [
+      sched({ discovered: 1, runs: [run('nightly.yml', 'success')] }),
+      { ...sched({ discovered: 1, runs: [run('weekly.yml', 'timed_out')] }), repo: 'b/b' },
+    ];
+    expect(scheduledLane(repos as unknown as DashboardState['repos']).status).toBe('red');
+  });
+
+  it('CANCELLED never reds the lane', () => {
+    const out = scheduledLane([sched({
+      discovered: 2, runs: [run('a.yml', 'success'), run('b.yml', 'cancelled')],
+    })] as unknown as DashboardState['repos']);
+    expect(['amber']).toContain(out.status);
   });
 });

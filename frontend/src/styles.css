@@ -608,6 +608,16 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
 .spine-deploy-dot.off { background: var(--muted, #888); }
 .spine-deploy-sha-none { color: var(--muted, #888); font-style: italic; }
 .spine-deploy-awaiting { color: var(--muted, #888); margin-top: 4px; font-size: 12px; }
+.spine-scheduled-runs { list-style: none; margin: 4px 0 0; padding: 0; }
+.spine-scheduled-run { padding: 2px 0; }
+.spine-scheduled-run-row { display: inline-flex; align-items: center; gap: 6px; }
+.spine-scheduled-glyph.ok { color: var(--done); }
+.spine-scheduled-glyph.fail { color: var(--fail); }
+.spine-scheduled-glyph.pending { color: var(--muted, #888); }
+.spine-scheduled-name { color: var(--text); }
+.spine-scheduled-time { color: var(--muted, #888); font-size: 12px; }
+.spine-scheduled-link { color: var(--muted, #888); text-decoration: none; }
+.spine-scheduled-link:hover { color: var(--text); }
 .spine-glyph.s-blind { color: var(--muted); }
 .spine-cost-total { color: var(--text); font-weight: 600; }
 .spine-cost-stages { list-style: none; margin: 4px 0 0; padding: 0; }

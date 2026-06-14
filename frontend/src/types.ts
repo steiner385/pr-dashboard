@@ -144,7 +144,14 @@ export interface DashboardState {
      *  /health) + awaiting-QA/awaiting-prod drift. Absent for repos with no
      *  deploy config. Mirror of server estimator/deploy-status.ts. */
     deploy?: { envs: { name: string; liveSha: string | null; reachable: boolean }[];
-      awaitingQa: number; awaitingProd: number }; }[];
+      awaitingQa: number; awaitingProd: number };
+    /** Advisory Scheduled-lane snapshot (Spec 4): the newest run per
+     *  cron-scheduled workflow + the discovered-workflow count. Absent for
+     *  repos with no scheduled workflows. Mirror of server poller.ts
+     *  RepoScheduledStatus. Optional to tolerate pre-upgrade payloads. */
+    scheduled?: { runs: { workflow: string; conclusion: string | null;
+      status: string | null; createdAt: string | null; htmlUrl: string | null }[];
+      discovered: number }; }[];
   /** Cross-cutting global CI cost summary (Cost lane, Spec 3) — top-level, not
    *  per-repo. Priced runner-minutes over a 7-day window across all repos,
    *  split by pipeline stage. `dollars` is null for an unpriced stage subset;

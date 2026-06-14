@@ -185,6 +185,9 @@ export class HistoryStore {
   private readonly stmtUpsertMainCommit: Database.Statement;
   private readonly stmtRecentMainCommits: Database.Statement;
   private readonly stmtMainSeries: Database.Statement;
+  // Delivery spine scheduled lane (Spec 4): run-level cron-workflow health
+  private readonly stmtUpsertScheduledRun: Database.Statement;
+  private readonly stmtLatestScheduledRuns: Database.Statement;
 
   constructor(path: string) {
     this.db = new Database(path);
@@ -286,6 +289,19 @@ export class HistoryStore {
         UNIQUE(repo, commit_sha)
       );
       CREATE INDEX IF NOT EXISTS idx_main_commits ON main_commits(repo, merged_at);
+      -- Delivery spine scheduled lane (Spec 4): run-level health of a repo's
+      -- cron-scheduled workflows (nightly/weekly/audit-*). Kept in its OWN table
+      -- so nightly cold-pod durations never pollute the estimator's
+      -- check_durations medians. UNIQUE(repo, workflow, run_id, run_attempt)
+      -- makes a re-poll of the same run an idempotent upsert (null → conclusion).
+      -- Per-job drill-down + missed-run detection are DEFERRED (run-level only).
+      CREATE TABLE IF NOT EXISTS scheduled_runs (
+        repo TEXT NOT NULL, workflow TEXT NOT NULL, run_id INTEGER NOT NULL, run_attempt INTEGER NOT NULL,
+        run_number INTEGER, conclusion TEXT, status TEXT, created_at TEXT, html_url TEXT,
+        observed_at TEXT NOT NULL,
+        UNIQUE(repo, workflow, run_id, run_attempt)
+      );
+      CREATE INDEX IF NOT EXISTS idx_scheduled_runs ON scheduled_runs(repo, workflow, created_at);
     `);
 
     // Migration: merged_prs gains created_at (PR lifespan metric). Fresh DBs get
@@ -563,6 +579,31 @@ export class HistoryStore {
       `SELECT commit_sha, push_ci_conclusion, COALESCE(merged_at, observed_at) AS at
        FROM main_commits WHERE repo=? AND COALESCE(merged_at, observed_at) >= ?
        ORDER BY COALESCE(merged_at, observed_at) DESC LIMIT 20`);
+    this.stmtUpsertScheduledRun = this.db.prepare(
+      `INSERT INTO scheduled_runs
+         (repo, workflow, run_id, run_attempt, run_number, conclusion, status, created_at, html_url, observed_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(repo, workflow, run_id, run_attempt) DO UPDATE SET
+         run_number=excluded.run_number,
+         conclusion=excluded.conclusion,
+         status=excluded.status,
+         created_at=excluded.created_at,
+         html_url=excluded.html_url,
+         observed_at=excluded.observed_at`);
+    // Newest run per workflow within the window: rank by created_at DESC,
+    // run_attempt DESC (a re-run attempt supersedes its earlier attempt) and
+    // keep rank 1. created_at is ISO-8601 so a lexical MAX is chronological.
+    this.stmtLatestScheduledRuns = this.db.prepare(
+      `SELECT workflow, conclusion, status, created_at, html_url
+       FROM scheduled_runs s
+       WHERE repo=? AND created_at >= ?
+         AND NOT EXISTS (
+           SELECT 1 FROM scheduled_runs t
+           WHERE t.repo=s.repo AND t.workflow=s.workflow AND t.created_at >= ?
+             AND (t.created_at > s.created_at
+               OR (t.created_at = s.created_at AND t.run_attempt > s.run_attempt))
+         )
+       ORDER BY workflow`);
   }
 
   /** `headSha`/`runAttempt` (issue #34): the PR/group head commit the check ran
@@ -773,6 +814,30 @@ export class HistoryStore {
       ok: r.push_ci_conclusion == null ? null : !fail(r.push_ci_conclusion),
     }));
     return { points, lastGreenSha: lastGreenRow?.commit_sha ?? null, lastGreenAt: lastGreenRow?.at ?? null };
+  }
+
+  /** Record one scheduled-workflow run (Delivery spine, Spec 4). Upserts on
+   *  (repo, workflow, run_id, run_attempt): re-polling the same run overwrites
+   *  its conclusion as the run progresses (null → SUCCESS/FAILURE). Run-level
+   *  only — per-job rows are deferred. */
+  recordScheduledRun(r: { repo: string; workflow: string; runId: number; runAttempt: number;
+    runNumber: number | null; conclusion: string | null; status: string | null;
+    createdAt: string | null; htmlUrl: string | null; observedAt: string }): void {
+    this.stmtUpsertScheduledRun.run(r.repo, r.workflow, r.runId, r.runAttempt,
+      r.runNumber, r.conclusion, r.status, r.createdAt, r.htmlUrl, r.observedAt);
+  }
+
+  /** Newest recorded run per scheduled workflow for a repo, within the last
+   *  `sinceDays` (by run created_at). One row per workflow (Spec 4 lane status). */
+  latestScheduledRuns(repo: string, sinceDays = 14, now: Date = new Date()):
+    { workflow: string; conclusion: string | null; status: string | null;
+      createdAt: string | null; htmlUrl: string | null }[] {
+    const cutoff = new Date(now.getTime() - sinceDays * 86400_000).toISOString();
+    const rows = this.stmtLatestScheduledRuns.all(repo, cutoff, cutoff) as
+      { workflow: string; conclusion: string | null; status: string | null;
+        created_at: string | null; html_url: string | null }[];
+    return rows.map((r) => ({ workflow: r.workflow, conclusion: r.conclusion,
+      status: r.status, createdAt: r.created_at, htmlUrl: r.html_url }));
   }
 
   /** Raw last-20 whole-group run durations for a repo, newest first —

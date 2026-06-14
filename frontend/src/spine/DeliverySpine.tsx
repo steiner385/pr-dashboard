@@ -7,12 +7,14 @@ import { prCiLane } from './lanes/prCiLane';
 import { mergeQueueLane } from './lanes/mergeQueueLane';
 import { mainLane } from './lanes/mainLane';
 import { deployLane } from './lanes/deployLane';
+import { scheduledLane } from './lanes/scheduledLane';
 import { costLane } from './lanes/costLane';
 import { scrollBehavior } from '../motion';
 import { PrCiPanel } from './panels/PrCiPanel';
 import { MergeQueuePanel } from './panels/MergeQueuePanel';
 import { MainPanel } from './panels/MainPanel';
 import { DeployPanel } from './panels/DeployPanel';
+import { ScheduledPanel } from './panels/ScheduledPanel';
 import { CostPanel } from './panels/CostPanel';
 
 const LS_KEY = 'prdash.spine.expanded';
@@ -33,10 +35,14 @@ function buildLanes(state: DashboardState | null): Lane[] {
   const mq = state ? mergeQueueLane(repos) : { status: 'blind' as const, summary: 'loading…' };
   const ml = state ? mainLane(repos) : { status: 'blind' as const, summary: 'loading…' };
   const dp = state ? deployLane(repos) : { status: 'blind' as const, summary: 'loading…' };
+  const sl = state ? scheduledLane(repos) : { status: 'blind' as const, summary: 'loading…' };
   const cl = state ? costLane(state.cost) : { status: 'blind' as const, summary: 'loading…' };
   // Advisory + not-wired whenever no repo ships a deploy snapshot, so the lane
   // is excluded from the worst-wins rollup (it must never red the spine).
   const deployWired = repos.some((r) => r.deploy);
+  // Scheduled is gating, but not-wired (excluded from the rollup) whenever no
+  // repo has discovered scheduled workflows — a spine with no nightly can't red.
+  const scheduledWired = repos.some((r) => r.scheduled && r.scheduled.discovered > 0);
 
   // Per-lane cost chips (Spec 3): weave each linear lane's stage dollars in as a
   // chip, omitted when that stage is unpriced (null) — never a false $0.
@@ -69,6 +75,12 @@ function buildLanes(state: DashboardState | null): Lane[] {
       id: 'deploy', title: 'Deploy', glyphPosition: 'dot',
       wiredness: deployWired ? 'wired' : 'not-wired', gating: false,
       status: dp.status, summary: dp.summary, renderExpanded: () => <DeployPanel repos={repos} />,
+    },
+    {
+      id: 'scheduled', title: 'Scheduled', glyphPosition: 'dot',
+      wiredness: scheduledWired ? 'wired' : 'not-wired', gating: true,
+      status: sl.status, summary: sl.summary,
+      renderExpanded: () => <ScheduledPanel repos={repos} />,
     },
     {
       id: 'cost', title: 'Cost', glyphPosition: 'crosscut',

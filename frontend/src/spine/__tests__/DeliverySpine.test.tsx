@@ -15,6 +15,7 @@ describe('DeliverySpine', () => {
     expect(screen.getByTestId('spine-lane-merge-queue')).toBeInTheDocument();
     expect(screen.getByTestId('spine-lane-main')).toBeInTheDocument();
     expect(screen.getByTestId('spine-lane-deploy')).toBeInTheDocument();
+    expect(screen.getByTestId('spine-lane-scheduled')).toBeInTheDocument();
     expect(screen.getByTestId('spine-rollup')).toHaveTextContent(/need attention/i);
   });
   it('skeleton state when state is null (no crash, lanes present)', () => {
@@ -44,6 +45,22 @@ describe('DeliverySpine', () => {
     const env = screen.getByTestId('spine-deploy-env');
     expect(env).toHaveTextContent('qa');
     expect(env).toHaveTextContent('a1b2c3d');
+  });
+
+  it('Scheduled lane is wired and expands to its panel when a repo ships scheduled data', () => {
+    const st = {
+      generatedAt: '', staleSince: null, repos: [{ repo: 'cairnea/KinDash', hasDeploy: false,
+        prs: [], queue: null,
+        scheduled: { discovered: 2, runs: [
+          { workflow: 'nightly.yml', conclusion: 'success', status: 'completed', createdAt: '2026-06-13T06:00:00Z', htmlUrl: 'https://x/1' },
+          { workflow: 'weekly.yml', conclusion: 'failure', status: 'completed', createdAt: '2026-06-13T00:00:00Z', htmlUrl: 'https://x/2' },
+        ] } }],
+    } as unknown as DashboardState;
+    render(<DeliverySpine state={st} kiosk />);
+    expect(screen.getByTestId('spine-lane-scheduled')).toBeInTheDocument();
+    const run = screen.getByTestId('spine-scheduled-run-weekly.yml');
+    expect(run).toHaveTextContent('weekly');
+    expect(run).toHaveTextContent('✗');
   });
 
   it('renders a Cost lane row (always present)', () => {
