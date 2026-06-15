@@ -688,6 +688,47 @@ describe('POST /api/cost/actuals', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Task 5: GET /api/runner-plan + PUT /api/runner-routing
+// ---------------------------------------------------------------------------
+
+import { validateRunnerRoutingPatch } from '../config';
+
+describe('runner routing endpoints', () => {
+  const plan = { map: { integration: 'kindash-arc' as const }, plan: [{ key: 'integration', decision: 'kindash-arc' as const, source: 'auto' as const, p90Secs: 120, scoreMinutes: 2, reason: 'auto', collecting: false }] };
+  const state = { enabled: false, lastPushedAt: null, lastPushedHash: null, lastVerifiedAt: null,
+    lastError: null, plan: plan.plan, shedCount: 1 };
+  const deps = () => ({ runnerRouting: { state: () => state, plan: () => plan, applyConfig: vi.fn() } });
+
+  it('GET /api/runner-plan returns plan + map + state', async () => {
+    const app = createApp({ getState: () => STATE, bus: new EventEmitter(), ...deps() });
+    const res = await request(app).get('/api/runner-plan');
+    expect(res.status).toBe(200);
+    expect(res.body.map).toEqual({ integration: 'kindash-arc' });
+    expect(res.body.shedCount).toBe(1);
+    expect(res.body).toHaveProperty('lastError', null);
+  });
+
+  it('PUT /api/runner-routing accepts the writable subset', async () => {
+    const d = deps();
+    const app = createApp({ getState: () => STATE, bus: new EventEmitter(), ...d });
+    const res = await request(app).put('/api/runner-routing').send({ shedThresholdMinutes: 2 });
+    expect(res.status).toBe(200);
+    expect(d.runnerRouting.applyConfig).toHaveBeenCalledWith({ shedThresholdMinutes: 2 });
+  });
+
+  it('PUT /api/runner-routing 400s on a file-only key', async () => {
+    const app = createApp({ getState: () => STATE, bus: new EventEmitter(), ...deps() });
+    const res = await request(app).put('/api/runner-routing').send({ targetRepo: 'evil/repo' });
+    expect(res.status).toBe(400);
+  });
+
+  it('is absent (404) when no runnerRouting capability is wired', async () => {
+    const app = createApp({ getState: () => STATE, bus: new EventEmitter() });
+    expect((await request(app).get('/api/runner-plan')).status).toBe(404);
+  });
+});
+
 describe('POST /api/pr/ready-merge', () => {
   const okResult = { markedReady: true, autoMergeArmed: true, alreadyArmed: false,
     cleanReadyToMerge: false, state: 'BLOCKED' };
