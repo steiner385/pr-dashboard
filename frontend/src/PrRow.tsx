@@ -198,7 +198,12 @@ export function PrRow({ pr, hasDeploy, queueCulprit = null, expandable = true }:
             {gate.blocked && <span className="pr-action-blocked">{gate.reason}</span>}
             {actionResult && (
               <span className={`pr-action-msg ${actionResult.ok ? 'ok' : 'err'}`}
-                data-testid="pr-action-msg">{actionResult.msg}</span>
+                data-testid="pr-action-msg">
+                {/* glyph + text prefix so success/failure isn't conveyed by colour
+                    alone (UX-L4) */}
+                <span aria-hidden="true">{actionResult.ok ? '✓ ' : '✗ '}</span>
+                {actionResult.ok ? '' : 'Error: '}{actionResult.msg}
+              </span>
             )}
           </div>
         )}

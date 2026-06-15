@@ -505,6 +505,7 @@ describe('PrRow ready+auto-merge action', () => {
     fireEvent.click(screen.getByTestId('pr-ready-merge'));
     const msg = await screen.findByTestId('pr-action-msg');
     expect(msg.textContent).toMatch(/marked ready · auto-merge armed/);
+    expect(msg.textContent).toContain('✓'); // non-colour success channel (UX-L4)
     expect(fetchMock).toHaveBeenCalledWith('/api/pr/ready-merge', expect.objectContaining({ method: 'POST' }));
     const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
     expect(body).toEqual({ repo: 'acme/widgets', number: 8962 });
@@ -519,6 +520,8 @@ describe('PrRow ready+auto-merge action', () => {
     const msg = await screen.findByTestId('pr-action-msg');
     expect(msg).toHaveClass('err');
     expect(msg.textContent).toMatch(/pull_requests:write/);
+    expect(msg.textContent).toContain('✗');     // non-colour failure channel (UX-L4)
+    expect(msg.textContent).toContain('Error:'); // …plus a text prefix
   });
 });
 

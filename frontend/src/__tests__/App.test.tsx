@@ -395,6 +395,18 @@ describe('App kiosk mode (issue #20)', () => {
     expect(screen.queryByRole('group', { name: 'Overall CI health' })).not.toBeInTheDocument();
   });
 
+  it('has no dangling aria-controls/aria-labelledby in kiosk mode (UX-L3)', () => {
+    setUrl('?kiosk=1');
+    const { container } = render(<App />);
+    for (const attr of ['aria-controls', 'aria-labelledby']) {
+      for (const el of container.querySelectorAll(`[${attr}]`)) {
+        for (const id of el.getAttribute(attr)!.split(/\s+/).filter(Boolean)) {
+          expect(document.getElementById(id), `${attr}="${id}" must resolve to a node`).not.toBeNull();
+        }
+      }
+    }
+  });
+
   it('adds the kiosk class to the app root', () => {
     setUrl('?kiosk=1');
     const { container } = render(<App />);
@@ -462,5 +474,12 @@ describe('App notification bell (issue #19)', () => {
     render(<App />);
     expect(screen.getByRole('button', { name: 'Browser notifications (this tab)' }))
       .toHaveAttribute('title', expect.stringContaining('tab must stay open'));
+  });
+});
+
+describe('App repo headings (UX-L1)', () => {
+  it('renders each repo name as a heading for screen-reader navigation', () => {
+    render(<App />);
+    expect(screen.getByRole('heading', { name: /acme\/widgets/ })).toBeInTheDocument();
   });
 });

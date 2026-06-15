@@ -38,6 +38,9 @@ header h1 { font-size: 20px; }
 section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
 
 /* --- Collapsible repo header button --- */
+/* h2 wrapper exists only for SR heading navigation (UX-L1) — the button below
+   keeps all the visual styling, so neutralize the heading's own box. */
+.repo-header { margin: 0; font: inherit; color: inherit; }
 .repo-header-btn {
   display: flex; align-items: baseline; gap: 5px;
   width: 100%; background: none; border: none; padding: 0;

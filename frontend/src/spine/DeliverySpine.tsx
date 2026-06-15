@@ -45,12 +45,15 @@ function buildLanes(state: DashboardState | null): Lane[] {
   }));
 }
 
-export function DeliverySpine({ state, kiosk, focus }: {
+export function DeliverySpine({ state, kiosk, focus, hideRollup = false }: {
   state: DashboardState | null;
   kiosk: boolean;
   /** Bumped by the global health header: expand this lane, scroll to it, and
    *  move focus there. `nonce` makes a repeat click on the same lane retrigger. */
   focus?: { id: string; nonce: number } | null;
+  /** Suppress the spine's own rollup pill when the global HealthHeader band is
+   *  already on screen showing the same thing (UX-L2). */
+  hideRollup?: boolean;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(readExpanded);
   const lanes = useMemo(() => buildLanes(state), [state]);
@@ -103,7 +106,7 @@ export function DeliverySpine({ state, kiosk, focus }: {
       <span role="status" aria-live="polite" aria-atomic="true" className="spine-rollup-live">
         {liveSummary}
       </span>
-      {!kiosk && (
+      {!kiosk && !hideRollup && (
         <button type="button" data-testid="spine-rollup" className={`spine-rollup r-${roll.state}`}
           aria-label={roll.state === 'green' ? 'All lanes healthy' : `${roll.count} lanes need attention — go to first`}
           onClick={jumpToRed}>

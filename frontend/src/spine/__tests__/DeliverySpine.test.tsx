@@ -143,3 +143,16 @@ describe('DeliverySpine live region (UX-H4)', () => {
     expect(live.textContent).toMatch(/attention: .*PR CI/);
   });
 });
+
+describe('DeliverySpine rollup suppression (UX-L2)', () => {
+  it('hides its own rollup pill when hideRollup is set (band shows it instead)', () => {
+    render(<DeliverySpine state={state({})} kiosk={false} hideRollup />);
+    expect(screen.queryByTestId('spine-rollup')).toBeNull();
+    // lanes still render
+    expect(screen.getByTestId('spine-lane-pr-ci')).toBeInTheDocument();
+  });
+  it('shows the rollup by default (no band present)', () => {
+    render(<DeliverySpine state={state({})} kiosk={false} />);
+    expect(screen.getByTestId('spine-rollup')).toBeInTheDocument();
+  });
+});

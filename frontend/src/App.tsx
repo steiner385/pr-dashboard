@@ -289,7 +289,9 @@ export function App() {
       <div id="tabpanel-delivery" hidden={tab !== 'delivery'}
         {...(kiosk ? {} : { role: 'tabpanel', 'aria-labelledby': 'tab-delivery' })}>
         <ErrorBoundary>
-          {deliveryVisited && <DeliverySpine state={state} kiosk={kiosk} focus={spineFocus} />}
+          {/* hideRollup when the global HealthHeader band is on screen (non-kiosk):
+              the band already shows the same rollup + jump-to-red (UX-L2). */}
+          {deliveryVisited && <DeliverySpine state={state} kiosk={kiosk} focus={spineFocus} hideRollup={!kiosk} />}
         </ErrorBoundary>
       </div>
       <div id="tabpanel-metrics" hidden={tab !== 'metrics'}
@@ -322,6 +324,9 @@ export function App() {
             {kiosk ? (
               <h2>{r.repo}</h2>
             ) : (
+            /* Heading wraps the toggle (UX-L1) so SR users can jump repo-to-repo
+               via heading navigation; the button keeps the collapse semantics. */
+            <h2 className="repo-header">
             <button
               type="button"
               className="repo-header-btn"
@@ -347,6 +352,7 @@ export function App() {
                 </span>
               )}
             </button>
+            </h2>
             )}
             {!isCollapsed && (
               <>
