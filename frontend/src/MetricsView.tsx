@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { scrollBehavior } from './motion';
 import type { HeadlineStat, MetricsBucket, MetricsPayload, MetricsWindow } from './types';
+import { RunnerRouting } from './RunnerRouting';
 import { LEAD_TIME_SEGMENTS } from './leadtime';
 import {
   AreaSeries, BandSeries, MultiLine, ScatterPlot, SignedLine,
@@ -1273,6 +1274,10 @@ export function MetricsView({ now, focusCostNonce }: {
             </p>
           </div>
         ))}
+      </Panel>
+
+      <Panel id="metrics-runner-routing" title="Runner routing" section="reliability" empty={false}>
+        <RunnerRouting />
       </Panel>
 
       <Panel title="Merge velocity + deploy lag" section="throughput" empty={velocityRepos.length === 0}>

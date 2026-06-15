@@ -225,7 +225,16 @@ const PAYLOAD: MetricsPayload = {
   ],
 };
 
-/** Mock fetch that echoes the requested window/bucket (server clamp emulated). */
+/** Empty RunnerPlanResponse — silences the RunnerRouting panel mounted in MetricsView. */
+const RUNNER_PLAN_EMPTY = {
+  enabled: false, shedCount: 0, lastError: null, lastPushedAt: null,
+  lastVerifiedAt: null, lastPushedHash: null, map: {}, plan: [],
+};
+
+/** Mock fetch that echoes the requested window/bucket (server clamp emulated).
+ *  Calls to /api/runner-plan (from the RunnerRouting panel) are handled
+ *  transparently and are NOT tracked by the returned vi.fn() — existing
+ *  toHaveBeenCalledTimes assertions stay accurate for metrics calls only. */
 function mockFetchOk(payload: MetricsPayload = PAYLOAD) {
   const fn = vi.fn(async (url: string | URL | Request) => {
     const params = new URL(String(url), 'http://x').searchParams;
@@ -237,7 +246,13 @@ function mockFetchOk(payload: MetricsPayload = PAYLOAD) {
       json: async () => ({ ...payload, window, bucket }),
     } as Response;
   });
-  vi.stubGlobal('fetch', fn);
+  // Wrap: runner-plan calls bypass the tracked fn so call-count assertions stay clean.
+  vi.stubGlobal('fetch', async (url: string | URL | Request) => {
+    if (String(url).includes('/api/runner-plan') || String(url).includes('/api/runner-routing')) {
+      return { ok: true, status: 200, json: async () => RUNNER_PLAN_EMPTY } as Response;
+    }
+    return fn(url);
+  });
   return fn;
 }
 
