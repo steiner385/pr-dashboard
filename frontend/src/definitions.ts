@@ -85,6 +85,12 @@ export const METRIC_DEFINITIONS = {
   // ---- spot reclaims panel ----
   reclaimEvents: { label: 'reclaim events',
     text: 'a CANCELLED check whose commit later passed the same check at a higher attempt — an infra kill (spot reclaim), not a real verdict' },
+  spotReclaimRate: { label: 'spot reclaim rate',
+    text: 'spot reclaim events ÷ spot jobs started in-window, spot pools only (on-demand/hosted excluded) — the interruption probability the spot↔on-demand decision keys on' },
+  spotReclaimPerHour: { label: 'spot reclaims / hr',
+    text: 'spot reclaim events ÷ window hours — the raw real-time rate' },
+  spotJobsRan: { label: 'spot jobs',
+    text: 'spot-pool job starts in-window — the denominator for the reclaim rate' },
 
   // ---- train killers panel ----
   trainEjects: { label: 'trains ejected',

@@ -1047,12 +1047,33 @@ export function MetricsView({ now, focusCostNonce }: {
             <div className="metric-row">
               <MetricStat label="reclaim events" def={DEFS.reclaimEvents}
                 value={String(r.total)} />
+              {r.spot && (
+                <>
+                  <MetricStat label="spot reclaim rate" def={DEFS.spotReclaimRate}
+                    value={r.spot.ratePct != null ? `${r.spot.ratePct}%` : '–'} />
+                  <MetricStat label="spot reclaims / hr" def={DEFS.spotReclaimPerHour}
+                    value={String(r.spot.perHour)} />
+                  <MetricStat label="spot jobs" def={DEFS.spotJobsRan}
+                    value={String(r.spot.jobs)} />
+                </>
+              )}
             </div>
             <ChartBlock label={`reclaims per ${noun}`}>
               <AreaSeries points={alignCounts(axis, r.perBucket)} kind={kind}
                 format={fmtCount} populated={r.perBucket.length}
                 label={`${r.repo} spot-reclaim events per ${noun}`} />
             </ChartBlock>
+            {r.spot && r.spot.perBucket.length > 0 && (
+              <ChartBlock label={`spot reclaim rate (%) per ${noun}`}>
+                <AreaSeries
+                  points={alignCounts(axis, r.spot.perBucket.map((b) => ({
+                    bucket: b.bucket,
+                    count: b.jobs > 0 ? Math.round((b.reclaims / b.jobs) * 1000) / 10 : 0,
+                  })))}
+                  kind={kind} format={(v) => `${v}%`} populated={r.spot.perBucket.length}
+                  label={`${r.repo} spot reclaim rate per ${noun}`} />
+              </ChartBlock>
+            )}
             <table className="metric-table">
               <thead><tr><th>pool</th><th>events</th></tr></thead>
               <tbody>

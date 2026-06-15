@@ -1666,3 +1666,43 @@ describe('config changes section (tuning tool)', () => {
       .not.toContain(REPO);
   });
 });
+
+describe('computeMetrics: spot-reclaim rate (toggle input)', () => {
+  it('scopes the rate to spot pools and normalises by spot job starts', () => {
+    // spot job reclaimed: CANCELLED@1 then SUCCESS@2, same sha → 1 reclaim
+    h.recordCheckDuration(REPO, 'spot-unit', 'pull_request', '2026-06-10T10:00:00Z', '2026-06-10T10:05:00Z', 'CANCELLED', 'shaA', 1, 1);
+    h.recordCheckDuration(REPO, 'spot-unit', 'pull_request', '2026-06-10T10:06:00Z', '2026-06-10T10:10:00Z', 'SUCCESS', 'shaA', 2, 1);
+    // spot job that ran clean (no reclaim) — adds to the denominator only
+    h.recordCheckDuration(REPO, 'spot-lint', 'pull_request', '2026-06-10T11:00:00Z', '2026-06-10T11:02:00Z', 'SUCCESS', 'shaB', 1, 1);
+    // on-demand job reclaimed — must be EXCLUDED from the spot rate
+    h.recordCheckDuration(REPO, 'od-build', 'pull_request', '2026-06-10T12:00:00Z', '2026-06-10T12:05:00Z', 'CANCELLED', 'shaC', 1, 1);
+    h.recordCheckDuration(REPO, 'od-build', 'pull_request', '2026-06-10T12:06:00Z', '2026-06-10T12:10:00Z', 'SUCCESS', 'shaC', 2, 1);
+
+    const resolvePool = (_r: string, name: string) =>
+      ({ pool: /spot/.test(name) ? 'kindash-arc-spot' : 'kindash-arc', githubHosted: false });
+    const m = computeMetrics(h, '7d', 'day', NOW, [], () => 1, new Map(), new Map(), [], resolvePool);
+    const r = m.reclaims.find((x) => x.repo === REPO)!;
+
+    // total counts both reclaims; the spot scope drops the on-demand one
+    expect(r.total).toBe(2);
+    expect(r.spot.reclaims).toBe(1);
+    // spot job starts (denominator): spot-unit ×2 attempts + spot-lint ×1 = 3
+    expect(r.spot.jobs).toBe(3);
+    expect(r.spot.ratePct).toBeCloseTo(33.3, 1);
+    // 1 spot reclaim over the 7d (168h) window
+    expect(r.spot.perHour).toBeCloseTo(0.01, 2);
+    // byPool still reports the on-demand reclaim (it's a real cancel-retry)
+    expect(r.byPool.find((p) => p.pool === 'kindash-arc')?.count).toBe(1);
+  });
+
+  it('reports a null rate when no spot jobs ran in-window', () => {
+    h.recordCheckDuration(REPO, 'od-only', 'pull_request', '2026-06-10T10:00:00Z', '2026-06-10T10:05:00Z', 'CANCELLED', 'shaX', 1, 1);
+    h.recordCheckDuration(REPO, 'od-only', 'pull_request', '2026-06-10T10:06:00Z', '2026-06-10T10:10:00Z', 'SUCCESS', 'shaX', 2, 1);
+    const resolvePool = () => ({ pool: 'kindash-arc', githubHosted: false });
+    const m = computeMetrics(h, '7d', 'day', NOW, [], () => 1, new Map(), new Map(), [], resolvePool);
+    const r = m.reclaims.find((x) => x.repo === REPO)!;
+    expect(r.spot.reclaims).toBe(0);
+    expect(r.spot.jobs).toBe(0);
+    expect(r.spot.ratePct).toBeNull();
+  });
+});

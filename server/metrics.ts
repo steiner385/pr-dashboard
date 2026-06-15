@@ -189,7 +189,15 @@ export interface MetricsPayload {
    *  events in the window are omitted. */
   reclaims: { repo: string; total: number;
     perBucket: { bucket: string; count: number }[];
-    byPool: { pool: string; count: number }[] }[];
+    byPool: { pool: string; count: number }[];
+    /** Spot-reclaim RATE (toggle input): scoped to spot pools only — on-demand /
+     *  GitHub-hosted pools can't be spot-interrupted, so their cancel-retries are
+     *  excluded. `reclaims` = spot reclaim events; `jobs` = spot job starts in
+     *  window (the denominator); `ratePct` = reclaims/jobs (null when no spot
+     *  jobs ran); `perHour` = reclaims / window hours; `perBucket` carries both
+     *  series so the UI can chart the per-bucket rate. */
+    spot: { reclaims: number; jobs: number; ratePct: number | null; perHour: number;
+      perBucket: { bucket: string; reclaims: number; jobs: number }[] } }[];
   /** Concurrency demand curve (issue #47): per repo×pool, the PEAK number of
    *  simultaneously-running jobs within each bucket — a sweep-line over the
    *  stored job intervals (started_at..completed_at; pre-#47 rows derive
@@ -1063,17 +1071,43 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
   // bill's attributed-dollars overshoot 100%, the >100% leak this fixes).
   const isGithubHosted = (repo: string, name: string, event: string): boolean =>
     resolvePool(repo, name, event)?.githubHosted === true;
+  // A pool is "spot" when its resolved key carries the spot marker (e.g.
+  // `kindash-arc-spot`, `ci-fast-spot`). Only spot pools can be spot-reclaimed,
+  // so the reclaim RATE is computed over them alone.
+  const isSpotPool = (pool: string): boolean => /spot/i.test(pool);
+  // Job-start intervals (also used by the concurrency curve below) — the
+  // denominator for the spot-reclaim rate: every spot job that ran in-window.
+  const intervalRows = keep(history.checkIntervalsSince(since));
   const reclaims = [...history.reclaimEventsByRepo(since)]
     .filter(([repo]) => !dropped.has(repo))
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([repo, events]) => ({
-      repo,
-      total: events.length,
-      perBucket: bucketCounts(events.map((e) => e.at), key),
-      byPool: [...groupBy(events, (e) => poolKeyOf(repo, e.name, e.event))]
-        .map(([pool, evs]) => ({ pool, count: evs.length }))
-        .sort((a, b) => b.count - a.count || a.pool.localeCompare(b.pool)),
-    }))
+    .map(([repo, events]) => {
+      const spotEvents = events.filter((e) => isSpotPool(poolKeyOf(repo, e.name, e.event)));
+      const spotJobRows = intervalRows.filter(
+        (r) => r.repo === repo && isSpotPool(poolKeyOf(repo, r.name, r.event)));
+      const spotJobs = spotJobRows.length;
+      const reclaimsAt = new Map(bucketCounts(spotEvents.map((e) => e.at), key)
+        .map((b) => [b.bucket, b.count] as const));
+      const jobsAt = new Map(bucketCounts(spotJobRows.map((r) => r.startedAt), key)
+        .map((b) => [b.bucket, b.count] as const));
+      const spotBuckets = [...new Set([...reclaimsAt.keys(), ...jobsAt.keys()])].sort()
+        .map((bucket) => ({ bucket, reclaims: reclaimsAt.get(bucket) ?? 0, jobs: jobsAt.get(bucket) ?? 0 }));
+      return {
+        repo,
+        total: events.length,
+        perBucket: bucketCounts(events.map((e) => e.at), key),
+        byPool: [...groupBy(events, (e) => poolKeyOf(repo, e.name, e.event))]
+          .map(([pool, evs]) => ({ pool, count: evs.length }))
+          .sort((a, b) => b.count - a.count || a.pool.localeCompare(b.pool)),
+        spot: {
+          reclaims: spotEvents.length,
+          jobs: spotJobs,
+          ratePct: spotJobs > 0 ? Math.round((spotEvents.length / spotJobs) * 1000) / 10 : null,
+          perHour: Math.round((spotEvents.length / windowHours) * 100) / 100,
+          perBucket: spotBuckets,
+        },
+      };
+    })
     .filter((r) => r.total > 0);
 
   // 14. Concurrency demand curve (issue #47): sweep-line peaks over the job
@@ -1081,7 +1115,7 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
   // count — they occupied a runner for their whole span.
   const nowMs = now.getTime();
   const sinceMs = nowMs - windowMs;
-  const concurrency = [...groupBy(keep(history.checkIntervalsSince(since)),
+  const concurrency = [...groupBy(intervalRows,
     (r) => `${r.repo}${SEP}${poolKeyOf(r.repo, r.name, r.event)}`)]
     .sort(([a], [b]) => a.localeCompare(b))
     .flatMap(([k, rows]) => {

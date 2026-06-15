@@ -427,7 +427,10 @@ export interface MetricsPayload {
    *  split. Repos with zero events are omitted. */
   reclaims: { repo: string; total: number;
     perBucket: { bucket: string; count: number }[];
-    byPool: { pool: string; count: number }[] }[];
+    byPool: { pool: string; count: number }[];
+    /** Spot-reclaim rate (spot pools only). Optional to tolerate pre-upgrade payloads. */
+    spot?: { reclaims: number; jobs: number; ratePct: number | null; perHour: number;
+      perBucket: { bucket: string; reclaims: number; jobs: number }[] } }[];
   /** Concurrency demand curve (issue #47): per repo×pool, PEAK concurrent
    *  jobs per bucket (sweep-line over stored job intervals). No cap overlay
    *  in v1 — the fleet cap isn't known to the dashboard. */
