@@ -35,9 +35,14 @@ const WEBHOOK_EVENTS = ['check_run', 'check_suite', 'pull_request', 'workflow_ru
 
 /**
  * Build the App manifest: private App. Permissions are read-only except
- * `pull_requests: write`, which backs the one write-action the dashboard
- * offers — flip a draft PR ready-for-review and arm auto-merge (pr-actions.ts).
- * On an installation that predates this permission, GitHub holds the upgrade
+ * `pull_requests: write` AND `contents: write`, which together back the one
+ * write-action the dashboard offers — flip a draft PR ready-for-review and arm
+ * auto-merge (pr-actions.ts). NOTE: `markPullRequestReadyForReview` and
+ * `enablePullRequestAutoMerge` require `contents: write` (not just
+ * pull_requests:write) because GitHub buckets them with operations that can
+ * generate commits/merges — pull_requests:write alone returns FORBIDDEN
+ * ("Resource not accessible by integration"). See cli/cli discussion #6924.
+ * On an installation that predates these permissions, GitHub holds the upgrade
  * until the owner approves it (Settings → Applications); the action 403s with a
  * fix-it hint until then.
  *
@@ -54,7 +59,7 @@ export function buildManifest(opts: ManifestOptions): AppManifest {
     checks: 'read',
     pull_requests: 'write', // mark-ready + enable-auto-merge (pr-actions.ts); read covers polling
     actions: 'read',
-    contents: 'read',
+    contents: 'write', // REQUIRED by mark-ready + enable-auto-merge (GitHub buckets them with commit/merge ops); read covers ci.yml/clone reads
     metadata: 'read',
   };
 

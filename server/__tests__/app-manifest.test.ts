@@ -21,7 +21,7 @@ describe('buildManifest', () => {
         checks: 'read',
         pull_requests: 'write',
         actions: 'read',
-        contents: 'read',
+        contents: 'write',
         metadata: 'read',
       },
     });
@@ -46,7 +46,7 @@ describe('buildManifest', () => {
         checks: 'read',
         pull_requests: 'write',
         actions: 'read',
-        contents: 'read',
+        contents: 'write',
         metadata: 'read',
         merge_queues: 'read',
       },
