@@ -7,7 +7,7 @@ const EMPTY: MetricsPayload = {
   window: '3d', bucket: 'hour',
   runnerWaits: [], queue: [], queueEfficiency: [], slowestJobs: [], velocity: [],
   leadTime: [], trends: [],
-  calibration: [], flakiness: [], demotionCandidates: [], trainKillers: [], criticalPath: [], lint: [],
+  calibration: [], flakiness: [], demotionCandidates: [], promotionCandidates: [], trainKillers: [], criticalPath: [], lint: [],
   regressions: [], runnerPools: [], reclaims: [], concurrency: [], cost: [],
 };
 
@@ -125,6 +125,14 @@ const PAYLOAD: MetricsPayload = {
       { name: 'lint: eslint', event: 'pull_request', currentTier: 'every PR push',
         suggestedTier: 'merge queue only', successRatePct: 100, runsInWindow: 120,
         minutesInWindow: 240, reason: '120/120 green · ~240 runner-min in window' },
+    ] },
+  ],
+  promotionCandidates: [
+    { repo: 'acme/widgets', candidates: [
+      { name: 'e2e', event: 'push', currentTier: 'every push to main (post-merge)',
+        suggestedTier: 'merge queue (pre-merge gate)', realFailures: 6, failRatePct: 5,
+        runsInWindow: 120, minutesInWindow: 600,
+        reason: '6 real (non-flaky) failures in 120 runs (5%) — caught late' },
     ] },
   ],
   trainKillers: [
@@ -1328,6 +1336,16 @@ describe('MetricsView sub-tabs (page cleanup)', () => {
     expect(within(row).getByText('every PR push')).toBeInTheDocument();
     expect(within(row).getByText('→ merge queue only')).toBeInTheDocument();
     expect(within(row).getByText(/240 min/)).toBeInTheDocument();
+  });
+
+  it('renders promotion candidates with the suggested earlier tier', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    const row = await screen.findByTestId('promotion-e2e/push');
+    expect(within(row).getByText('e2e')).toBeInTheDocument();
+    expect(within(row).getByText('every push to main (post-merge)')).toBeInTheDocument();
+    expect(within(row).getByText('↑ merge queue (pre-merge gate)')).toBeInTheDocument();
+    expect(within(row).getByText(/^6 \(/)).toBeInTheDocument();
   });
 
   it('the Draft PR button posts and renders the resulting PR link', async () => {

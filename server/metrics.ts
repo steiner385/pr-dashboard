@@ -13,6 +13,7 @@ import {
   type LintFinding, type TimeoutLintInput, type FastGatingInput, type WaitDominatedInput,
 } from './estimator/workflow-lint';
 import { computeDemotionCandidates, type DemotionCandidate } from './estimator/demotion-candidates';
+import { computePromotionCandidates, type PromotionCandidate } from './estimator/promotion-candidates';
 
 /**
  * Metrics tab payload (metrics-readability revision). This interface is the
@@ -114,6 +115,12 @@ export interface MetricsPayload {
    *  in-window so it falls below the bar — this lane is disjoint from flakiness.
    *  Advisory only; the suggested tier is the next-lower trigger frequency. */
   demotionCandidates: { repo: string; candidates: DemotionCandidate[] }[];
+  /** Promotion candidates (real-failing late → shift left): per repo, checks
+   *  with a real (non-flaky) failure rate at a late tier (push:main / merge_group)
+   *  that don't already run earlier, ranked by real-failure count. The inverse of
+   *  demotionCandidates and disjoint from it (demotion needs green, promotion
+   *  needs failures). Advisory; flakes excluded via the flake engine. */
+  promotionCandidates: { repo: string; candidates: PromotionCandidate[] }[];
   /** Train-killer leaderboard (issue #38): per repo, checks ranked by how many
    *  merge-group builds they ejected in the window. `estCostTrainHours` is an
    *  APPROXIMATION: ejects × median group-run duration × current batchSize, in
@@ -882,6 +889,24 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
     .map(([repo, stats]) => ({ repo, candidates: computeDemotionCandidates(stats) }))
     .filter((r) => r.candidates.length > 0);
 
+  // 7c. Promotion candidates (real-failing late → shift left): the inverse lane.
+  // realFailures = failing distinct runs MINUS same-sha-resolved flakes (joined
+  // from the flake engine), so a flaky check never reads as a promotion target.
+  const promotionCandidates = [...successByRepo]
+    .filter(([repo]) => !dropped.has(repo))
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([repo, stats]) => {
+      const flakeOf = new Map(
+        (flakeByRepo.get(repo) ?? []).map((f) => [`${f.name}${SEP}${f.event}`, f.flakeEvents]),
+      );
+      const promoStats = stats.map((s) => ({
+        name: s.name, event: s.event, totalRuns: s.totalRuns, sumDurationSecs: s.sumDurationSecs,
+        realFailures: Math.max(0, s.failingRuns - (flakeOf.get(`${s.name}${SEP}${s.event}`) ?? 0)),
+      }));
+      return { repo, candidates: computePromotionCandidates(promoStats) };
+    })
+    .filter((r) => r.candidates.length > 0);
+
   // 8. Train killers (issue #38): ejects per check from group_failures, with the
   // documented cost approximation (ejects × median group run × batchSize) and a
   // flake-rate cross-reference (max across events for the same check name).
@@ -1363,7 +1388,7 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
 
   return { window, bucket, runnerWaits, queue, queueEfficiency, batchAdvisor, recommendations,
     configChanges, slowestJobs, velocity, leadTime,
-    trends, calibration, flakiness, demotionCandidates, trainKillers, criticalPath, needsGraph, lint, regressions,
+    trends, calibration, flakiness, demotionCandidates, promotionCandidates, trainKillers, criticalPath, needsGraph, lint, regressions,
     runnerPools, reclaims, concurrency, cost, costJobs, costRuns, costActuals,
     costAutoRate: blended != null
       ? { ...blended, windowDays: WINDOW_DAYS[window] } : null };

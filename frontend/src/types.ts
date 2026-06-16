@@ -332,6 +332,19 @@ export interface DemotionCandidate {
   reason: string;
 }
 
+/** One promotion candidate (mirror of server/estimator/promotion-candidates.ts). */
+export interface PromotionCandidate {
+  name: string;
+  event: string;
+  currentTier: string;
+  suggestedTier: string;
+  realFailures: number;
+  failRatePct: number;
+  runsInWindow: number;
+  minutesInWindow: number;
+  reason: string;
+}
+
 export interface MetricsPayload {
   window: MetricsWindow;
   bucket: MetricsBucket;
@@ -393,6 +406,10 @@ export interface MetricsPayload {
    *  by runner-minutes spent (cost × greenness). Advisory; disjoint from
    *  flakiness (a flaky check fails the success bar). */
   demotionCandidates: { repo: string; candidates: DemotionCandidate[] }[];
+  /** Promotion candidates (real-failing late → shift left): per repo, checks with
+   *  a real (non-flaky) failure rate at a late tier that don't already run
+   *  earlier. Inverse of demotionCandidates; disjoint by construction. Advisory. */
+  promotionCandidates: { repo: string; candidates: PromotionCandidate[] }[];
   /** Train killers (issue #38): checks ranked by merge-group ejections.
    *  estCostTrainHours ≈ ejects × median group run × batchSize (hours); null
    *  without an observed median. flakeRatePct cross-references the flake radar. */

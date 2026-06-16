@@ -877,6 +877,7 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
 /* Demotion candidates panel */
 .metric-num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .demotion-arrow { color: var(--accent); font-weight: 600; white-space: nowrap; }
+.promotion-arrow { color: var(--amber); font-weight: 600; white-space: nowrap; }
 .demotion-draft-btn {
   font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 5px; cursor: pointer;
   border: 1px solid var(--border); background: var(--surface); color: var(--muted); white-space: nowrap;

@@ -390,6 +390,7 @@ export function MetricsView({ now, focusCostNonce }: {
   }
   const flakeRepos = payload.flakiness.filter((f) => f.checks.length);
   const demotionRepos = (payload.demotionCandidates ?? []).filter((d) => d.candidates.length);
+  const promotionRepos = (payload.promotionCandidates ?? []).filter((p) => p.candidates.length);
   const killerRepos = payload.trainKillers.filter((t) => t.checks.length);
   const cpByRepo = new Map<string, typeof payload.criticalPath>();
   for (const cp of payload.criticalPath) {
@@ -1147,6 +1148,41 @@ export function MetricsView({ now, focusCostNonce }: {
               moves that keep the merge-queue gate are suggested — a merge-queue check
               is never demoted off the gate. Advisory — a green check may still guard
               rare regressions; review before demoting.
+            </p>
+          </div>
+        ))}
+      </Panel>
+
+      <Panel id="metrics-promotion-candidates" title="Promotion candidates" section="reliability"
+        empty={promotionRepos.length === 0}
+        emptyText="no checks with a real (non-flaky) failure rate to shift left">
+        {promotionRepos.map((p) => (
+          <div key={p.repo} className="metric-repo">
+            <h3>{p.repo}</h3>
+            <table className="metric-table">
+              <thead>
+                <tr>
+                  <th>check</th><th>runs on</th>
+                  <th title="real (non-flaky) failures — failing runs minus same-sha-resolved flakes">real fails</th>
+                  <th>suggested</th>
+                </tr>
+              </thead>
+              <tbody>
+                {p.candidates.map((c) => (
+                  <tr key={`${c.name}/${c.event}`} data-testid={`promotion-${c.name}/${c.event}`}>
+                    <td className="metric-job-name">{c.name}</td>
+                    <td>{c.currentTier}</td>
+                    <td title={c.reason} className="var-high">{c.realFailures} ({fmtPct(c.failRatePct)})</td>
+                    <td><span className="promotion-arrow">↑ {c.suggestedTier}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="metric-note">
+              Checks failing for real (flakes excluded) at a late tier with no earlier coverage
+              of the same name — shifting left catches them sooner. A merge_group failure already
+              run on PRs is omitted (merge-emergent). Note: coverage under a different name (e.g.
+              an affected-slice job) isn't recognized — confirm before acting. Advisory.
             </p>
           </div>
         ))}
