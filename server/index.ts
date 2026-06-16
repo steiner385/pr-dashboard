@@ -8,6 +8,7 @@ import { createTokenSource, AppJwtSigner, InstallationRegistry, type TokenProvid
 import { GithubClient } from './github';
 import { ClientRouter } from './client-router';
 import { readyAndAutoMerge } from './pr-actions';
+import { openDemotionDraftPr } from './demotion-action';
 import { HistoryStore } from './history';
 import { DeployWatcher } from './deploy-watcher';
 import { Poller, describeError } from './poller';
@@ -294,6 +295,17 @@ async function main() {
           return Promise.reject(new Error(`no installation covers ${input.owner}`));
         }
         return readyAndAutoMerge(client, input);
+      },
+    },
+    // Demotion scaffold draft-PR — routed to the repo owner's installation
+    // client (App mode) or the single shared client (gh/env).
+    demotionAction: {
+      draftPr: (input) => {
+        const client = router.clientFor(input.owner);
+        if (!client) {
+          return Promise.reject(new Error(`no installation covers ${input.owner}`));
+        }
+        return openDemotionDraftPr(client, input.owner, input.repo, input.candidate);
       },
     },
     // Runner-routing capability (feature/runner-routing) — the controller's

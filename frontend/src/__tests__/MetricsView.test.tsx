@@ -253,10 +253,15 @@ function mockFetchOk(payload: MetricsPayload = PAYLOAD) {
       json: async () => ({ ...payload, window, bucket }),
     } as Response;
   });
-  // Wrap: runner-plan calls bypass the tracked fn so call-count assertions stay clean.
+  // Wrap: runner-plan + demotion-action calls bypass the tracked fn so call-count
+  // assertions stay clean for metrics calls only.
   vi.stubGlobal('fetch', async (url: string | URL | Request) => {
     if (String(url).includes('/api/runner-plan') || String(url).includes('/api/runner-routing')) {
       return { ok: true, status: 200, json: async () => RUNNER_PLAN_EMPTY } as Response;
+    }
+    if (String(url).includes('/api/demotion/draft-pr')) {
+      return { ok: true, status: 200,
+        json: async () => ({ number: 99, url: 'https://github.com/o/r/pull/99', branch: 'chore/demote-x' }) } as Response;
     }
     return fn(url);
   });
@@ -1323,5 +1328,14 @@ describe('MetricsView sub-tabs (page cleanup)', () => {
     expect(within(row).getByText('every PR push')).toBeInTheDocument();
     expect(within(row).getByText('→ merge queue only')).toBeInTheDocument();
     expect(within(row).getByText(/240 min/)).toBeInTheDocument();
+  });
+
+  it('the Draft PR button posts and renders the resulting PR link', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    const btn = await screen.findByTestId('demotion-draft-lint: eslint/pull_request');
+    fireEvent.click(btn);
+    const link = await screen.findByText('draft PR ↗');
+    expect(link).toHaveAttribute('href', 'https://github.com/o/r/pull/99');
   });
 });

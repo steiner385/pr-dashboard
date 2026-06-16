@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { scrollBehavior } from './motion';
-import type { HeadlineStat, MetricsBucket, MetricsPayload, MetricsWindow } from './types';
+import type { HeadlineStat, MetricsBucket, MetricsPayload, MetricsWindow, DemotionCandidate } from './types';
 import { RunnerRouting } from './RunnerRouting';
 import { LEAD_TIME_SEGMENTS } from './leadtime';
 import {
@@ -234,6 +234,23 @@ export function MetricsView({ now, focusCostNonce }: {
 } = {}) {
   const [window, setWindow] = useState<MetricsWindow>('3d');
   const [bucketPref, setBucketPref] = useState<MetricsBucket>('hour');
+  // Per-candidate demotion draft-PR state, keyed `${repo}::${name}/${event}`.
+  const [demotePr, setDemotePr] = useState<Record<string, { loading?: boolean; url?: string; error?: string }>>({});
+  const draftDemotionPr = async (repo: string, candidate: DemotionCandidate) => {
+    const key = `${repo}::${candidate.name}/${candidate.event}`;
+    setDemotePr((p) => ({ ...p, [key]: { loading: true } }));
+    try {
+      const res = await fetch('/api/demotion/draft-pr', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ repo, candidate }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setDemotePr((p) => ({ ...p, [key]: { url: data.url } }));
+    } catch (e) {
+      setDemotePr((p) => ({ ...p, [key]: { error: e instanceof Error ? e.message : String(e) } }));
+    }
+  };
   const [section, setSection] = useState<MetricsSection>(() => {
     try {
       const s = localStorage.getItem(SECTION_STORAGE_KEY);
@@ -1094,18 +1111,35 @@ export function MetricsView({ now, focusCostNonce }: {
                   <th title="success rate over distinct (sha, attempt) runs in the window">green</th>
                   <th title="runner-minutes spent in the window — the cost basis for ranking">cost</th>
                   <th>suggested</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
-                {d.candidates.map((c) => (
+                {d.candidates.map((c) => {
+                  const key = `${d.repo}::${c.name}/${c.event}`;
+                  const st = demotePr[key];
+                  return (
                   <tr key={`${c.name}/${c.event}`} data-testid={`demotion-${c.name}/${c.event}`}>
                     <td className="metric-job-name">{c.name}</td>
                     <td>{c.currentTier}</td>
                     <td title={c.reason}>{fmtPct(c.successRatePct)} ({c.runsInWindow})</td>
                     <td className="metric-num">{c.minutesInWindow.toLocaleString()} min</td>
                     <td><span className="demotion-arrow">→ {c.suggestedTier}</span></td>
+                    <td>
+                      {st?.url
+                        ? <a className="demotion-pr-link" href={st.url} target="_blank" rel="noreferrer">draft PR ↗</a>
+                        : st?.error
+                          ? <span className="pr-action-msg err" title={st.error}>failed</span>
+                          : <button type="button" className="demotion-draft-btn"
+                              data-testid={`demotion-draft-${c.name}/${c.event}`}
+                              disabled={st?.loading}
+                              onClick={() => draftDemotionPr(d.repo, c)}>
+                              {st?.loading ? 'opening…' : 'Draft PR'}
+                            </button>}
+                    </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
             <p className="metric-note">

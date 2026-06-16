@@ -8,6 +8,8 @@ import { maskWebhookUrl } from './notifier';
 import { resolveMetricsQuery, type MetricsBucket, type MetricsPayload, type MetricsWindow } from './metrics';
 import { verifySignature, routeEvent, type WebhookRoute } from './webhooks';
 import { PermissionError, type MergeMethod, type ReadyMergeInput, type ReadyMergeResult } from './pr-actions';
+import type { DraftPrResult } from './demotion-action';
+import type { DemotionCandidate } from './estimator/demotion-candidates';
 import type { RoutingState } from './runner-routing';
 import type { RunnerPlan, RunnerJobKey } from './estimator/runner-plan';
 import { RUNNER_JOB_META } from './estimator/runner-plan';
@@ -166,6 +168,10 @@ export function createApp(opts: {
   /** POST /api/pr/ready-merge — flip a draft PR ready-for-review and arm
    *  auto-merge. Wired in index.ts to the per-owner GithubClient. */
   prActions?: { readyAndAutoMerge: (input: ReadyMergeInput) => Promise<ReadyMergeResult> };
+  /** POST /api/demotion/draft-pr — open a scaffold draft PR proposing a check's
+   *  demotion to a lower-frequency tier. Wired in index.ts to the per-owner
+   *  GithubClient (needs contents: write). */
+  demotionAction?: { draftPr: (input: { owner: string; repo: string; candidate: DemotionCandidate }) => Promise<DraftPrResult> };
   /** Runner-routing capability (feature/runner-routing) — the controller's live
    *  state + computed plan, plus a write path for the browser-writable config
    *  subset. The endpoints that consume this are added by a later task; this
@@ -290,6 +296,37 @@ export function createApp(opts: {
         const status = e instanceof PermissionError ? 403
           : /not found/i.test(msg) ? 404
           : /not OPEN|no installation/i.test(msg) ? 409
+          : 502;
+        res.status(status).json({ error: msg });
+      }
+    });
+  }
+
+  if (opts.demotionAction) {
+    const demotion = opts.demotionAction;
+    // Same-origin guarded. Body: { repo: "owner/name", candidate: DemotionCandidate }.
+    app.post('/api/demotion/draft-pr', originGuard, async (req, res) => {
+      const body = (req.body ?? {}) as { repo?: unknown; candidate?: unknown };
+      const repo = typeof body.repo === 'string' ? body.repo.trim() : '';
+      const slash = repo.indexOf('/');
+      const owner = slash > 0 ? repo.slice(0, slash) : '';
+      const name = slash > 0 ? repo.slice(slash + 1) : '';
+      const c = body.candidate as Record<string, unknown> | undefined;
+      const validCandidate = !!c && typeof c.name === 'string' && typeof c.event === 'string'
+        && typeof c.currentTier === 'string' && typeof c.suggestedTier === 'string'
+        && typeof c.successRatePct === 'number' && typeof c.runsInWindow === 'number'
+        && typeof c.minutesInWindow === 'number';
+      if (!owner || !name || name.includes('/') || !validCandidate) {
+        res.status(400).json({ error: 'expected { repo: "owner/name", candidate: DemotionCandidate }' });
+        return;
+      }
+      try {
+        const result = await demotion.draftPr({ owner, repo: name, candidate: c as unknown as DemotionCandidate });
+        res.json(result);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const status = e instanceof PermissionError ? 403
+          : /no installation|default branch/i.test(msg) ? 409
           : 502;
         res.status(status).json({ error: msg });
       }
