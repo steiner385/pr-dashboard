@@ -28,7 +28,8 @@ const METRICS = {
 function mockFetch(model: DerivedModel | { error: string }, status = 200) {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     if (String(url).includes('/api/repos')) {
-      return { ok: true, json: async () => [{ repo: 'cairnea/KinDash', excluded: false }] } as Response;
+      // real API shape: { repos: [...] } — NOT a bare array (regression: #designer empty)
+      return { ok: true, json: async () => ({ repos: [{ repo: 'cairnea/KinDash', excluded: false }] }) } as Response;
     }
     if (String(url).includes('/api/metrics')) {
       return { ok: true, json: async () => METRICS } as Response;
@@ -68,10 +69,10 @@ describe('ProtectionMap', () => {
     mockFetch(MODEL);
     render(<ProtectionMap />);
     const rail = await screen.findByTestId('pm-findings');
-    // demotion (cost) finding from metrics
-    expect(within(rail).getByText('lint: eslint')).toBeInTheDocument();
-    // promotion (quality) finding from metrics
-    expect(within(rail).getByText('e2e: smoke')).toBeInTheDocument();
+    // demotion (cost) + promotion (quality) come from /api/metrics, which is
+    // fetched only AFTER the model loads (deferred) — so await them.
+    await within(rail).findByText('lint: eslint');
+    await within(rail).findByText('e2e: smoke');
     // drift finding from the model (build: production @ pr has drift:true)
     const driftRows = within(rail).getAllByText('build: production');
     expect(driftRows.length).toBeGreaterThan(0);
