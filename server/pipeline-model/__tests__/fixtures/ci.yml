@@ -1,0 +1,14 @@
+on:
+  pull_request:
+  merge_group:
+jobs:
+  static-checks:
+    uses: ./.github/workflows/_static.yml
+  build:
+    name: "build: production"
+    needs: [static-checks]
+    runs-on: ubuntu-latest
+  queue-only:
+    name: "heavy: full"
+    if: ${{ github.event_name == 'merge_group' }}
+    runs-on: ubuntu-latest

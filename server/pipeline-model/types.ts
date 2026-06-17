@@ -33,3 +33,26 @@ export interface RawJob {
 
 /** The concrete matrix values for one expanded job instance (dim → value). */
 export type MatrixCoord = Record<string, unknown>;
+
+/** One step in the path from a check to its definition. */
+export interface ProvenanceAnchor {
+  file: string;                 // workflow basename, e.g. 'ci.yml'
+  jobId: string;                // job key in that file
+  matrixCoord?: MatrixCoord;    // present for matrix-expanded instances
+}
+
+/** A concrete leaf check (one GitHub check run name), after uses+matrix expansion. */
+export interface CheckNode {
+  checkName: string;            // GitHub check display name (best-effort)
+  callerJobId: string;          // the rollup-file job that owns this leaf
+  triggers: TriggerSpec;        // owning workflow triggers, narrowed by caller if:
+  provenance: ProvenanceAnchor[];
+  confidence: Confidence;
+}
+
+export interface StaticGraph {
+  rollupFile: string;
+  checks: CheckNode[];
+  /** caller (rollup-file) jobId → its needs (for the gating closure). */
+  callerNeeds: Record<string, string[]>;
+}

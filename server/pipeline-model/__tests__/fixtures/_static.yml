@@ -1,0 +1,12 @@
+on:
+  workflow_call:
+jobs:
+  unit:
+    name: "test: unit"
+    strategy:
+      matrix:
+        shard: [1, 2, 3]
+    runs-on: ubuntu-latest
+  tsc:
+    name: "types: tsc"
+    runs-on: ubuntu-latest
