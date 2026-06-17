@@ -30,3 +30,6 @@ export interface RawJob {
   /** `strategy.matrix` dimensions (dim → values), or null. Raw values kept verbatim. */
   matrix: Record<string, unknown[]> | null;
 }
+
+/** The concrete matrix values for one expanded job instance (dim → value). */
+export type MatrixCoord = Record<string, unknown>;
