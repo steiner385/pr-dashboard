@@ -39,8 +39,8 @@ describe('WorkspaceApp (Increment 1 MVP composition)', () => {
   it('an unbuilt section falls back to the legacy bridge with a classic-dashboard link', () => {
     mockHook.mockReturnValue({ state: STATE, connected: true });
     render(<WorkspaceApp />);
-    fireEvent.click(screen.getByText('Model'));
+    fireEvent.click(screen.getByText('Tune & Investigate'));
     const link = screen.getByRole('link', { name: /open classic dashboard/i });
-    expect(link).toHaveAttribute('href', '/#designer'); // model → designer tab
+    expect(link).toHaveAttribute('href', '/#metrics'); // tune → metrics tab (still bridged)
   });
 });

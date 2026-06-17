@@ -7,6 +7,7 @@ export interface CellLike {
   intent: { runs: boolean; gates: boolean; conditional: boolean };
   observed: { runs: number; minutes: number; realFailures: number; flakeRatePct: number } | null;
   state: string;
+  drift?: boolean;
 }
 export interface CheckMetaLike { check: string; isRequiredMergeGate: boolean; provenance: { file: string; jobId: string }[] }
 export interface DerivedModelLike {
