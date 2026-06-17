@@ -177,6 +177,28 @@ describe('workspace-router (integration, contracts/api.md)', () => {
     expect(res.body.missingFromModel).toContain('totally-required-check');
   });
 
+  it('GET /policy evaluates authored rules against the model (Group I2)', async () => {
+    const deps: ModelDeriveDeps = {
+      resolveHeadSha: vi.fn(async () => 'sha-1'), fetchWorkflowAtSha: vi.fn(async (_r, n) => (n === 'ci.yml' ? CI : null)),
+      successStatsByRepo: () => new Map<string, SuccessStat[]>(), flakeStatsByRepo: () => new Map<string, FlakeStat[]>(), since: '2026-01-01T00:00:00Z',
+    };
+    const a = express(); a.use(express.json());
+    a.use('/api/workspace', createWorkspaceRouter({
+      deriver: new ModelDeriver(deps),
+      prClient: { fetchWorkflowAtSha: deps.fetchWorkflowAtSha as PrClient['fetchWorkflowAtSha'], openDraftPr: vi.fn() as unknown as PrClient['openDraftPr'] },
+      policyStore: { get: async () => [{ id: 'p1', kind: 'required-gate-runs-on-pr' }] },
+    }));
+    const res = await request(a).get('/api/workspace/policy?repo=o/r');
+    expect(res.status).toBe(200);
+    expect(res.body.rules).toHaveLength(1);
+    expect(Array.isArray(res.body.violations)).toBe(true); // e2e is the queue-only required gate in CI
+  });
+
+  it('PUT /policy 501s when the store is read-only', async () => {
+    const res = await request(app()).put('/api/workspace/policy?repo=o/r').send({ rules: [] });
+    expect(res.status).toBe(501);
+  });
+
   it('POST /plan composites a multi-move simulation (N2)', async () => {
     const res = await request(app()).post('/api/workspace/plan')
       .send({ repo: 'o/r', moves: [{ check: 'e2e', fromTierId: 'pr', toTierId: 'queue' }] });

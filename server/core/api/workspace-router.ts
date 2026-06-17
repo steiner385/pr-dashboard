@@ -14,6 +14,7 @@ import { reconcileRuleset } from '../model/ruleset';
 import { forecastTrend, type Point } from '../analytics/forecast';
 import { buildChangelog, buildAuditLog, type ChangelogRow, type AuditRow } from '../analytics/changelog';
 import { attributeOutcome, summarizeAccuracy, type AppliedChange } from '../analytics/outcomes';
+import { evaluatePolicies, type PolicyRule } from '../analytics/policy';
 
 export interface WorkspaceRouterDeps {
   deriver: ModelDeriver;
@@ -33,6 +34,8 @@ export interface WorkspaceRouterDeps {
   auditLog?: (repo: string) => Promise<AuditRow[]>;
   /** applied-change ledger for closed-loop outcome attribution (Group H). */
   outcomes?: (repo: string) => Promise<AppliedChange[]>;
+  /** declarative-policy store (Group I2): read authored rules + persist edits. */
+  policyStore?: { get: (repo: string) => Promise<PolicyRule[]>; put?: (repo: string, rules: PolicyRule[]) => Promise<void> };
 }
 
 function repoOf(req: Request, res: Response): string | null {
@@ -110,6 +113,25 @@ export function createWorkspaceRouter(deps: WorkspaceRouterDeps): Router {
     const repo = repoOf(req, res); if (!repo) return;
     const ledger = deps.outcomes ? await deps.outcomes(repo) : [];
     res.json({ repo, outcomes: ledger.map(attributeOutcome), accuracy: summarizeAccuracy(ledger) });
+  });
+
+  // GET /policy?repo= → authored rules + their current violations (Group I2).
+  // PUT /policy?repo= { rules } → persist authored rules (guarded at mount).
+  r.get('/policy', async (req, res) => {
+    const repo = repoOf(req, res); if (!repo) return;
+    const rules = deps.policyStore ? await deps.policyStore.get(repo) : [];
+    const pinned = await deps.deriver.deriveAtHead(repo);
+    const live = deps.liveRequired ? await deps.liveRequired(repo) : undefined;
+    const violations = pinned ? evaluatePolicies(pinned.model, rules, live) : [];
+    res.json({ repo, rules, violations });
+  });
+  r.put('/policy', async (req, res) => {
+    const repo = repoOf(req, res); if (!repo) return;
+    if (!deps.policyStore?.put) return res.status(501).json({ error: 'policy store is read-only' });
+    const rules = req.body?.rules as PolicyRule[] | undefined;
+    if (!Array.isArray(rules)) return res.status(400).json({ error: 'rules[] required' });
+    await deps.policyStore.put(repo, rules);
+    res.json({ repo, rules });
   });
 
   // POST /plan — { repo, moves[] } → composite simulation (N2/FR-042). Composite
