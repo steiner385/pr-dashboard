@@ -355,6 +355,25 @@ async function main() {
           auditLog: async (repo) => wsStore.auditLog(repo),
           policyStore: { get: async (repo) => wsStore.getPolicies(repo), put: async (repo, rules) => wsStore.putPolicies(repo, rules) },
           recordAction: (row) => wsStore.recordAction(row), // write path: opened actions → audit log
+          // Group I1 liveRuleset: read the EVALUATED branch rules (GET /rules/branches/{b})
+          // — readable without administration:read (unlike the /rulesets listing) — and
+          // extract required-status-check contexts. Returns null on any error → the
+          // reconciler degrades honestly ("grant administration:read").
+          liveRuleset: async (repo) => {
+            try {
+              const meta = await routed.restGet<{ default_branch?: string }>(`/repos/${repo}`);
+              const branch = meta?.default_branch || 'main';
+              const rules = await routed.restGet<Array<{ type: string; parameters?: { required_status_checks?: { context: string }[] } }>>(
+                `/repos/${repo}/rules/branches/${encodeURIComponent(branch)}`);
+              const checks: string[] = [];
+              for (const rule of Array.isArray(rules) ? rules : []) {
+                if (rule.type === 'required_status_checks') {
+                  for (const c of rule.parameters?.required_status_checks ?? []) if (c.context) checks.push(c.context);
+                }
+              }
+              return checks;
+            } catch { return null; }
+          },
           // Group J2/J3 budgets: thresholds from the store, current spend from the
           // fleet cost-actuals over the trailing 30d. No budgets stored → empty.
           budgets: async () => {
