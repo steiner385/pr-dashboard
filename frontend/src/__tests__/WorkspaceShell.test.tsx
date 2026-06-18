@@ -47,9 +47,15 @@ describe('WorkspaceShell', () => {
   });
 
   it('honors a deep-link hash on mount', () => {
-    location.hash = hashForSection('tune');
-    render(<WorkspaceShell header={null} content={{ tune: <div>TUNE</div> }} legacyBridge={bridge} />);
-    expect(screen.getByText('TUNE')).toBeInTheDocument();
+    location.hash = hashForSection('insights');
+    render(<WorkspaceShell header={null} content={{ insights: <div>INSIGHTS</div> }} legacyBridge={bridge} />);
+    expect(screen.getByText('INSIGHTS')).toBeInTheDocument();
     expect(DEFAULT_SECTION).toBe('health'); // sanity: default is Health, but the hash won
+  });
+
+  it('redirects retired #tune / #metrics hashes to Insights (WS3a)', () => {
+    location.hash = '#tune';
+    render(<WorkspaceShell header={null} content={{ insights: <div>INSIGHTS</div> }} legacyBridge={bridge} />);
+    expect(screen.getByText('INSIGHTS')).toBeInTheDocument();
   });
 });

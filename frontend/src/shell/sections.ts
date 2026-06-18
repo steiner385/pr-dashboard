@@ -3,7 +3,7 @@
 // on-demand contract from the persona review). Pure — hash routing is testable
 // without the DOM.
 
-export type SectionId = 'health' | 'pipeline' | 'diagnose' | 'model' | 'optimize' | 'build' | 'tune' | 'metrics';
+export type SectionId = 'health' | 'pipeline' | 'diagnose' | 'model' | 'optimize' | 'build' | 'insights';
 
 export interface SectionDef {
   id: SectionId;
@@ -21,9 +21,11 @@ export const SECTIONS: readonly SectionDef[] = [
   { id: 'model',    label: 'Model',               mode: 'read',      blurb: 'What gates a merge, and where is it drifting?' },
   { id: 'optimize', label: 'Optimize',            mode: 'act',       blurb: 'Findings → simulate → edit → draft PR.' },
   { id: 'build',    label: 'Build',               mode: 'act',       blurb: 'Shape the pipeline visually — compose changes, validate, draft PR.' },
-  { id: 'tune',     label: 'Tune & Investigate',  mode: 'configure', blurb: 'Knobs, forecasts, history, outcomes.' },
-  { id: 'metrics',  label: 'Metrics',             mode: 'read',      blurb: 'Cost, queue, runners, flake, lead time — the full analytics.' },
+  { id: 'insights', label: 'Insights',            mode: 'read',      blurb: 'Cost, queue, runners, flake, lead time, budgets, outcomes — the full analytics.' },
 ];
+
+/** Retired hashes that now redirect into a surviving section (WS3 IA consolidation). */
+const HASH_ALIASES: Record<string, SectionId> = { tune: 'insights', metrics: 'insights' };
 
 export const DEFAULT_SECTION: SectionId = 'health';
 
@@ -32,7 +34,8 @@ const IDS = SECTIONS.map((s) => s.id) as readonly string[];
 /** Parse a `#health` style hash into a SectionId (null if not a known section). */
 export function sectionFromHash(hash: string): SectionId | null {
   const h = hash.replace(/^#/, '').trim().toLowerCase();
-  return IDS.includes(h) ? (h as SectionId) : null;
+  if (IDS.includes(h)) return h as SectionId;
+  return HASH_ALIASES[h] ?? null; // retired #tune / #metrics → #insights
 }
 
 /** The canonical hash for a section (for links + history). */
@@ -48,7 +51,7 @@ export function sectionDef(id: SectionId): SectionDef {
  *  Health lane chips become live deep-links instead of a dead CTA (roadmap 2.5). */
 export function laneToSection(laneId: string | null): SectionId {
   switch (laneId) {
-    case 'cost': return 'metrics';
+    case 'cost': return 'insights';
     case 'failures': case 'scheduled': return 'diagnose';
     default: return 'pipeline'; // pr-ci / merge-queue / main / deploy → the operational view
   }

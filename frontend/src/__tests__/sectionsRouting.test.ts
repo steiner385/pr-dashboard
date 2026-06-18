@@ -7,12 +7,16 @@ describe('laneToSection (Health lane chips → live deep-links)', () => {
       expect(laneToSection(lane)).toBe('pipeline');
     }
   });
-  it('routes cost to Metrics and failures/scheduled to Diagnose', () => {
-    expect(laneToSection('cost')).toBe('metrics');
+  it('routes cost to Insights and failures/scheduled to Diagnose', () => {
+    expect(laneToSection('cost')).toBe('insights');
     expect(laneToSection('failures')).toBe('diagnose');
     expect(laneToSection('scheduled')).toBe('diagnose');
   });
   it('the produced hash round-trips back to the section', () => {
-    expect(sectionFromHash(hashForSection(laneToSection('cost')))).toBe('metrics');
+    expect(sectionFromHash(hashForSection(laneToSection('cost')))).toBe('insights');
+  });
+  it('retired #tune / #metrics hashes redirect to Insights', () => {
+    expect(sectionFromHash('#tune')).toBe('insights');
+    expect(sectionFromHash('#metrics')).toBe('insights');
   });
 });

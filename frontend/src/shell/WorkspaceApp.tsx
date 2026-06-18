@@ -12,13 +12,12 @@ import { PipelineSwitcher, useFocusedPipeline } from './PipelineSwitcher';
 import { HealthView } from '../sections/health/HealthView';
 import { DiagnoseView } from '../sections/diagnose/DiagnoseView';
 import { PipelineView } from '../sections/pipeline/PipelineView';
-import { MetricsView } from '../MetricsView';
+import { InsightsView } from '../sections/insights/InsightsView';
 import { SettingsPanel } from '../SettingsPanel';
 import { LegendPanel } from '../LegendPanel';
 import { OptimizeView } from '../sections/optimize/OptimizeView';
 import { BuildView } from '../sections/build/BuildView';
 import { ModelView } from '../sections/model/ModelView';
-import { TuneView } from '../sections/tune/TuneView';
 import { makeWorkspaceApi } from './workspaceApi';
 import { SelfHealthDot } from './SelfHealthDot';
 import { ForecastBanner } from './ForecastBanner';
@@ -26,7 +25,7 @@ import { laneToSection, hashForSection, type SectionId } from './sections';
 
 // workspace section → legacy tab hash (where its capability lives until rebuilt)
 const LEGACY_TAB: Record<SectionId, string> = {
-  health: '#delivery', pipeline: '#pipeline', diagnose: '#pipeline', model: '#designer', optimize: '#designer', build: '#designer', tune: '#metrics', metrics: '#metrics',
+  health: '#delivery', pipeline: '#pipeline', diagnose: '#pipeline', model: '#designer', optimize: '#designer', build: '#designer', insights: '#metrics',
 };
 
 function LegacyBridge({ id }: { id: SectionId }) {
@@ -113,8 +112,7 @@ export function WorkspaceApp() {
           model: <ModelView repo={focused} api={api} />,
           optimize: <OptimizeView repo={focused} api={api} />,
           build: <BuildView repo={focused} api={api} />,
-          tune: <TuneView repo={focused} api={api} />,
-          metrics: <MetricsView />,
+          insights: <InsightsView repo={focused} api={api} />,
         }}
         legacyBridge={(id) => <LegacyBridge id={id} />}
       />

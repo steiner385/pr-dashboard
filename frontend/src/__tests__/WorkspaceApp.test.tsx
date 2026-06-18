@@ -41,19 +41,23 @@ describe('WorkspaceApp (Increment 1 MVP composition)', () => {
     expect(screen.getByText('○ reconnecting')).toBeInTheDocument();
   });
 
-  it('renders the Tune section content — all five sections are now built (no legacy bridge)', () => {
+  it('every section is built — no legacy bridge link, and Insights replaces Tune/Metrics (WS3a)', () => {
     mockHook.mockReturnValue({ state: STATE, connected: true });
     render(<WorkspaceApp />);
-    fireEvent.click(screen.getByText('Tune & Investigate'));
-    expect(screen.getByRole('heading', { name: /Tune & Investigate/ })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /open classic dashboard/i })).not.toBeInTheDocument();
+    // the consolidated nav: Insights present, the retired tabs gone
+    expect(screen.getByText('Insights')).toBeInTheDocument();
+    expect(screen.queryByText('Tune & Investigate')).not.toBeInTheDocument();
+    expect(screen.queryByText('Metrics')).not.toBeInTheDocument();
   });
 
-  it('surfaces the Metrics section (ported MetricsView)', () => {
+  it('surfaces the Insights section (Metrics + Tune folded together — WS3a)', () => {
     mockHook.mockReturnValue({ state: STATE, connected: true });
     render(<WorkspaceApp />);
-    fireEvent.click(screen.getByText('Metrics'));
+    fireEvent.click(screen.getByText('Insights'));
     expect(screen.getByTestId('metrics-view')).toBeInTheDocument();
+    // the Tune panels are folded in too
+    expect(screen.getByLabelText('Budgets')).toBeInTheDocument();
   });
 
   it('the gear opens Settings and the ? opens the Legend', () => {
