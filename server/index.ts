@@ -416,6 +416,13 @@ async function main() {
       })()
     : undefined;
 
+  // Metrics payload is a heavy synchronous SQLite pass (#159); memoize per
+  // (window, bucket) for a short TTL so the multiple surfaces that poll it share
+  // one computation and the event loop blocks at most once per window, not per
+  // request. TTL ≪ the data's refresh cadence so freshness is unaffected.
+  const METRICS_TTL_MS = 20_000;
+  const metricsMemo = new Map<string, { at: number; payload: ReturnType<typeof computeMetrics> }>();
+
   const app = createApp({
     getState: () => poller.getState(),
     bus: poller,
@@ -435,13 +442,20 @@ async function main() {
         poller.reconfigure(next);
       },
     },
-    metrics: (window, bucket) => computeMetrics(history, window, bucket, new Date(),
-      poller.currentExclude(), (repo) => poller.settingsFor(repo).batchSize,
-      poller.allDerivedGraphs(), poller.liveForeignNames(), poller.activeRegressions(),
-      (repo, name, event) => poller.resolvePool(repo, name, event), poller.poolHealth(),
-      config.costPerMinute ?? null, config.poolMeta ?? null,
-      (repo, sha) => poller.prNumberForSha(repo, sha), config.costAutoRate,
-      (repo) => poller.settingsFor(repo).requiredCheckPrefixes ?? []),
+    metrics: (window, bucket) => {
+      const key = `${window}|${bucket}`;
+      const hit = metricsMemo.get(key);
+      if (hit && Date.now() - hit.at < METRICS_TTL_MS) return hit.payload;
+      const payload = computeMetrics(history, window, bucket, new Date(),
+        poller.currentExclude(), (repo) => poller.settingsFor(repo).batchSize,
+        poller.allDerivedGraphs(), poller.liveForeignNames(), poller.activeRegressions(),
+        (repo, name, event) => poller.resolvePool(repo, name, event), poller.poolHealth(),
+        config.costPerMinute ?? null, config.poolMeta ?? null,
+        (repo, sha) => poller.prNumberForSha(repo, sha), config.costAutoRate,
+        (repo) => poller.settingsFor(repo).requiredCheckPrefixes ?? []);
+      metricsMemo.set(key, { at: Date.now(), payload });
+      return payload;
+    },
     repos: () => poller.repoToggleList(),
     protectionMap: protectionMapFor,
     // cost actuals import (cost explorer phase 2) — rows land in SQLite and
