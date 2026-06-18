@@ -145,6 +145,12 @@ describe('OptimizeView (US4 — drives /api/workspace loop)', () => {
     expect(await screen.findByText(/saves 5,000 min/)).toBeInTheDocument();
   });
 
+  it('shows closed-loop calibration accuracy when past changes have landed (roadmap 5.4)', async () => {
+    const api = fakeApi({ outcomes: vi.fn(async () => ({ outcomes: [{ prNumber: 5, check: 'e2e', costAccuracy: 0.9, directionCorrect: true, confidence: 'high', caveat: '' }], accuracy: { count: 4, meanCostAccuracy: 0.83, directionHitRate: 1, recommenderUsable: false } })) });
+    render(<OptimizeView repo="o/r" api={api} />);
+    expect(await screen.findByText(/83% accurate/)).toHaveTextContent(/4 landed changes.*advisory until proven/);
+  });
+
   it('surfaces a load error', async () => {
     const api = fakeApi({ getPipeline: vi.fn(async () => { throw new Error('no derivable model'); }) });
     render(<OptimizeView repo="o/r" api={api} />);

@@ -32,14 +32,17 @@ export function OptimizeView({ repo, api }: OptimizeViewProps) {
   const [planChecks, setPlanChecks] = useState<Set<string>>(new Set());
   const [plan, setPlan] = useState<{ combinedCostDeltaMinutes: number; legal: boolean; reason?: string } | null>(null);
   const [rulesetReadable, setRulesetReadable] = useState(true);
+  const [calibration, setCalibration] = useState<{ count: number; meanCostAccuracy: number; recommenderUsable: boolean } | null>(null);
 
   useEffect(() => {
     if (!repo) return;
-    setModel(null); setError(null); setSelected(null); setSim(null); setDiff(null); setPrompt(null); setRulesetReadable(true);
+    setModel(null); setError(null); setSelected(null); setSim(null); setDiff(null); setPrompt(null); setRulesetReadable(true); setCalibration(null);
     api.getPipeline(repo).then((r) => setModel(r.model)).catch((e: Error) => setError(e.message));
     // trust caveat (roadmap 4.6): a verdict computed without the live branch-protection
     // ruleset is static-only — say so, never imply ruleset-verified safety.
     api.ruleset(repo).then((rs) => setRulesetReadable(rs.readable)).catch(() => setRulesetReadable(false));
+    // closed-loop calibration (roadmap 5.4): how accurate past predictions proved.
+    api.outcomes(repo).then((o) => setCalibration(o.accuracy)).catch(() => setCalibration(null));
   }, [repo, api]);
 
   const from = useMemo(() => (model && selected ? homeTier(model, selected) : null), [model, selected]);
@@ -109,6 +112,13 @@ export function OptimizeView({ repo, api }: OptimizeViewProps) {
       {!rulesetReadable && (
         <p className="optimize-caveat" role="status">⚠ Verdicts are <strong>static-only</strong> — the live branch-protection ruleset is unreadable (grant <code>administration:read</code>). Safety is checked against the inferred gate set, not the enforced one.</p>
       )}
+      {calibration && calibration.count > 0 && (
+        <p className="optimize-calibration" role="status">
+          🎯 Predictions are <strong>{Math.round(calibration.meanCostAccuracy * 100)}% accurate</strong> over {calibration.count} landed change{calibration.count === 1 ? '' : 's'}
+          {calibration.recommenderUsable ? '' : ' — advisory until proven'}.
+        </p>
+      )}
+
       {findings.length > 0 && (
         <section className="optimize-findings" aria-label="Findings">
           <h3>Findings — top demotion candidates</h3>

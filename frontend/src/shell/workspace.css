@@ -186,6 +186,7 @@ button.model-chip { cursor: pointer; }
 .optimize-finding { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
 .finding-check { font-weight: 600; font-size: 13px; }
 .finding-why { flex: 1; font-size: 12px; opacity: 0.75; }
+.optimize-calibration { font-size: 12px; margin: 6px 0; padding: 6px 10px; border-radius: 8px; background: color-mix(in srgb, var(--done) 8%, transparent); border: 1px solid color-mix(in srgb, var(--done) 25%, transparent); }
 /* roadmap 2.2 — clickable rows are real buttons; reset to look like the row */
 .fleet-row-btn, .leaderboard-row-btn, .diagnose-pr-btn {
   display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
