@@ -10,14 +10,14 @@ export default defineConfig({
   root: 'frontend',
   plugins: [
     react(),
-    dts({ tsconfigPath: '../tsconfig.embed.json', outDir: '../dist/embed', include: ['src/embed'], entryRoot: 'src/embed' }),
+    dts({ tsconfigPath: '../tsconfig.embed.json', include: ['src/embed'], entryRoot: 'src/embed' }),
   ],
   css: {
     postcss: {
       plugins: [
         prefixSelector({
           prefix: '.prdash-root',
-          transform(prefix, selector, prefixedSelector) {
+          transform(prefix: string, selector: string, prefixedSelector: string) {
             // :root / html / body carry tokens + resets — remap onto the wrapper.
             if (selector === ':root' || selector === 'html' || selector === 'body') return prefix;
             return prefixedSelector;
