@@ -444,7 +444,11 @@ function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
   const out = new Map<string, T[]>();
   for (const row of rows) {
     const k = key(row);
-    out.set(k, [...(out.get(k) ?? []), row]);
+    // Push into the existing array — NOT `[...existing, row]`, which rebuilds the
+    // whole group every row → O(n²) and ~40s on a 30d window (issue #159).
+    const arr = out.get(k);
+    if (arr) arr.push(row);
+    else out.set(k, [row]);
   }
   return out;
 }
@@ -990,7 +994,7 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
         // both the lint p99 and the node's critical-path weight.
         if (foreign?.has(name)) continue;
         const nodeKey = matchingPrefix(name, activeKeys);
-        if (nodeKey != null) namesByNode.set(nodeKey, [...(namesByNode.get(nodeKey) ?? []), name]);
+        if (nodeKey != null) { const a = namesByNode.get(nodeKey); if (a) a.push(name); else namesByNode.set(nodeKey, [name]); }
         // lint joins against EVERY node (event activity doesn't gate a timeout)
         const lintKey = matchingPrefix(name, allKeys);
         if (lintKey != null) {
