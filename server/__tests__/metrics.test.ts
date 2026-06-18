@@ -564,11 +564,33 @@ describe('computeMetrics: train killers (issue #38)', () => {
     const tk = computeMetrics(h, '24h', 'hour', NOW, [], () => 6).trainKillers;
     expect(tk).toHaveLength(1);
     expect(tk[0]!).toMatchObject({ repo: REPO, batchSize: 6, medianGroupRunSecs: 1800 });
-    expect(tk[0]!.checks).toEqual([
+    expect(tk[0]!.checks).toMatchObject([
       // 2 ejects × 1800s × 6 = 21600s = 6h
       { name: 'e2e', ejects: 2, estCostTrainHours: 6, flakeRatePct: null },
       { name: 'unit', ejects: 1, estCostTrainHours: 3, flakeRatePct: null },
     ]);
+  });
+
+  it('classifies each eject by reason and leads with the dominant remedy (roadmap 4.4b)', () => {
+    h.recordGroupFailure(REPO, 'flaky-e2e', 'oid1', '2026-06-11T08:00:00Z', 'TIMED_OUT');
+    h.recordGroupFailure(REPO, 'flaky-e2e', 'oid2', '2026-06-11T09:00:00Z', 'TIMED_OUT');
+    h.recordGroupFailure(REPO, 'flaky-e2e', 'oid3', '2026-06-11T10:00:00Z', 'FAILURE');
+    h.recordGroupFailure(REPO, 'broken', 'oid4', '2026-06-11T11:00:00Z', 'FAILURE');
+    const checks = computeMetrics(h, '24h', 'hour', NOW).trainKillers[0]!.checks;
+    const e2e = checks.find((c) => c.name === 'flaky-e2e')!;
+    expect(e2e.reasonCounts).toEqual({ timeout: 2, 'test-fail': 1, infra: 0, unknown: 0 });
+    expect(e2e.dominantReason).toBe('timeout');
+    expect(e2e.remedy).toMatch(/rerun/i);
+    const broken = checks.find((c) => c.name === 'broken')!;
+    expect(broken.dominantReason).toBe('test-fail');
+    expect(broken.remedy).toMatch(/fix/i);
+  });
+
+  it('older ejects with no stored conclusion classify as unknown (back-compat)', () => {
+    h.recordGroupFailure(REPO, 'legacy', 'oid1', '2026-06-11T08:00:00Z'); // pre-migration row
+    const c = computeMetrics(h, '24h', 'hour', NOW).trainKillers[0]!.checks[0]!;
+    expect(c.reasonCounts.unknown).toBe(1);
+    expect(c.dominantReason).toBe('unknown');
   });
 
   it('estCostTrainHours is null without an observed group-run median; batchSize defaults to 1', () => {

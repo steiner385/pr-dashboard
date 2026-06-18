@@ -301,7 +301,7 @@ export function ingestGroupFailures(history: HistoryStore, repo: string,
   for (const c of checks) {
     if (c.status !== 'COMPLETED' || !FAILING_CONCLUSIONS.has(c.conclusion ?? '')) continue;
     if (!c.completedAt) continue;
-    history.recordGroupFailure(repo, c.name, groupSha, c.completedAt);
+    history.recordGroupFailure(repo, c.name, groupSha, c.completedAt, c.conclusion ?? null);
   }
 }
 /** Fold the push:main subset of an OID rollup into main_commits. The worst push

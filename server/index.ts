@@ -9,7 +9,8 @@ import { GithubClient } from './github';
 import { ClientRouter } from './client-router';
 import { readyAndAutoMerge } from './pr-actions';
 import { openDemotionDraftPr } from './demotion-action';
-import { HistoryStore } from './history';
+import { openPromotionDraftPr } from './promotion-action';
+import { HistoryStore, FLAKE_MIN_RUNS } from './history';
 import { DeployWatcher } from './deploy-watcher';
 import { Poller, describeError } from './poller';
 import { RunnerRoutingController } from './runner-routing';
@@ -18,12 +19,22 @@ import { DigestScheduler, composeDigest, gatherDigestInput, queueHealthFromState
 import { backfillRepo } from './backfill';
 import { computeMetrics } from './metrics';
 import { computeProtectionMap } from './protection-map';
+import { createWorkspaceRouter } from './core/api/workspace-router';
+import { evaluateBudgets } from './core/analytics/budgets';
+import { notifyBudgetBreaches } from './core/analytics/budget-notify';
+import { budgetCurrents } from './core/analytics/budget-currents';
+import { workspaceDepsFromClient } from './core/api/wire';
+import { WorkspaceStore } from './core/store/workspaceStore';
+import { LiveSnapshotStore } from './core/live/snapshot';
 import { createApp } from './api';
 import { loadWebhookSecret } from './webhooks';
 import { dataDir, staticDir, configPath } from './paths';
 
 /** Re-list the App's installations this often (new installs appear without a restart). */
 const REGISTRY_REFRESH_MS = 24 * 3600_000;
+/** How often to re-evaluate fleet budgets and push a breach alert (roadmap 5.6c).
+ *  Cost actuals are operator-pushed (infrequent), so a few minutes is ample. */
+const BUDGET_CHECK_MS = 5 * 60_000;
 
 const pexec = promisify(execFile);
 
@@ -278,9 +289,145 @@ async function main() {
     return model;
   };
 
+  // Unified-workspace IDE/model loop (spec 001) — wired behind a default-off flag
+  // (strangler-fig). A facade routes the per-owner GithubClient by repo so the
+  // workspace deps see one client surface. Flag off → router undefined → the app
+  // is byte-for-byte unchanged.
+  const workspaceRouter = process.env.WORKSPACE_IDE === '1'
+    ? (() => {
+        const clientForRepo = (owner: string) => {
+          const c = router.clientFor(owner);
+          if (!c) throw new Error(`no installation covers ${owner}`);
+          return c;
+        };
+        const routed = {
+          restGet: <T,>(path: string): Promise<T> => {
+            const owner = path.match(/^\/repos\/([^/]+)\//)?.[1] ?? config.owners[0] ?? '';
+            return clientForRepo(owner).restGet<T>(path);
+          },
+          graphql: <T,>(query: string, vars: Record<string, unknown>): Promise<T> => {
+            const branch = vars.branch as { repositoryNameWithOwner?: string } | undefined;
+            const owner = (vars.owner as string | undefined)
+              ?? branch?.repositoryNameWithOwner?.split('/')[0] ?? config.owners[0] ?? '';
+            return clientForRepo(owner).graphql<T>(query, vars);
+          },
+        };
+        const deps = workspaceDepsFromClient(routed, {
+          successStatsByRepo: (s) => history.successStatsByRepo(s),
+          flakeStatsByRepo: (s) => history.flakeStatsByRepo(s),
+          conditionalCallerJobs: ['pr-affected-tests', 'integration-tests'],
+        });
+        // Durable workspace store (Groups H/L2/I2) — real persistence outliving the
+        // rolling telemetry retention. Wires outcomes/audit/policy from real data.
+        const wsStore = new WorkspaceStore(join(dataDir(), 'workspace.db'));
+        // Current spend per budget kind (roadmap 5.6c) over the trailing 30d —
+        // the single source both /budgets and the breach-alert timer evaluate, so
+        // minutes / flake / wait-p90 budgets work, not just cost.
+        const budgetCurrentValues = () => {
+          const sinceDate = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+          const sinceIso = new Date(Date.now() - 30 * 86_400_000).toISOString();
+          const costDollars = history.costActualsSince(sinceDate).filter((r) => r.scope === 'fleet').reduce((s, r) => s + r.dollars, 0);
+          let totalDurationSecs = 0;
+          for (const stats of history.successStatsByRepo(sinceIso).values()) for (const s of stats) totalDurationSecs += s.sumDurationSecs;
+          const flakeRatesPct: number[] = [];
+          for (const stats of history.flakeStatsByRepo(sinceIso).values()) for (const s of stats) if (s.totalRuns >= FLAKE_MIN_RUNS) flakeRatesPct.push(s.flakeRatePct);
+          const runnerWaitSecs = history.runnerWaitsSince(sinceIso).map((w) => w.waitSecs);
+          return budgetCurrents({ costDollars, totalDurationSecs, flakeRatesPct, runnerWaitSecs });
+        };
+        // Budget-breach alerting (roadmap 5.6c): re-evaluate fleet budgets on a
+        // timer and push a notification when one crosses its threshold.
+        const checkBudgets = () => {
+          const budgets = wsStore.getBudgets('fleet');
+          if (budgets.length === 0) return;
+          const gauges = evaluateBudgets(budgetCurrentValues(), budgets);
+          notifyBudgetBreaches('fleet', gauges, (sc, kind, active, detail) => notifier.budgetBreach(sc, kind, active, detail));
+        };
+        setInterval(checkBudgets, BUDGET_CHECK_MS).unref();
+        checkBudgets();
+        // Tier-1 live store, fed by the poller — the workspace's live source + the
+        // authoritative ingestion-freshness clock for self-obs (wall-clock of the
+        // last frame, not the debounced generatedAt).
+        const liveSnapshot = new LiveSnapshotStore<ReturnType<typeof poller.getState>>();
+        liveSnapshot.set(poller.getState());
+        poller.on('update', () => liveSnapshot.set(poller.getState()));
+        return createWorkspaceRouter({
+          ...deps,
+          // Group O self-observability from REAL sources: ingestion freshness from
+          // the poller's last frame, API budget from the client-router (GraphQL cap
+          // is 5000/hr — the client tracks `remaining`, not the limit).
+          selfHealth: () => {
+            const lastFrame = liveSnapshot.updatedAt();
+            const freshSecs = lastFrame ? Math.max(0, Math.round((Date.now() - lastFrame) / 1000)) : null;
+            const remaining = router.minRemaining();
+            // the client tracks `remaining` but not the limit; GraphQL's floor is
+            // 5000/hr but a higher-tier token can exceed it (live smoke saw 9459) —
+            // never report limit < remaining.
+            return { ingestionFreshnessSecs: freshSecs, apiRateLimit: remaining != null ? { remaining, limit: Math.max(remaining, 5000) } : null };
+          },
+          // Group J1 forecast from REAL data: the fleet daily cost-actuals series
+          // (operator-imported; fleet-scoped, so repo is advisory). No configured
+          // budget threshold yet → trend-only (daysToThreshold null).
+          costForecast: async () => {
+            const sinceDate = new Date(Date.now() - 90 * 86_400_000).toISOString().slice(0, 10);
+            const rows = history.costActualsSince(sinceDate).filter((r) => r.scope === 'fleet');
+            if (rows.length === 0) return { points: [], unit: 'USD' };
+            const firstMs = Date.parse(rows[0].date);
+            const points = rows.map((r) => ({ day: Math.round((Date.parse(r.date) - firstMs) / 86_400_000), value: r.dollars }));
+            return { points, unit: 'USD' };
+          },
+          // Group L1 changelog from REAL data: the history config_changes timeline.
+          changelog: async (repo) => {
+            const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
+            return history.configChangesSince(since)
+              .filter((c) => c.repo === repo)
+              .map((c) => ({ at: c.at, kind: 'config', summary: `${c.field}: ${c.oldValue ?? '∅'} → ${c.newValue ?? '∅'}`, actor: 'poller' }));
+          },
+          outcomes: async (repo) => wsStore.appliedChanges(repo),
+          auditLog: async (repo) => wsStore.auditLog(repo),
+          policyStore: { get: async (repo) => wsStore.getPolicies(repo), put: async (repo, rules) => wsStore.putPolicies(repo, rules) },
+          recordAction: (row) => wsStore.recordAction(row), // write path: opened actions → audit log
+          // Flake-quarantine registry (roadmap 4.5): persist on open, read active set.
+          recordQuarantine: (repo, check, until, reason) => history.recordQuarantine(repo, check, until, reason, new Date().toISOString()),
+          activeQuarantines: (repo) => history.activeQuarantines(new Date().toISOString(), repo)
+            .map((q) => ({ check: q.checkName, until: q.until, reason: q.reason })),
+          // Group I1 liveRuleset: read the EVALUATED branch rules (GET /rules/branches/{b})
+          // — readable without administration:read (unlike the /rulesets listing) — and
+          // extract required-status-check contexts. Returns null on any error → the
+          // reconciler degrades honestly ("grant administration:read").
+          liveRuleset: async (repo) => {
+            try {
+              const meta = await routed.restGet<{ default_branch?: string }>(`/repos/${repo}`);
+              const branch = meta?.default_branch || 'main';
+              const rules = await routed.restGet<Array<{ type: string; parameters?: { required_status_checks?: { context: string }[] } }>>(
+                `/repos/${repo}/rules/branches/${encodeURIComponent(branch)}`);
+              const checks: string[] = [];
+              for (const rule of Array.isArray(rules) ? rules : []) {
+                if (rule.type === 'required_status_checks') {
+                  for (const c of rule.parameters?.required_status_checks ?? []) if (c.context) checks.push(c.context);
+                }
+              }
+              return checks;
+            } catch { return null; }
+          },
+          // Group J2/J3 budgets: thresholds from the store, current spend per kind
+          // (cost/minutes/flake/wait-p90) over the trailing 30d — the same values
+          // the breach-alert timer evaluates. No budgets stored → empty.
+          budgets: async () => ({ budgets: wsStore.getBudgets('fleet'), current: budgetCurrentValues() }),
+        });
+      })()
+    : undefined;
+
+  // Metrics payload is a heavy synchronous SQLite pass (#159); memoize per
+  // (window, bucket) for a short TTL so the multiple surfaces that poll it share
+  // one computation and the event loop blocks at most once per window, not per
+  // request. TTL ≪ the data's refresh cadence so freshness is unaffected.
+  const METRICS_TTL_MS = 20_000;
+  const metricsMemo = new Map<string, { at: number; payload: ReturnType<typeof computeMetrics> }>();
+
   const app = createApp({
     getState: () => poller.getState(),
     bus: poller,
+    workspaceRouter,
     staticDir: process.env.NODE_ENV === 'production' ? staticDir() : undefined,
     config: {
       get: () => config,
@@ -296,13 +443,20 @@ async function main() {
         poller.reconfigure(next);
       },
     },
-    metrics: (window, bucket) => computeMetrics(history, window, bucket, new Date(),
-      poller.currentExclude(), (repo) => poller.settingsFor(repo).batchSize,
-      poller.allDerivedGraphs(), poller.liveForeignNames(), poller.activeRegressions(),
-      (repo, name, event) => poller.resolvePool(repo, name, event), poller.poolHealth(),
-      config.costPerMinute ?? null, config.poolMeta ?? null,
-      (repo, sha) => poller.prNumberForSha(repo, sha), config.costAutoRate,
-      (repo) => poller.settingsFor(repo).requiredCheckPrefixes ?? []),
+    metrics: (window, bucket) => {
+      const key = `${window}|${bucket}`;
+      const hit = metricsMemo.get(key);
+      if (hit && Date.now() - hit.at < METRICS_TTL_MS) return hit.payload;
+      const payload = computeMetrics(history, window, bucket, new Date(),
+        poller.currentExclude(), (repo) => poller.settingsFor(repo).batchSize,
+        poller.allDerivedGraphs(), poller.liveForeignNames(), poller.activeRegressions(),
+        (repo, name, event) => poller.resolvePool(repo, name, event), poller.poolHealth(),
+        config.costPerMinute ?? null, config.poolMeta ?? null,
+        (repo, sha) => poller.prNumberForSha(repo, sha), config.costAutoRate,
+        (repo) => poller.settingsFor(repo).requiredCheckPrefixes ?? []);
+      metricsMemo.set(key, { at: Date.now(), payload });
+      return payload;
+    },
     repos: () => poller.repoToggleList(),
     protectionMap: protectionMapFor,
     // cost actuals import (cost explorer phase 2) — rows land in SQLite and
@@ -337,6 +491,15 @@ async function main() {
           return Promise.reject(new Error(`no installation covers ${input.owner}`));
         }
         return openDemotionDraftPr(client, input.owner, input.repo, input.candidate);
+      },
+    },
+    promotionAction: {
+      draftPr: (input) => {
+        const client = router.clientFor(input.owner);
+        if (!client) {
+          return Promise.reject(new Error(`no installation covers ${input.owner}`));
+        }
+        return openPromotionDraftPr(client, input.owner, input.repo, input.candidate);
       },
     },
     // Runner-routing capability (feature/runner-routing) — the controller's

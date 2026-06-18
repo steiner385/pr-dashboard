@@ -37,7 +37,7 @@ const STATE: DashboardState = {
 };
 
 const hook = (overrides?: Partial<DashboardHook>): DashboardHook =>
-  ({ state: STATE, connected: true,
+  ({ state: STATE, connected: true, stale: false,
     notifySupported: true, notifyEnabled: false, toggleNotify: () => {}, ...overrides });
 
 // The repo board lives in the Pipeline tab, which is no longer the default

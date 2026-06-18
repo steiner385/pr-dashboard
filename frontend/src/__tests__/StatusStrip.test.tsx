@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
-import { StatusStrip, bucketPr, type Bucket } from '../StatusStrip';
+import { StatusStrip, bucketPr, isFailedPr, isActivePr, type Bucket } from '../StatusStrip';
 import type { PrView } from '../types';
 
 const pr = (stage: string, substate: string | null = null): PrView => ({
@@ -49,6 +49,26 @@ describe('bucketPr', () => {
 
   it('classifies ready as idle', () => {
     expect(bucketPr(pr('ready'))).toBe('idle');
+  });
+});
+
+describe('isFailedPr / isActivePr (the shared classifiers — no per-surface copies)', () => {
+  it('isFailedPr agrees with bucketPr === failed for every stage', () => {
+    for (const [stage, sub] of [['ci', null], ['queue', null], ['queue', 'group-failed'],
+      ['qa-deploy', null], ['awaiting-prod', null], ['parked', 'ci-failed'], ['parked', 'draft'],
+      ['ready', null], ['merged', null]] as const) {
+      expect(isFailedPr(pr(stage, sub))).toBe(bucketPr(pr(stage, sub)) === 'failed');
+    }
+  });
+
+  it('isActivePr is true for the moving pipeline stages, false for waiting/parked/done', () => {
+    expect(isActivePr(pr('ci'))).toBe(true);
+    expect(isActivePr(pr('queue'))).toBe(true);
+    expect(isActivePr(pr('qa-deploy'))).toBe(true);
+    expect(isActivePr(pr('awaiting-prod'))).toBe(false); // waiting, not working
+    expect(isActivePr(pr('parked', 'ci-failed'))).toBe(false);
+    expect(isActivePr(pr('ready'))).toBe(false);
+    expect(isActivePr(pr('merged'))).toBe(false);
   });
 });
 

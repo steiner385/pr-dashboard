@@ -10,3 +10,7 @@ docs/superpowers/
 # runtime audit log (runner routing)
 logs/
 .superpowers/
+
+# Playwright MCP session artifacts (screenshots, snapshots)
+.playwright-mcp/
+ws*.png

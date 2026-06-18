@@ -995,7 +995,60 @@ describe('group failures (issue #38)', () => {
     h.recordGroupFailure(REPO2, 'e2e', 'new', '2026-06-10T10:00:00Z');
     const rows = h.groupFailuresSince('2026-06-01T00:00:00Z');
     expect(rows).toEqual([{ repo: REPO2, checkName: 'e2e', groupSha: 'new',
-      at: '2026-06-10T10:00:00Z' }]);
+      at: '2026-06-10T10:00:00Z', conclusion: null }]);
+  });
+
+  it('persists and returns the failing conclusion (roadmap 4.4b reason taxonomy)', () => {
+    h.recordGroupFailure(REPO2, 'e2e', 'g1', '2026-06-10T10:00:00Z', 'TIMED_OUT');
+    h.recordGroupFailure(REPO2, 'unit', 'g1', '2026-06-10T10:01:00Z', 'FAILURE');
+    const rows = h.groupFailuresSince('2026-06-01T00:00:00Z');
+    expect(rows.find((r) => r.checkName === 'e2e')?.conclusion).toBe('TIMED_OUT');
+    expect(rows.find((r) => r.checkName === 'unit')?.conclusion).toBe('FAILURE');
+  });
+
+  it('defaults conclusion to null when the caller omits it (back-compat)', () => {
+    h.recordGroupFailure(REPO2, 'e2e', 'g2', '2026-06-10T10:00:00Z');
+    expect(h.groupFailuresSince('2026-06-01T00:00:00Z')[0]?.conclusion).toBeNull();
+  });
+});
+
+// Flake-quarantine registry (roadmap 4.5) — auto-unquarantine via `until` expiry
+// ---------------------------------------------------------------------------
+
+describe('quarantine registry (roadmap 4.5)', () => {
+  const REPO2 = 'acme/widgets';
+
+  it('records a quarantine and returns it while active (now < until)', () => {
+    expect(h.recordQuarantine(REPO2, 'flaky-e2e', '2026-06-20T00:00:00Z', 'flaky 8/10', '2026-06-18T00:00:00Z')).toBe(true);
+    const active = h.activeQuarantines('2026-06-19T00:00:00Z');
+    expect(active).toEqual([{ repo: REPO2, checkName: 'flaky-e2e', until: '2026-06-20T00:00:00Z',
+      reason: 'flaky 8/10', createdAt: '2026-06-18T00:00:00Z' }]);
+  });
+
+  it('AUTO-unquarantines: an expired quarantine (now >= until) is no longer active', () => {
+    h.recordQuarantine(REPO2, 'flaky-e2e', '2026-06-20T00:00:00Z', null, '2026-06-18T00:00:00Z');
+    expect(h.activeQuarantines('2026-06-21T00:00:00Z')).toHaveLength(0); // window passed
+  });
+
+  it('re-quarantine UPSERTs (extends the window, one row per repo×check)', () => {
+    h.recordQuarantine(REPO2, 'flaky-e2e', '2026-06-20T00:00:00Z', 'first', '2026-06-18T00:00:00Z');
+    h.recordQuarantine(REPO2, 'flaky-e2e', '2026-06-25T00:00:00Z', 'extended', '2026-06-19T00:00:00Z');
+    const active = h.activeQuarantines('2026-06-21T00:00:00Z'); // active only under the extension
+    expect(active).toHaveLength(1);
+    expect(active[0]).toMatchObject({ until: '2026-06-25T00:00:00Z', reason: 'extended' });
+  });
+
+  it('scopes by repo when one is given; fleet-wide with ""', () => {
+    h.recordQuarantine(REPO2, 'a', '2026-06-25T00:00:00Z', null, '2026-06-18T00:00:00Z');
+    h.recordQuarantine('other/repo', 'b', '2026-06-25T00:00:00Z', null, '2026-06-18T00:00:00Z');
+    expect(h.activeQuarantines('2026-06-19T00:00:00Z', REPO2).map((q) => q.checkName)).toEqual(['a']);
+    expect(h.activeQuarantines('2026-06-19T00:00:00Z')).toHaveLength(2);
+  });
+
+  it('rejects empty identity fields', () => {
+    expect(h.recordQuarantine('', 'c', '2026-06-25T00:00:00Z', null, '2026-06-18T00:00:00Z')).toBe(false);
+    expect(h.recordQuarantine(REPO2, '', '2026-06-25T00:00:00Z', null, '2026-06-18T00:00:00Z')).toBe(false);
+    expect(h.recordQuarantine(REPO2, 'c', '', null, '2026-06-18T00:00:00Z')).toBe(false);
   });
 });
 
@@ -1635,5 +1688,39 @@ describe('successStatsByRepo', () => {
     const m = h.successStatsByRepo(SINCE);
     expect(m.get('acme/a')!.find((s) => s.name === 'a')!.totalRuns).toBe(1);
     expect(m.has(REPO2)).toBe(false);
+  });
+});
+
+// Real-failure incident counting (#150.3) — consecutive reds collapse to one incident
+// ---------------------------------------------------------------------------
+describe('failureIncidentsByRepo (#150.3)', () => {
+  const SINCE = '2026-06-01T00:00:00Z';
+  // completed 1 min after started so the row has a positive duration (it's stored)
+  const done = (at: string) => new Date(Date.parse(at) + 60_000).toISOString();
+  const fail = (sha: string, at: string) =>
+    h.recordCheckDuration(REPO, 'e2e', 'merge_group', at, done(at), 'FAILURE', sha, 1);
+  const pass = (sha: string, at: string) =>
+    h.recordCheckDuration(REPO, 'e2e', 'merge_group', at, done(at), 'SUCCESS', sha, 1);
+  const incidents = () => h.failureIncidentsByRepo(SINCE).get(REPO)?.get('e2e merge_group') ?? 0;
+
+  it('collapses a stretch of consecutive real-failing shas into ONE incident', () => {
+    fail('s1', '2026-06-10T01:00:00Z');
+    fail('s2', '2026-06-10T02:00:00Z');
+    fail('s3', '2026-06-10T03:00:00Z'); // 3 reds in a row, one root cause
+    expect(incidents()).toBe(1);
+  });
+
+  it('counts separate incidents when a green sha breaks the streak', () => {
+    fail('s1', '2026-06-10T01:00:00Z');
+    pass('s2', '2026-06-10T02:00:00Z'); // fixed
+    fail('s3', '2026-06-10T03:00:00Z'); // broke again — distinct problem
+    fail('s4', '2026-06-10T04:00:00Z');
+    expect(incidents()).toBe(2);
+  });
+
+  it('a sha that failed then SUCCEEDED on the same sha is a flake — not a real failure', () => {
+    fail('s1', '2026-06-10T01:00:00Z');
+    pass('s1', '2026-06-10T01:30:00Z'); // same sha resolved → flake, excluded
+    expect(incidents()).toBe(0);
   });
 });

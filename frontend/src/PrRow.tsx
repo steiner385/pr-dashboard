@@ -26,7 +26,7 @@ function subLine(pr: PrView, queueCulprit: number | null): string | null {
       return `queue blocked — conflict ahead${suffix}`;
     }
     const parts: string[] = [];
-    if (s.substate === 'group-failed') parts.push('Queue group failed');
+    if (s.substate === 'group-failed') parts.push(stageLabel(s.stage, s.substate)); // canonical label — no drift vs format.ts
     // queue percent always tracks the merge-group build, never head-commit checks —
     // label it so the sub line can't be misread against the PR-checks panel
     if (s.percent != null) parts.push(`group ${s.percent}%`);
@@ -35,7 +35,7 @@ function subLine(pr: PrView, queueCulprit: number | null): string | null {
   }
   if (s.stage === 'ci') {
     const parts: string[] = [];
-    if (s.substate === 'retrying') parts.push('CI retrying');
+    if (s.substate === 'retrying') parts.push(stageLabel(s.stage, s.substate)); // canonical label — no drift vs format.ts
     if (s.percent != null) parts.push(`${s.percent}%`);
     const running = pr.checks
       .filter((c) => c.isRequired && c.status !== 'COMPLETED' && c.elapsedSeconds != null)

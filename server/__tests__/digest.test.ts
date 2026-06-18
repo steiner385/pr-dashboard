@@ -120,9 +120,9 @@ describe('gatherDigestInput', () => {
   it('ejects = distinct group shas; top culprit = check with most rows, flake cross-ref applied', () => {
     const out = gatherDigestInput(sources({ history: history({
       groupFailuresSince: () => [
-        { repo: 'r/a', checkName: 'e2e', groupSha: 's1', at: '2026-06-12T01:00:00Z' },
-        { repo: 'r/a', checkName: 'unit', groupSha: 's1', at: '2026-06-12T01:00:00Z' },
-        { repo: 'r/a', checkName: 'e2e', groupSha: 's2', at: '2026-06-12T02:00:00Z' },
+        { repo: 'r/a', checkName: 'e2e', groupSha: 's1', at: '2026-06-12T01:00:00Z', conclusion: 'FAILURE' },
+        { repo: 'r/a', checkName: 'unit', groupSha: 's1', at: '2026-06-12T01:00:00Z', conclusion: 'FAILURE' },
+        { repo: 'r/a', checkName: 'e2e', groupSha: 's2', at: '2026-06-12T02:00:00Z', conclusion: 'TIMED_OUT' },
       ],
       flakeStatsByRepo: () => new Map([['r/a', [
         { name: 'e2e', event: 'merge_group', flakeEvents: 3, totalRuns: 25,

@@ -74,6 +74,15 @@ export interface FlakeStat {
 /** One recorded merge-group culprit: (repo, group sha, check) — issue #38. */
 export interface GroupFailureRow {
   repo: string; checkName: string; groupSha: string; at: string;
+  /** The failing check's GHA conclusion (FAILURE/TIMED_OUT/STARTUP_FAILURE), for
+   *  the eject-reason taxonomy. Null on rows recorded before the column existed. */
+  conclusion: string | null;
+}
+
+/** One active flake-quarantine (roadmap 4.5). `until` is the auto-unquarantine
+ *  expiry (ISO); a row is active only while now < until. */
+export interface QuarantineRow {
+  repo: string; checkName: string; until: string; reason: string | null; createdAt: string;
 }
 
 /** One completed merge_group check (queue-efficiency panel, #23). */
@@ -154,6 +163,8 @@ export class HistoryStore {
   private readonly stmtInsertConfigChange: Database.Statement;
   private readonly stmtSelectConfigChangesSince: Database.Statement;
   private readonly stmtLatestConfigValues: Database.Statement;
+  private readonly stmtUpsertQuarantine: Database.Statement;
+  private readonly stmtSelectActiveQuarantines: Database.Statement;
   private readonly stmtUpsertPr: Database.Statement;
   private readonly stmtMarkQaLive: Database.Statement;
   private readonly stmtMarkProdLive: Database.Statement;
@@ -183,6 +194,7 @@ export class HistoryStore {
   private readonly stmtSelectRunnerWaitsSince: Database.Statement;
   private readonly stmtSelectDurationsSince: Database.Statement;
   private readonly stmtSelectSuccessStatsSince: Database.Statement;
+  private readonly stmtSelectFailureIncidentsSince: Database.Statement;
   private readonly stmtSelectQueueWaitsSince: Database.Statement;
   private readonly stmtSelectGroupRunsSince: Database.Statement;
   private readonly stmtSelectMergedSince: Database.Statement;
@@ -274,6 +286,7 @@ export class HistoryStore {
       CREATE TABLE IF NOT EXISTS group_failures (
         repo TEXT NOT NULL, check_name TEXT NOT NULL, group_sha TEXT NOT NULL,
         observed_at TEXT NOT NULL,
+        conclusion TEXT,
         UNIQUE(repo, group_sha, check_name)
       );
       CREATE INDEX IF NOT EXISTS idx_group_failures_observed ON group_failures(observed_at);
@@ -287,6 +300,16 @@ export class HistoryStore {
         UNIQUE(repo, observed_at, field)
       );
       CREATE INDEX IF NOT EXISTS idx_config_changes ON config_changes(observed_at);
+      -- Flake-quarantine registry (roadmap 4.5): one row per quarantined check,
+      -- with an until expiry that drives AUTO-unquarantine — a quarantine is
+      -- active only while now < until, so the surface can flag auto-expiry and
+      -- stop re-proposing it. Re-quarantine UPSERTs (extends the window).
+      CREATE TABLE IF NOT EXISTS quarantines (
+        repo TEXT NOT NULL, check_name TEXT NOT NULL,
+        until TEXT NOT NULL, reason TEXT, created_at TEXT NOT NULL,
+        PRIMARY KEY (repo, check_name)
+      );
+      CREATE INDEX IF NOT EXISTS idx_quarantines_until ON quarantines(until);
       -- Cost actuals import (cost explorer phase 2): operator-pushed ACTUAL
       -- daily spend per scope ('fleet', or a single pool label) — deliberately
       -- provider-agnostic: anything that can curl POST /api/cost/actuals can
@@ -380,6 +403,11 @@ export class HistoryStore {
     // graph, unmatched name, reusable workflow without an outer label input,
     // or rows persisted before #45).
     addColumnIfMissing(this.db, 'runner_waits', 'pool TEXT');
+    // Migration (roadmap 4.4b): group_failures gains conclusion — the failing
+    // check's GHA conclusion, so the train-killer leaderboard can classify each
+    // eject's reason (timeout/test-fail/infra → remedy). NULL on rows recorded
+    // before the column existed; those count as 'unknown' reason.
+    addColumnIfMissing(this.db, 'group_failures', 'conclusion TEXT');
 
     // Prepare all statements after schema is guaranteed to exist.
     this.stmtInsertDuration = this.db.prepare(
@@ -415,6 +443,16 @@ export class HistoryStore {
     this.stmtSelectConfigChangesSince = this.db.prepare(
       `SELECT repo, observed_at AS at, field, old_value, new_value
        FROM config_changes WHERE observed_at >= ? ORDER BY repo, observed_at`
+    );
+    // Flake-quarantine registry (roadmap 4.5). UPSERT extends an existing
+    // quarantine's window; active reads filter on until > now (auto-unquarantine).
+    this.stmtUpsertQuarantine = this.db.prepare(
+      `INSERT INTO quarantines (repo, check_name, until, reason, created_at) VALUES (?,?,?,?,?)
+       ON CONFLICT(repo, check_name) DO UPDATE SET until=excluded.until, reason=excluded.reason`
+    );
+    this.stmtSelectActiveQuarantines = this.db.prepare(
+      `SELECT repo, check_name, until, reason, created_at FROM quarantines
+       WHERE until > ? AND (? = '' OR repo = ?) ORDER BY repo, check_name`
     );
     // Latest new_value per (repo, field) — seeds the poller's in-memory baseline
     // on restart so the first cycle doesn't re-emit unchanged config as a change.
@@ -574,11 +612,35 @@ export class HistoryStore {
        WHERE completed_at >= ? AND head_sha IS NOT NULL AND conclusion != 'CANCELLED'
        GROUP BY repo, check_name, event`
     );
+    // Real-failure INCIDENTS per (repo, check, event) over the window (#150.3):
+    // collapse a stretch of CONSECUTIVE real-failing shas (one root cause, fixed on
+    // a later sha) into one incident, so a week-long red doesn't read as N separate
+    // failures. A sha is a real failure if it failed and never SUCCEEDED on that sha
+    // (same same-sha-resolved-flake exclusion as realFailures). Counts a new
+    // incident at each non-failing→failing transition in time order.
+    this.stmtSelectFailureIncidentsSince = this.db.prepare(
+      `WITH sv AS (
+         SELECT repo, check_name, event, head_sha,
+                MAX(CASE WHEN conclusion IN ('FAILURE','TIMED_OUT','STARTUP_FAILURE') THEN 1 ELSE 0 END) AS any_fail,
+                MAX(CASE WHEN conclusion = 'SUCCESS' THEN 1 ELSE 0 END) AS any_succ,
+                MIN(completed_at) AS first_at
+         FROM check_durations
+         WHERE completed_at >= ? AND head_sha IS NOT NULL AND conclusion != 'CANCELLED'
+         GROUP BY repo, check_name, event, head_sha
+       ),
+       r AS (SELECT repo, check_name, event, first_at,
+                    CASE WHEN any_fail = 1 AND any_succ = 0 THEN 1 ELSE 0 END AS rf FROM sv),
+       s AS (SELECT repo, check_name, event, rf,
+                    LAG(rf, 1, 0) OVER (PARTITION BY repo, check_name, event ORDER BY first_at) AS prf FROM r)
+       SELECT repo, check_name AS name, event,
+              SUM(CASE WHEN rf = 1 AND prf = 0 THEN 1 ELSE 0 END) AS incidents
+       FROM s GROUP BY repo, check_name, event`
+    );
     this.stmtInsertGroupFailure = this.db.prepare(
-      'INSERT OR IGNORE INTO group_failures (repo, check_name, group_sha, observed_at) VALUES (?,?,?,?)'
+      'INSERT OR IGNORE INTO group_failures (repo, check_name, group_sha, observed_at, conclusion) VALUES (?,?,?,?,?)'
     );
     this.stmtSelectGroupFailuresSince = this.db.prepare(
-      `SELECT repo, check_name, group_sha, observed_at AS at
+      `SELECT repo, check_name, group_sha, observed_at AS at, conclusion
        FROM group_failures WHERE observed_at >= ? ORDER BY repo, check_name, observed_at`
     );
     // Duration-regression scan (issue #41): one whole-DB pass enumerates the
@@ -959,9 +1021,10 @@ export class HistoryStore {
 
   /** Record a merge-group culprit check (issue #38) — once per
    *  (repo, group sha, check); returns false on the dedupe path or bad input. */
-  recordGroupFailure(repo: string, checkName: string, groupSha: string, observedAt: string): boolean {
+  recordGroupFailure(repo: string, checkName: string, groupSha: string, observedAt: string,
+    conclusion: string | null = null): boolean {
     if (!checkName || !groupSha || !observedAt) return false;
-    const info = this.stmtInsertGroupFailure.run(repo, checkName, groupSha, observedAt);
+    const info = this.stmtInsertGroupFailure.run(repo, checkName, groupSha, observedAt, conclusion);
     return info.changes > 0;
   }
 
@@ -971,6 +1034,7 @@ export class HistoryStore {
     return rows.map((r) => ({
       repo: r.repo as string, checkName: r.check_name as string,
       groupSha: r.group_sha as string, at: r.at as string,
+      conclusion: (r.conclusion as string | null) ?? null,
     }));
   }
 
@@ -979,6 +1043,25 @@ export class HistoryStore {
   recordConfigChange(repo: string, observedAt: string, field: string,
     oldValue: string | null, newValue: string | null): boolean {
     return this.stmtInsertConfigChange.run(repo, observedAt, field, oldValue, newValue).changes > 0;
+  }
+
+  /** Register (or extend) a flake quarantine (roadmap 4.5). `until` is the
+   *  auto-unquarantine expiry; re-quarantine UPSERTs the window. Rejects empties. */
+  recordQuarantine(repo: string, checkName: string, until: string, reason: string | null,
+    createdAt: string): boolean {
+    if (!repo || !checkName || !until || !createdAt) return false;
+    this.stmtUpsertQuarantine.run(repo, checkName, until, reason, createdAt);
+    return true;
+  }
+
+  /** Quarantines still active at `now` (now < until) — expired ones auto-drop out.
+   *  Pass a repo to scope, or '' for the whole fleet. */
+  activeQuarantines(now: string, repo = ''): QuarantineRow[] {
+    const rows = this.stmtSelectActiveQuarantines.all(now, repo, repo) as Record<string, unknown>[];
+    return rows.map((r) => ({
+      repo: r.repo as string, checkName: r.check_name as string, until: r.until as string,
+      reason: (r.reason as string | null) ?? null, createdAt: r.created_at as string,
+    }));
   }
 
   /** Config-change rows at/after `since`, ordered repo → observed_at. */
@@ -1417,6 +1500,21 @@ export class HistoryStore {
         sumDurationSecs: (r.sum_secs as number) ?? 0,
       });
       out.set(repo, list);
+    }
+    return out;
+  }
+
+  /** Real-failure incident counts per (repo, check, event) since `since` (#150.3):
+   *  `${name}\0${event}` → number of distinct consecutive-real-failing streaks.
+   *  Keyed for a cheap join in the promotion lane. */
+  failureIncidentsByRepo(since: string): Map<string, Map<string, number>> {
+    const rows = this.stmtSelectFailureIncidentsSince.all(since) as Record<string, unknown>[];
+    const out = new Map<string, Map<string, number>>();
+    for (const r of rows) {
+      const repo = r.repo as string;
+      const m = out.get(repo) ?? new Map<string, number>();
+      m.set(`${r.name as string} ${r.event as string}`, (r.incidents as number) ?? 0);
+      out.set(repo, m);
     }
     return out;
   }

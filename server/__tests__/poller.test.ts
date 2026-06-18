@@ -4016,7 +4016,7 @@ describe('Poller notifier wiring (issue #19)', () => {
     digest: { enabled: false, hourLocal: 8 },
     events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
       ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
-      'duration-regression': true, 'runner-starvation': true },
+      'duration-regression': true, 'runner-starvation': true, 'budget-breach': true},
   };
 
   function notifierHarness() {
@@ -4126,7 +4126,7 @@ describe('Poller notifier wiring (issue #19)', () => {
         digest: { enabled: false, hourLocal: 8 },
         events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
           ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
-          'duration-regression': true, 'runner-starvation': true } } });
+          'duration-regression': true, 'runner-starvation': true, 'budget-breach': true} } });
     const execCalls: string[] = [];
     // index.ts wiring shape: the notifier reads the POLLER's live config, so a
     // PUT /api/config → reconfigure() flips the command sink with no restart
@@ -4293,6 +4293,16 @@ describe('ingestGroupFailures (issue #38)', () => {
       .toEqual(['failed', 'startup', 'timed-out']);
   });
 
+  it('persists each eject’s conclusion for the reason taxonomy (roadmap 4.4b)', () => {
+    ingestGroupFailures(history, 'acme/widgets', 'oid1', [
+      mg({ name: 'failed', conclusion: 'FAILURE' }),
+      mg({ name: 'timed-out', conclusion: 'TIMED_OUT' }),
+    ]);
+    const rows = history.groupFailuresSince('2026-06-01T00:00:00Z');
+    expect(rows.find((r) => r.checkName === 'failed')?.conclusion).toBe('FAILURE');
+    expect(rows.find((r) => r.checkName === 'timed-out')?.conclusion).toBe('TIMED_OUT');
+  });
+
   it('records once per (group sha, check) across repeated ingestion; new groups record again', () => {
     const checks = [mg({})];
     ingestGroupFailures(history, 'acme/widgets', 'oid1', checks);
@@ -4346,13 +4356,13 @@ describe('Poller queue cycle records group failures (issue #38)', () => {
     await p.queueOnce();
     const rows = history.groupFailuresSince('2026-06-01T00:00:00Z');
     expect(rows).toEqual([{ repo: 'acme/widgets', checkName: 'e2e', groupSha: GROUP_OID,
-      at: '2026-06-10T11:38:00Z' }]);
+      at: '2026-06-10T11:38:00Z', conclusion: 'FAILURE' }]);
     // group-failed notification detail names the culprit (issue #38)
     const events: NotificationEvent[] = [];
     const notifier = new Notifier({ config: () => ({ enabled: false, command: [], digest: { enabled: false, hourLocal: 8 },
       events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
         ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
-        'duration-regression': true, 'runner-starvation': true } }) });
+        'duration-regression': true, 'runner-starvation': true, 'budget-breach': true} }) });
     notifier.on('notification', (ev: NotificationEvent) => events.push(ev));
     (p as unknown as { deps: { notifier?: Notifier } }).deps.notifier = notifier;
     p.buildState();
@@ -4441,7 +4451,7 @@ describe('Poller queue ops console (#39) + merge ETA simulation (#40)', () => {
     enabled: false, command: [], digest: { enabled: false, hourLocal: 8 },
     events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
       ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
-      'duration-regression': true, 'runner-starvation': true },
+      'duration-regression': true, 'runner-starvation': true, 'budget-breach': true},
   };
 
   const opsSweep = (n: number) => ({
@@ -4840,7 +4850,7 @@ describe('Poller duration-regression scan (issue #41)', () => {
     enabled: false, command: [], digest: { enabled: false, hourLocal: 8 },
     events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
       ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
-      'duration-regression': true, 'runner-starvation': true },
+      'duration-regression': true, 'runner-starvation': true, 'budget-breach': true},
   };
   const REG_CHECK = 'fast-checks / ESLint';
 
@@ -5154,7 +5164,7 @@ describe('Poller runner-starvation scan (issue #45)', () => {
     const notifier = new Notifier({ config: () => ({ enabled: false, command: [], digest: { enabled: false, hourLocal: 8 },
       events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
         ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
-        'duration-regression': true, 'runner-starvation': true } }) });
+        'duration-regression': true, 'runner-starvation': true, 'budget-breach': true} }) });
     notifier.on('notification', (ev: NotificationEvent) => events.push(ev));
     const p = new Poller({ router: asRouter(fakeClient()), history,
       deploy: noDeploy(), config: CONFIG, notifier, now: () => now });
@@ -5886,7 +5896,8 @@ describe('per-repo laneHealth on DashboardState', () => {
 describe('per-repo deploy status on DashboardState (Deploy lane, Spec 2)', () => {
   const NO_DEPLOY: AppConfig = { ...DEFAULTS, ancestrySource: 'clone', owners: ['acme', 'octo'] };
   it('caches the live sha per env from the deploy cycle and counts awaiting drift', async () => {
-    // a merged PR not yet live on qa OR prod → awaitingQa=1, awaitingProd=1
+    // a merged PR not yet live on qa → awaiting QA only (NOT also awaiting prod —
+    // the two are disjoint: it can't be awaiting prod before it's even on QA)
     history.upsertMergedPr({ repo: 'acme/widgets', number: 8951, title: 'feat: allowance', url: 'u8951',
       mergedAt: '2026-06-10T11:40:00Z', mergeCommitSha: 'squash8951' });
     // health() returns a sha but ancestry is 'no' → env reachable, PR stays not-live
@@ -5899,7 +5910,7 @@ describe('per-repo deploy status on DashboardState (Deploy lane, Spec 2)', () =>
     const repo = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!;
     expect(repo.deploy).toBeDefined();
     expect(repo.deploy!.awaitingQa).toBe(1);
-    expect(repo.deploy!.awaitingProd).toBe(1);
+    expect(repo.deploy!.awaitingProd).toBe(0); // awaiting QA, not prod (disjoint)
     const qa = repo.deploy!.envs.find((e) => e.name === 'qa')!;
     expect(qa.liveSha).toBe('liveSha-qa');
     expect(qa.reachable).toBe(true);

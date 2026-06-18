@@ -92,6 +92,27 @@ describe('deriveRecommendations (tuning digest)', () => {
     expect(recs.map((x) => x.kind)).toContain('set-required-prefixes');
   });
 
+  it('makes the prefixes recommendation actionable with the exact suggested value (roadmap 4.5)', () => {
+    const recs = deriveRecommendations({ ...empty,
+      queueEfficiency: [
+        { repo: 'r', runConclusion: { total: 3, runFailed: 2, advisoryNoise: 2, requiredConfigured: false },
+          adminBypass: { rate: null, merges: 0 } }],
+      prefixSuggestions: [{ repo: 'r', prefixes: ['build', 'static-checks'] }] });
+    const rec = recs.find((x) => x.kind === 'set-required-prefixes')!;
+    expect(rec.detail).toMatch(/requiredCheckPrefixes: \["build", "static-checks"\]/);
+    expect(rec.detail).toMatch(/\.pr-dashboard\.yml/);
+  });
+
+  it('omits the suggestion when no merge_group checks were observed', () => {
+    const recs = deriveRecommendations({ ...empty,
+      queueEfficiency: [
+        { repo: 'r', runConclusion: { total: 3, runFailed: 2, advisoryNoise: 2, requiredConfigured: false },
+          adminBypass: { rate: null, merges: 0 } }],
+      prefixSuggestions: [{ repo: 'r', prefixes: [] }] });
+    const rec = recs.find((x) => x.kind === 'set-required-prefixes')!;
+    expect(rec.detail).not.toMatch(/suggested/);
+  });
+
   it('includes lint findings and ranks the whole list high → low', () => {
     const recs = deriveRecommendations({
       batchAdvisor: [{ repo: 'r', currentBatch: 4, recommendedBatch: 8, ejectProbPerGroup: 0.1,

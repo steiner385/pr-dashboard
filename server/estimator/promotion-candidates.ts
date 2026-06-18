@@ -47,6 +47,9 @@ export interface PromotionStat {
   totalRuns: number;
   realFailures: number;
   sumDurationSecs: number;
+  /** Distinct real-failure incidents (consecutive reds collapsed, #150.3). When
+   *  omitted, falls back to realFailures (each failure its own incident). */
+  incidents?: number;
 }
 
 export interface PromotionCandidate {
@@ -54,8 +57,11 @@ export interface PromotionCandidate {
   event: string;
   currentTier: string;
   suggestedTier: string;
-  /** Real (non-flaky) failures in the window — the rank key. */
+  /** Real (non-flaky) failures in the window. */
   realFailures: number;
+  /** Distinct real-failure incidents (consecutive reds collapsed) — the rank key
+   *  (#150.3), so a long single outage doesn't outrank many distinct problems. */
+  incidents: number;
   /** Real-failure rate over the window, 1-decimal percent. */
   failRatePct: number;
   runsInWindow: number;
@@ -69,6 +75,17 @@ export const PROMOTION_DEFAULTS: PromotionConfig = {
 };
 
 interface Ladder { currentTier: string; suggestedTier: string; }
+/** Shard suffix — `(1/8)`, `(shard 2 of 4)`, etc. Stripped when matching coverage
+ *  so a check sharded DIFFERENTLY across tiers (e.g. unit (1/3) on PR vs (1/8) in
+ *  the queue) still counts as covered (#150.1). NOT the caller prefix — that
+ *  distinguishes genuinely different jobs and carries meaning. A configured
+ *  logical-equivalence map (affected-slice ↔ full-suite) is the heavier follow-on. */
+const SHARD_SUFFIX = /\s*\((?:shard\s+)?\d+\s*(?:\/|of)\s*\d+\)\s*$/i;
+/** Normalized identity for coverage matching — shard-insensitive. */
+export function coverageKey(name: string): string {
+  return name.replace(SHARD_SUFFIX, '');
+}
+
 /**
  * The earlier tier to shift a late-failing check to, or null when there is no
  * safe/useful promotion:
@@ -76,14 +93,15 @@ interface Ladder { currentTier: string; suggestedTier: string; }
  *  - merge_group: promote to PR UNLESS it already runs on PRs (remaining
  *    failures are merge-emergent — unpreventable upstream).
  *  - pull_request (and anything else): already earliest — nothing to promote.
+ * Coverage is matched on the shard-insensitive key (#150.1).
  */
 function promotionTarget(stat: PromotionStat, onMergeGroup: Set<string>, onPr: Set<string>): Ladder | null {
   if (stat.event === 'push') {
-    if (onMergeGroup.has(stat.name)) return null;
+    if (onMergeGroup.has(coverageKey(stat.name))) return null;
     return { currentTier: 'every push to main (post-merge)', suggestedTier: 'merge queue (pre-merge gate)' };
   }
   if (stat.event === 'merge_group') {
-    if (onPr.has(stat.name)) return null;
+    if (onPr.has(coverageKey(stat.name))) return null;
     return { currentTier: 'merge queue only', suggestedTier: 'every PR push (catch pre-enqueue)' };
   }
   return null;
@@ -94,8 +112,8 @@ export function computePromotionCandidates(
 ): PromotionCandidate[] {
   // Earlier-tier presence — a check already running there can't be promoted into
   // it. Built from the FULL stats list (presence, not pass/fail).
-  const onMergeGroup = new Set(stats.filter((s) => s.event === 'merge_group' && s.totalRuns > 0).map((s) => s.name));
-  const onPr = new Set(stats.filter((s) => s.event === 'pull_request' && s.totalRuns > 0).map((s) => s.name));
+  const onMergeGroup = new Set(stats.filter((s) => s.event === 'merge_group' && s.totalRuns > 0).map((s) => coverageKey(s.name)));
+  const onPr = new Set(stats.filter((s) => s.event === 'pull_request' && s.totalRuns > 0).map((s) => coverageKey(s.name)));
 
   const out: PromotionCandidate[] = [];
   for (const s of stats) {
@@ -104,20 +122,27 @@ export function computePromotionCandidates(
     const ladder = promotionTarget(s, onMergeGroup, onPr);
     if (!ladder) continue;
     const failRatePct = s.totalRuns ? Math.round((s.realFailures / s.totalRuns) * 1000) / 10 : 0;
+    // Distinct incidents (consecutive reds collapsed). Fall back to realFailures
+    // (each failure its own incident) when the caller didn't supply it.
+    const incidents = s.incidents ?? s.realFailures;
+    const incidentNote = incidents !== s.realFailures ? ` across ${incidents} incident${incidents === 1 ? '' : 's'}` : '';
     out.push({
       name: s.name,
       event: s.event,
       currentTier: ladder.currentTier,
       suggestedTier: ladder.suggestedTier,
       realFailures: s.realFailures,
+      incidents,
       failRatePct,
       runsInWindow: s.totalRuns,
       minutesInWindow: Math.round(s.sumDurationSecs / 60),
-      reason: `${s.realFailures} real (non-flaky) failures in ${s.totalRuns} runs (${failRatePct}%) — caught late`,
+      reason: `${s.realFailures} real (non-flaky) failures${incidentNote} in ${s.totalRuns} runs (${failRatePct}%) — caught late`,
     });
   }
-  // Rank by how often it really fails late (impact), tiebreak by cost then name.
-  out.sort((a, b) => b.realFailures - a.realFailures
+  // Rank by DISTINCT incidents (a long single outage shouldn't outrank many
+  // separate problems, #150.3), then raw real failures, then cost, then name.
+  out.sort((a, b) => b.incidents - a.incidents
+    || b.realFailures - a.realFailures
     || b.minutesInWindow - a.minutesInWindow
     || a.name.localeCompare(b.name));
   return out.slice(0, cfg.topN);

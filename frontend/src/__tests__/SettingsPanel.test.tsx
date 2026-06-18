@@ -24,7 +24,7 @@ const CONFIG: ConfigResponse = {
       digest: { enabled: true, hourLocal: 8 },
       events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
         ready: false, overdue: false, 'prod-live': true, 'queue-stalled': true,
-        'duration-regression': true, 'runner-starvation': true },
+        'duration-regression': true, 'runner-starvation': true, 'budget-breach': true },
     },
   },
   readOnlyKeys: ['tokenSource', 'apiUrl', 'port', 'ancestrySource'],

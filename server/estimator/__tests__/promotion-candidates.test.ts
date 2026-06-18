@@ -44,6 +44,44 @@ describe('computePromotionCandidates — signal & bounds', () => {
     const cands = computePromotionCandidates([stat({ name: 'lint', event: 'pull_request', realFailures: 9 })]);
     expect(cands).toEqual([]);
   });
+
+  it('treats a check sharded DIFFERENTLY across tiers as covered (#150.1 shard-insensitive)', () => {
+    // unit sharded /8 in the queue, /3 on PRs — same check, different shard count.
+    const cands = computePromotionCandidates([
+      stat({ name: 'static-checks / test: unit (1/8)', event: 'merge_group', realFailures: 7 }),
+      stat({ name: 'static-checks / test: unit (1/3)', event: 'pull_request', totalRuns: 200, realFailures: 0 }),
+    ]);
+    expect(cands).toEqual([]); // covered on PRs despite the different shard suffix
+  });
+
+  it('still promotes a queue-only check with no PR coverage even when sharded', () => {
+    const [c] = computePromotionCandidates([
+      stat({ name: 'integration (2/4)', event: 'merge_group', realFailures: 5 }),
+    ]);
+    expect(c).toMatchObject({ suggestedTier: 'every PR push (catch pre-enqueue)' });
+  });
+
+  it('ranks by distinct INCIDENTS, not raw failures (#150.3 — a long outage ranks low)', () => {
+    const cands = computePromotionCandidates([
+      // a week-long outage: 40 reds but ONE root cause
+      stat({ name: 'outage', event: 'merge_group', realFailures: 40, incidents: 1 }),
+      // genuinely recurring-late: fewer reds but many distinct problems
+      stat({ name: 'recurring', event: 'merge_group', realFailures: 12, incidents: 9 }),
+    ]);
+    expect(cands.map((c) => c.name)).toEqual(['recurring', 'outage']); // incidents win over raw count
+    expect(cands[0].reason).toMatch(/12 real .*across 9 incidents/);
+  });
+
+  it('omits the incident note when every failure is its own incident', () => {
+    const [c] = computePromotionCandidates([stat({ name: 'x', event: 'push', realFailures: 4, incidents: 4 })]);
+    expect(c.incidents).toBe(4);
+    expect(c.reason).not.toMatch(/incident/);
+  });
+
+  it('falls back to realFailures as incidents when not supplied', () => {
+    const [c] = computePromotionCandidates([stat({ name: 'x', event: 'push', realFailures: 5 })]);
+    expect(c.incidents).toBe(5);
+  });
 });
 
 describe('computePromotionCandidates — thresholds & ranking', () => {

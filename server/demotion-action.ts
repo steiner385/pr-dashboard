@@ -15,6 +15,7 @@
 
 import type { GraphqlClient } from './pr-actions';
 import type { DemotionCandidate } from './estimator/demotion-candidates';
+import { openScaffoldDraftPr, type DraftPrResult } from './scaffold-pr';
 
 /** Where a candidate's gating most likely lives, derived from its check name.
  *  KinDash names a reusable workflow `_<callerJob>.yml` and its checks
@@ -120,61 +121,17 @@ export function buildDemotionProposal(candidate: DemotionCandidate): DemotionPro
   };
 }
 
-// ---- GraphQL orchestration --------------------------------------------------
-
-interface RepoHead {
-  repository: { id: string; defaultBranchRef: { name: string; target: { oid: string } } | null } | null;
-}
-const REPO_HEAD = `query($owner:String!,$repo:String!){
-  repository(owner:$owner,name:$repo){ id defaultBranchRef{ name target{ oid } } }
-}`;
-
-const CREATE_REF = `mutation($repositoryId:ID!,$name:String!,$oid:GitObjectID!){
-  createRef(input:{repositoryId:$repositoryId,name:$name,oid:$oid}){ ref{ name } }
-}`;
-
-const CREATE_COMMIT = `mutation($branch:CommittableBranch!,$message:CommitMessage!,$additions:[FileAddition!]!,$oid:GitObjectID!){
-  createCommitOnBranch(input:{branch:$branch,message:$message,
-    fileChanges:{additions:$additions},expectedHeadOid:$oid}){ commit{ oid } }
-}`;
-
-const CREATE_PR = `mutation($repositoryId:ID!,$base:String!,$head:String!,$title:String!,$body:String!){
-  createPullRequest(input:{repositoryId:$repositoryId,baseRefName:$base,headRefName:$head,
-    title:$title,body:$body,draft:true}){ pullRequest{ number url } }
-}`;
-
-export interface DraftPrResult { number: number; url: string; branch: string; }
+// ---- GraphQL orchestration (shared with the promotion lever) ----------------
+// Re-export the result type so existing importers (api.ts) are unchanged; the
+// branch/commit/PR mutations live once in scaffold-pr.ts.
+export type { DraftPrResult };
 
 /**
- * Open the draft proposal PR: branch off the default branch, commit the doc via
- * createCommitOnBranch (a verified bot commit — no local git), open a draft PR.
+ * Open the demotion draft proposal PR via the shared scaffold-PR orchestration.
  * Throws on the first failed mutation (the API layer maps it to an HTTP error).
  */
 export async function openDemotionDraftPr(
   client: GraphqlClient, owner: string, repo: string, candidate: DemotionCandidate,
 ): Promise<DraftPrResult> {
-  const proposal = buildDemotionProposal(candidate);
-  const head = await client.graphql<RepoHead>(REPO_HEAD, { owner, repo });
-  const repository = head.repository;
-  if (!repository || !repository.defaultBranchRef) {
-    throw new Error(`cannot resolve default branch for ${owner}/${repo}`);
-  }
-  const repositoryId = repository.id;
-  const baseRef = repository.defaultBranchRef.name;
-  const baseOid = repository.defaultBranchRef.target.oid;
-
-  await client.graphql(CREATE_REF, {
-    repositoryId, name: `refs/heads/${proposal.branch}`, oid: baseOid,
-  });
-  await client.graphql(CREATE_COMMIT, {
-    branch: { repositoryNameWithOwner: `${owner}/${repo}`, branchName: proposal.branch },
-    message: { headline: proposal.title },
-    additions: [{ path: proposal.path, contents: Buffer.from(proposal.doc, 'utf8').toString('base64') }],
-    oid: baseOid,
-  });
-  const pr = await client.graphql<{ createPullRequest: { pullRequest: { number: number; url: string } } }>(
-    CREATE_PR,
-    { repositoryId, base: baseRef, head: proposal.branch, title: proposal.title, body: proposal.body },
-  );
-  return { number: pr.createPullRequest.pullRequest.number, url: pr.createPullRequest.pullRequest.url, branch: proposal.branch };
+  return openScaffoldDraftPr(client, owner, repo, buildDemotionProposal(candidate));
 }

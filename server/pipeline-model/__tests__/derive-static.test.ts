@@ -3,9 +3,24 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { deriveStaticGraph } from '../derive-static';
+import { assembleDerivedModel } from '../derived/assemble';
+import { gatingClosure } from '../gating';
 
 const fx = (name: string) => readFileSync(join(__dirname, 'fixtures', name), 'utf8');
 const files = () => ({ 'ci.yml': fx('ci.yml'), '_static.yml': fx('_static.yml') });
+
+describe('checkMeta needs (DAG edges, roadmap 5.1)', () => {
+  it('serializes a check’s dependencies from the caller needs graph', () => {
+    const g = deriveStaticGraph(files());
+    const model = assembleDerivedModel(g, gatingClosure(g, 'ci'), new Map());
+    const build = model.checkMeta.find((m) => m.check === 'build: production');
+    // build `needs: [static-checks]` → its needs include the static-checks leaves
+    expect(build?.needs?.some((n) => n.startsWith('static-checks'))).toBe(true);
+    // a leaf with no deps has empty needs
+    const heavy = model.checkMeta.find((m) => m.check === 'heavy: full');
+    expect(heavy?.needs).toEqual([]);
+  });
+});
 
 describe('deriveStaticGraph', () => {
   it('expands a reusable workflow into one CheckNode per callee leaf (matrix expanded)', () => {

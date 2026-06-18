@@ -101,9 +101,39 @@ describe('useDashboard', () => {
   });
 });
 
+describe('useDashboard staleness (roadmap 5.6 — feed stalled while socket open)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('is not stale immediately after a frame', () => {
+    const { result } = renderHook(() => useDashboard());
+    act(() => { MockEventSource.instances[0]!.fireMessage(JSON.stringify(SAMPLE_STATE)); });
+    expect(result.current.stale).toBe(false);
+  });
+
+  it('goes stale when no frame arrives for the staleness window (socket still up)', () => {
+    const { result } = renderHook(() => useDashboard());
+    act(() => { MockEventSource.instances[0]!.fireMessage(JSON.stringify(SAMPLE_STATE)); });
+    act(() => { vi.advanceTimersByTime(91_000); });
+    expect(result.current.stale).toBe(true);
+    expect(result.current.connected).toBe(true); // still connected — just no fresh data
+  });
+
+  it('clears stale when a fresh frame arrives', () => {
+    const { result } = renderHook(() => useDashboard());
+    act(() => { MockEventSource.instances[0]!.fireMessage(JSON.stringify(SAMPLE_STATE)); });
+    act(() => { vi.advanceTimersByTime(91_000); });
+    expect(result.current.stale).toBe(true);
+    act(() => { MockEventSource.instances[0]!.fireMessage(JSON.stringify(SAMPLE_STATE)); });
+    expect(result.current.stale).toBe(false);
+  });
+});
+
 describe('useDashboard browser notifications (issue #19)', () => {
+  // Display text is server-rendered (ev.rendered) — the single source of truth.
   const EV = { repo: 'acme/widgets', prNumber: 7, title: 'fix: the thing',
-    type: 'ci-failed', detail: 'a required check failed' };
+    type: 'ci-failed', detail: 'a required check failed',
+    rendered: { title: 'acme/widgets#7 CI failed', body: 'fix: the thing — a required check failed' } };
 
   it('starts with the bell off and reports support', () => {
     const { result } = renderHook(() => useDashboard());
@@ -154,7 +184,7 @@ describe('useDashboard browser notifications (issue #19)', () => {
     expect(result.current.notifyEnabled).toBe(false);
   });
 
-  it('an incoming SSE notification event shows a Web Notification when enabled', async () => {
+  it('shows the server-rendered title/body verbatim when enabled', async () => {
     const { result } = renderHook(() => useDashboard());
     await act(async () => { result.current.toggleNotify(); });
     act(() => { MockEventSource.instances[0]!.fireNamed('notification', JSON.stringify(EV)); });
@@ -163,16 +193,24 @@ describe('useDashboard browser notifications (issue #19)', () => {
     expect(MockNotification.instances[0]!.opts?.body).toBe('fix: the thing \u2014 a required check failed');
   });
 
-  it('a duration-regression event titles the repo (never "repo#0") with the check in the body', async () => {
+  it('displays the rendered strings as-is for a repo-level event (server owns the subject rule)', async () => {
     const { result } = renderHook(() => useDashboard());
     await act(async () => { result.current.toggleNotify(); });
     act(() => { MockEventSource.instances[0]!.fireNamed('notification', JSON.stringify({
       repo: 'acme/widgets', prNumber: 0, title: 'build-test', type: 'duration-regression',
-      detail: 'p50 4m \u2192 10m (\u00d72.5, merge_group) since 2026-06-09T14:00:00Z' })); });
+      detail: 'p50 4m \u2192 10m', rendered: { title: 'acme/widgets duration regression', body: 'build-test \u2014 p50 4m \u2192 10m' } })); });
     expect(MockNotification.instances).toHaveLength(1);
     expect(MockNotification.instances[0]!.title).toBe('acme/widgets duration regression');
     expect(MockNotification.instances[0]!.title).not.toContain('#0');
     expect(MockNotification.instances[0]!.opts?.body).toContain('build-test');
+  });
+
+  it('skips an event with no server-rendered text (pre-upgrade frame) rather than re-deriving', async () => {
+    const { result } = renderHook(() => useDashboard());
+    await act(async () => { result.current.toggleNotify(); });
+    const { rendered, ...noRendered } = EV;
+    act(() => { MockEventSource.instances[0]!.fireNamed('notification', JSON.stringify(noRendered)); });
+    expect(MockNotification.instances).toHaveLength(0);
   });
 
   it('no Web Notification while the bell is off', () => {

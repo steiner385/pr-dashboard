@@ -25,6 +25,8 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 .app { max-width: min(1400px, 96vw); margin: 0 auto; padding: 16px 20px 60px; }
 header { display: flex; align-items: baseline; gap: 14px; }
 header h1 { font-size: 20px; }
+.workspace-link { font-size: 12px; color: var(--accent, #6af); text-decoration: none; opacity: 0.85; }
+.workspace-link:hover { opacity: 1; text-decoration: underline; }
 .generated, .stale, .empty { color: var(--muted); font-size: 12px; }
 .stale { color: var(--fail); }
 /* Liveness indicator (UX-M5): the dot carries "connected", so the timestamp
@@ -547,6 +549,14 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
 /* train killers that are ALSO flaky (#38): amber-highlighted rows */
 .tk-flaky td { background: color-mix(in srgb, var(--amber) 12%, transparent); }
 .tk-flaky .metric-job-name { color: var(--amber); font-weight: 700; }
+/* eject reason taxonomy (roadmap 4.4b): a small tag + lead remedy */
+.tk-reason { font-size: 12px; white-space: nowrap; }
+.tk-reason-tag { display: inline-block; padding: 0 6px; border-radius: 10px; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .02em; }
+.tk-reason-timeout { background: color-mix(in srgb, var(--amber) 22%, transparent); color: var(--amber); }
+.tk-reason-test-fail { background: color-mix(in srgb, var(--fail) 18%, transparent); color: var(--fail); }
+.tk-reason-infra { background: color-mix(in srgb, var(--muted) 22%, transparent); color: var(--muted); }
+.tk-reason-unknown { background: color-mix(in srgb, var(--muted) 14%, transparent); color: var(--muted); }
+.tk-remedy { color: var(--muted); }
 /* duration-regression strip (issue #41): compact active-alert chips */
 .regression-strip { list-style: none; margin: 0; padding: 0;
   display: flex; flex-wrap: wrap; gap: 6px; }

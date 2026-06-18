@@ -783,7 +783,7 @@ describe('notifications config', () => {
       digest: { enabled: false, hourLocal: 8 }, // issue #51 — off by default
       events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
         ready: false, overdue: false, 'prod-live': true, 'queue-stalled': true,
-        'duration-regression': true, 'runner-starvation': true },
+        'duration-regression': true, 'runner-starvation': true, 'budget-breach': true },
     });
   });
 
@@ -794,7 +794,7 @@ describe('notifications config', () => {
     expect(cfg.notifications.command).toEqual(['notify-send', '{title}', '{body}']); // default kept
     expect(cfg.notifications.events).toEqual({ 'ci-failed': true, 'group-failed': true,
       'queue-blocked': true, ready: true, overdue: false, 'prod-live': true,
-      'queue-stalled': true, 'duration-regression': true, 'runner-starvation': true });
+      'queue-stalled': true, 'duration-regression': true, 'runner-starvation': true, 'budget-breach': true });
   });
 
   it('accepts a custom command array', () => {

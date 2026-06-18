@@ -26,6 +26,10 @@ export interface RecommendationInputs {
     runConclusion: { total: number; runFailed: number; advisoryNoise: number; requiredConfigured: boolean };
     adminBypass: { rate: number | null; merges: number } }[];
   lint: { repo: string; findings: { rule: string; severity: 'warn' | 'info'; job: string; message: string }[] }[];
+  /** Suggested requiredCheckPrefixes per repo (roadmap 4.5 lever) — derived from
+   *  the observed merge_group check names, to make the set-required-prefixes
+   *  recommendation actionable (it carries the exact value to configure). */
+  prefixSuggestions?: { repo: string; prefixes: string[] }[];
 }
 
 const PRIORITY_RANK: Record<RecPriority, number> = { high: 0, medium: 1, low: 2 };
@@ -104,9 +108,15 @@ export function deriveRecommendations(inp: RecommendationInputs): Recommendation
     }
     // Can't separate gate failures from advisory noise without prefixes.
     if (!rc.requiredConfigured && rc.runFailed > 0) {
+      // Roadmap 4.5 lever: make it actionable — suggest the exact prefixes from
+      // the observed merge_group check names so the operator can configure them.
+      const suggested = inp.prefixSuggestions?.find((p) => p.repo === q.repo)?.prefixes ?? [];
+      const suggestion = suggested.length
+        ? ` — suggested from observed checks: requiredCheckPrefixes: [${suggested.map((p) => `"${p}"`).join(', ')}] (set in .pr-dashboard.yml)`
+        : '';
       recs.push({ repo: q.repo, kind: 'set-required-prefixes', priority: 'low',
         title: 'set requiredCheckPrefixes',
-        detail: 'no requiredCheckPrefixes configured — every failed merge_group run reads as advisory, so real gate failures can’t be separated' });
+        detail: `no requiredCheckPrefixes configured — every failed merge_group run reads as advisory, so real gate failures can’t be separated${suggestion}` });
     }
     // People routing around the queue (≥10% sustained = alarm).
     if (q.adminBypass.rate != null && q.adminBypass.rate > 0.10 && q.adminBypass.merges >= 5) {

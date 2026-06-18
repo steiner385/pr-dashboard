@@ -25,6 +25,9 @@ export interface CheckMeta {
   /** True when the check is an unconditional required gate on the merge queue —
    *  moving/removing it would break branch protection (hard safety invariant). */
   isRequiredMergeGate: boolean;
+  /** The checks this one depends on (DAG edges, via the caller `needs:` graph).
+   *  Optional only so pre-needs fixtures stay valid; the assembler always sets it. */
+  needs?: string[];
 }
 
 export interface DerivedModel {
@@ -64,7 +67,14 @@ export function assembleDerivedModel(
 
   const checks = [...byCheck.keys()].sort();
 
-  // per-check actionability metadata (triggers / provenance / confidence / gate-safety)
+  // jobId → the check names it owns (for mapping the caller `needs:` graph to checks)
+  const checksByJob = new Map<string, Set<string>>();
+  for (const c of graph.checks) {
+    const s = checksByJob.get(c.callerJobId) ?? new Set<string>();
+    s.add(c.checkName); checksByJob.set(c.callerJobId, s);
+  }
+
+  // per-check actionability metadata (triggers / provenance / confidence / gate-safety / needs)
   const checkMeta: CheckMeta[] = checks.map((check) => {
     const nodes = byCheck.get(check)!;
     const triggers = [...new Set(nodes.flatMap((n) => n.triggers.events.map((e) => e.kind)))];
@@ -73,7 +83,11 @@ export function assembleDerivedModel(
     const confidence = nodes.some((n) => n.confidence === 'low') ? 'low' : 'high';
     const gatesMergeGroup = gatesAt.get(check)?.has('merge_group') ?? false;
     const unconditional = nodes.some((n) => gatingCallers.has(n.callerJobId) && !conditionalCallers.has(n.callerJobId));
-    return { check, triggers, provenance: [...provMap.values()], confidence, isRequiredMergeGate: gatesMergeGroup && unconditional };
+    // DAG edges (roadmap 5.1): the checks this check depends on, via the caller `needs:` graph.
+    const callerJobs = [...new Set(nodes.map((n) => n.callerJobId))];
+    const neededJobs = new Set(callerJobs.flatMap((j) => graph.callerNeeds[j] ?? []));
+    const needs = [...new Set([...neededJobs].flatMap((j) => [...(checksByJob.get(j) ?? [])]))].filter((n) => n !== check).sort();
+    return { check, triggers, provenance: [...provMap.values()], confidence, isRequiredMergeGate: gatesMergeGroup && unconditional, needs };
   });
 
   // For checkRunsElsewhere: a check is "active" if it has an observed cell

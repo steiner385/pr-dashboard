@@ -130,15 +130,17 @@ const PAYLOAD: MetricsPayload = {
   promotionCandidates: [
     { repo: 'acme/widgets', candidates: [
       { name: 'e2e', event: 'push', currentTier: 'every push to main (post-merge)',
-        suggestedTier: 'merge queue (pre-merge gate)', realFailures: 6, failRatePct: 5,
+        suggestedTier: 'merge queue (pre-merge gate)', realFailures: 6, incidents: 4, failRatePct: 5,
         runsInWindow: 120, minutesInWindow: 600,
-        reason: '6 real (non-flaky) failures in 120 runs (5%) — caught late' },
+        reason: '6 real (non-flaky) failures across 4 incidents in 120 runs (5%) — caught late' },
     ] },
   ],
   trainKillers: [
     { repo: 'acme/widgets', batchSize: 6, medianGroupRunSecs: 1800, checks: [
-      { name: 'merge-group e2e', ejects: 7, estCostTrainHours: 21, flakeRatePct: 90 },
-      { name: 'db-migrations', ejects: 2, estCostTrainHours: 6, flakeRatePct: null },
+      { name: 'merge-group e2e', ejects: 7, estCostTrainHours: 21, flakeRatePct: 90,
+        reasonCounts: { timeout: 5, 'test-fail': 1, infra: 1, unknown: 0 }, dominantReason: 'timeout', remedy: 'rerun (raise the timeout if it’s chronic)' },
+      { name: 'db-migrations', ejects: 2, estCostTrainHours: 6, flakeRatePct: null,
+        reasonCounts: { timeout: 0, 'test-fail': 2, infra: 0, unknown: 0 }, dominantReason: 'test-fail', remedy: 'fix the failing check' },
     ] },
   ],
   criticalPath: [
@@ -270,6 +272,10 @@ function mockFetchOk(payload: MetricsPayload = PAYLOAD) {
     if (String(url).includes('/api/demotion/draft-pr')) {
       return { ok: true, status: 200,
         json: async () => ({ number: 99, url: 'https://github.com/o/r/pull/99', branch: 'chore/demote-x' }) } as Response;
+    }
+    if (String(url).includes('/api/promotion/draft-pr')) {
+      return { ok: true, status: 200,
+        json: async () => ({ number: 88, url: 'https://github.com/o/r/pull/88', branch: 'chore/promote-x' }) } as Response;
     }
     return fn(url);
   });
@@ -649,6 +655,8 @@ describe('MetricsView — train killers panel (issue #38)', () => {
     expect(within(killer).getByText('7')).toBeInTheDocument();      // ejects
     expect(within(killer).getByText('21.0')).toBeInTheDocument();   // train-hours
     expect(within(killer).getByText(/90%/)).toBeInTheDocument();    // flake cross-ref
+    expect(within(killer).getByText('timeout')).toBeInTheDocument();        // reason tag (4.4b)
+    expect(within(killer).getByText(/rerun/)).toBeInTheDocument();          // lead remedy
   });
 
   it("highlights 'killer AND flaky' rows amber (tk-flaky); flake-unknown rows show – and stay plain", async () => {
@@ -1355,5 +1363,14 @@ describe('MetricsView sub-tabs (page cleanup)', () => {
     fireEvent.click(btn);
     const link = await screen.findByText('draft PR ↗');
     expect(link).toHaveAttribute('href', 'https://github.com/o/r/pull/99');
+  });
+
+  it('the promotion Draft PR button posts and renders the resulting PR link (#150.2)', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    const btn = await screen.findByTestId('promotion-draft-e2e/push');
+    fireEvent.click(btn);
+    const link = await screen.findByText('draft PR ↗');
+    expect(link).toHaveAttribute('href', 'https://github.com/o/r/pull/88');
   });
 });

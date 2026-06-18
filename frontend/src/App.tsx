@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDashboard } from './useDashboard';
 import { readKioskConfig } from './kiosk';
 import { PrRow } from './PrRow';
-import { StatusStrip, bucketPr, type Bucket } from './StatusStrip';
+import { StatusStrip, bucketPr, isActivePr, isFailedPr, type Bucket } from './StatusStrip';
 import { QueueTrain } from './QueueTrain';
 import { SettingsPanel } from './SettingsPanel';
 import { LegendPanel } from './LegendPanel';
@@ -47,19 +47,6 @@ function writeCollapsedSet(set: Set<string>): void {
   } catch {
     // private-mode storage full — silently ignore
   }
-}
-
-// ---- active / failed classification for inline summary ----
-
-function isActive(pr: PrView): boolean {
-  const { stage } = pr.stage;
-  return stage === 'ci' || stage === 'queue' || stage === 'qa-deploy';
-}
-
-function isFailed(pr: PrView): boolean {
-  const { stage, substate } = pr.stage;
-  return (stage === 'parked' && substate === 'ci-failed') ||
-    (stage === 'queue' && substate === 'group-failed');
 }
 
 export function App() {
@@ -184,6 +171,8 @@ export function App() {
     <main className={kiosk ? 'app kiosk' : 'app'}>
       <header>
         <h1>PR Pipeline</h1>
+        <a className="workspace-link" href="?workspace=1"
+          title="Switch to the new CI/CD workspace (now the default)">✨ New workspace →</a>
         {!connected && (
           <span className="stale disconnected">disconnected — retrying…</span>
         )}
@@ -331,8 +320,8 @@ export function App() {
         const hiddenCount = r.prs.length - visiblePrs.length;
 
         // Inline summary counts (computed over ALL prs in the repo, regardless of filter)
-        const activeCount = r.prs.filter(isActive).length;
-        const failedCount = r.prs.filter(isFailed).length;
+        const activeCount = r.prs.filter(isActivePr).length;
+        const failedCount = r.prs.filter(isFailedPr).length;
 
         return (
           <section key={r.repo} id={`repo-section-${i}`}>

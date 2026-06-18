@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { scrollBehavior } from './motion';
-import type { HeadlineStat, MetricsBucket, MetricsPayload, MetricsWindow, DemotionCandidate } from './types';
+import type { HeadlineStat, MetricsBucket, MetricsPayload, MetricsWindow, DemotionCandidate, PromotionCandidate } from './types';
 import { RunnerRouting } from './RunnerRouting';
 import { LEAD_TIME_SEGMENTS } from './leadtime';
 import {
@@ -249,6 +249,23 @@ export function MetricsView({ now, focusCostNonce }: {
       setDemotePr((p) => ({ ...p, [key]: { url: data.url } }));
     } catch (e) {
       setDemotePr((p) => ({ ...p, [key]: { error: e instanceof Error ? e.message : String(e) } }));
+    }
+  };
+  // Per-candidate promotion draft-PR state (#150.2), keyed identically.
+  const [promotePr, setPromotePr] = useState<Record<string, { loading?: boolean; url?: string; error?: string }>>({});
+  const draftPromotionPr = async (repo: string, candidate: PromotionCandidate) => {
+    const key = `${repo}::${candidate.name}/${candidate.event}`;
+    setPromotePr((p) => ({ ...p, [key]: { loading: true } }));
+    try {
+      const res = await fetch('/api/promotion/draft-pr', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ repo, candidate }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setPromotePr((p) => ({ ...p, [key]: { url: data.url } }));
+    } catch (e) {
+      setPromotePr((p) => ({ ...p, [key]: { error: e instanceof Error ? e.message : String(e) } }));
     }
   };
   const [section, setSection] = useState<MetricsSection>(() => {
@@ -1165,24 +1182,41 @@ export function MetricsView({ now, focusCostNonce }: {
                   <th>check</th><th>runs on</th>
                   <th title="real (non-flaky) failures — failing runs minus same-sha-resolved flakes">real fails</th>
                   <th>suggested</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
-                {p.candidates.map((c) => (
+                {p.candidates.map((c) => {
+                  const key = `${p.repo}::${c.name}/${c.event}`;
+                  const st = promotePr[key];
+                  return (
                   <tr key={`${c.name}/${c.event}`} data-testid={`promotion-${c.name}/${c.event}`}>
                     <td className="metric-job-name">{c.name}</td>
                     <td>{c.currentTier}</td>
                     <td title={c.reason} className="var-high">{c.realFailures} ({fmtPct(c.failRatePct)})</td>
                     <td><span className="promotion-arrow">↑ {c.suggestedTier}</span></td>
+                    <td>
+                      {st?.url
+                        ? <a className="demotion-pr-link" href={st.url} target="_blank" rel="noreferrer">draft PR ↗</a>
+                        : st?.error
+                          ? <span className="pr-action-msg err" title={st.error}>failed</span>
+                          : <button type="button" className="demotion-draft-btn"
+                              data-testid={`promotion-draft-${c.name}/${c.event}`}
+                              disabled={st?.loading}
+                              onClick={() => draftPromotionPr(p.repo, c)}>
+                              {st?.loading ? 'opening…' : 'Draft PR'}
+                            </button>}
+                    </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
             <p className="metric-note">
               Checks failing for real (flakes excluded) at a late tier with no earlier coverage
-              of the same name — shifting left catches them sooner. A merge_group failure already
-              run on PRs is omitted (merge-emergent). Note: coverage under a different name (e.g.
-              an affected-slice job) isn't recognized — confirm before acting. Advisory.
+              (shard-insensitive) — shifting left catches them sooner. A merge_group failure already
+              run on PRs is omitted (merge-emergent). Note: coverage under a different NAME (e.g.
+              an affected-slice job) isn't yet recognized — confirm before acting. Advisory.
             </p>
           </div>
         ))}
@@ -1255,6 +1289,7 @@ export function MetricsView({ now, focusCostNonce }: {
                   <th title={defTitle(DEFS.trainEjects)}>trains ejected</th>
                   <th title={defTitle(DEFS.ejectCost)}>est. cost (train-hours)</th>
                   <th title={defTitle(DEFS.flakeRate)}>flake rate</th>
+                  <th title="Why the trains ejected, classified from the failing check's conclusion (roadmap 4.4b) — with the lead remedy">reason → remedy</th>
                 </tr>
               </thead>
               <tbody>
@@ -1267,6 +1302,11 @@ export function MetricsView({ now, focusCostNonce }: {
                       <td>{c.estCostTrainHours != null ? c.estCostTrainHours.toFixed(1) : '–'}</td>
                       <td>{c.flakeRatePct != null
                         ? `${fmtPct(c.flakeRatePct)}${flaky ? ' ⚐ flaky' : ''}` : '–'}</td>
+                      <td className="tk-reason" title={c.remedy ?? undefined}>
+                        {c.dominantReason
+                          ? <><span className={`tk-reason-tag tk-reason-${c.dominantReason}`}>{c.dominantReason}</span>{c.remedy ? <span className="tk-remedy"> → {c.remedy}</span> : null}</>
+                          : '–'}
+                      </td>
                     </tr>
                   );
                 })}

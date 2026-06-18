@@ -22,6 +22,21 @@ export function bucketPr(pr: PrView): Bucket {
   return 'idle';
 }
 
+/** Is the PR failed? The single source of truth — derived from bucketPr so the
+ *  status-strip tile, the repo summary, and the pipeline header can never
+ *  disagree about what "failed" means. */
+export function isFailedPr(pr: PrView): boolean {
+  return bucketPr(pr) === 'failed';
+}
+
+/** Is the PR moving through an active pipeline stage (CI → queue → QA deploy)?
+ *  Excludes awaiting-prod (waiting, not working) and parked/ready/merged. Shared
+ *  so the legacy summary and the workspace pipeline header classify identically. */
+export function isActivePr(pr: PrView): boolean {
+  const { stage } = pr.stage;
+  return stage === 'ci' || stage === 'queue' || stage === 'qa-deploy';
+}
+
 interface TileConfig { bucket: Bucket; label: string; cssClass: string; title: string; }
 
 /** One-line bucket definitions — surfaced as the tile tooltip and reused by the

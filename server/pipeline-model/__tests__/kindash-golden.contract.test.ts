@@ -109,9 +109,15 @@ describe('KinDash golden model (keystone exit gate)', () => {
       const prod = deriveCiGraph(ci, 'ci');
       expect(prod, 'deriveCiGraph returned null').not.toBeNull();
       const prodPrefixes = prod!.prefixes.filter((p) => p !== 'ci');
+      // deriveCiGraph reports gates by their check DISPLAY NAME; the new parser reports
+      // caller JOB IDs. These agree when name == id, but a job whose `name:` differs from
+      // its id (e.g. validate-e2e-floor → "lint: e2e floor manifest") only matches on the
+      // check name. Accept a prod gate if it matches EITHER a caller job id OR a gating
+      // check-name (both normalized the same way) — the same gate, two representations.
+      const ourGateNames = new Set(res.gates.map((g) => normalizePrefix(g.checkName)));
       const missing = prodPrefixes
         .map((p) => ({ prefix: p, jobId: normalizePrefix(p) }))
-        .filter(({ jobId }) => !ourCallers.has(jobId));
+        .filter(({ jobId }) => !ourCallers.has(jobId) && !ourGateNames.has(jobId));
       expect(
         missing.map((m) => m.prefix),
         `caller job(s) the new parser failed to gate: ${missing.map((m) => `"${m.prefix}" → "${m.jobId}"`).join(', ')}`,

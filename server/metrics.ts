@@ -14,6 +14,8 @@ import {
 } from './estimator/workflow-lint';
 import { computeDemotionCandidates, type DemotionCandidate } from './estimator/demotion-candidates';
 import { computePromotionCandidates, type PromotionCandidate } from './estimator/promotion-candidates';
+import { classifyEject, dominantReason, remedyForReason, type EjectReason } from './estimator/eject-reason';
+import { suggestRequiredPrefixes } from './estimator/required-prefixes';
 
 /**
  * Metrics tab payload (metrics-readability revision). This interface is the
@@ -130,7 +132,13 @@ export interface MetricsPayload {
    *  (max rate across events, ≥ FLAKE_MIN_RUNS); null when unknown. */
   trainKillers: { repo: string; batchSize: number; medianGroupRunSecs: number | null;
     checks: { name: string; ejects: number; estCostTrainHours: number | null;
-      flakeRatePct: number | null }[] }[];
+      flakeRatePct: number | null;
+      /** Per-reason eject tally (roadmap 4.4b): timeout/test-fail/infra/unknown. */
+      reasonCounts: Record<EjectReason, number>;
+      /** The reason to lead with (most ejects; ties → most actionable); null if none. */
+      dominantReason: EjectReason | null;
+      /** The lead remedy for `dominantReason` (rerun vs fix); null when no ejects. */
+      remedy: string | null }[] }[];
   /** Critical path (issue #42): per repo×event (pull_request / merge_group),
    *  the STATIC expected longest chain through the derived needs DAG where
    *  node weight = median pickup wait + median duration. `offPath` lists the
@@ -436,7 +444,11 @@ function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
   const out = new Map<string, T[]>();
   for (const row of rows) {
     const k = key(row);
-    out.set(k, [...(out.get(k) ?? []), row]);
+    // Push into the existing array — NOT `[...existing, row]`, which rebuilds the
+    // whole group every row → O(n²) and ~40s on a 30d window (issue #159).
+    const arr = out.get(k);
+    if (arr) arr.push(row);
+    else out.set(k, [row]);
   }
   return out;
 }
@@ -883,6 +895,7 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
   // checks whose success rate clears the bar over enough distinct runs, ranked by
   // runner-minutes spent (cost × greenness). Advisory; disjoint from flakiness.
   const successByRepo = history.successStatsByRepo(since);
+  const incidentsByRepo = history.failureIncidentsByRepo(since); // #150.3 — distinct red streaks per check
   const demotionCandidates = [...successByRepo]
     .filter(([repo]) => !dropped.has(repo))
     .sort(([a], [b]) => a.localeCompare(b))
@@ -899,9 +912,11 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
       const flakeOf = new Map(
         (flakeByRepo.get(repo) ?? []).map((f) => [`${f.name}${SEP}${f.event}`, f.flakeEvents]),
       );
+      const incidentOf = incidentsByRepo.get(repo) ?? new Map<string, number>();
       const promoStats = stats.map((s) => ({
         name: s.name, event: s.event, totalRuns: s.totalRuns, sumDurationSecs: s.sumDurationSecs,
         realFailures: Math.max(0, s.failingRuns - (flakeOf.get(`${s.name}${SEP}${s.event}`) ?? 0)),
+        incidents: incidentOf.get(`${s.name}${SEP}${s.event}`),
       }));
       return { repo, candidates: computePromotionCandidates(promoStats) };
     })
@@ -924,13 +939,23 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
       const batchSize = batchSizeFor(repo);
       const medianGroupRunSecs = history.medianGroupRun(repo);
       const checks = [...groupBy(rows, (r) => r.checkName)]
-        .map(([name, ejections]) => ({
-          name,
-          ejects: ejections.length, // one row per (group sha, check) — UNIQUE-deduped at write
-          estCostTrainHours: medianGroupRunSecs != null
-            ? (ejections.length * medianGroupRunSecs * batchSize) / 3600 : null,
-          flakeRatePct: flakeRateByRepoName.get(`${repo}${SEP}${name}`) ?? null,
-        }))
+        .map(([name, ejections]) => {
+          // Reason taxonomy (roadmap 4.4b): classify each eject by its conclusion,
+          // tally per reason, and lead with the dominant reason's remedy.
+          const reasonCounts: Record<EjectReason, number> = { timeout: 0, 'test-fail': 0, infra: 0, unknown: 0 };
+          for (const e of ejections) reasonCounts[classifyEject(e.conclusion).reason]++;
+          const lead = dominantReason(reasonCounts);
+          return {
+            name,
+            ejects: ejections.length, // one row per (group sha, check) — UNIQUE-deduped at write
+            estCostTrainHours: medianGroupRunSecs != null
+              ? (ejections.length * medianGroupRunSecs * batchSize) / 3600 : null,
+            flakeRatePct: flakeRateByRepoName.get(`${repo}${SEP}${name}`) ?? null,
+            reasonCounts,
+            dominantReason: lead,
+            remedy: lead ? remedyForReason(lead) : null,
+          };
+        })
         .sort((a, b) => b.ejects - a.ejects || a.name.localeCompare(b.name));
       return { repo, batchSize, medianGroupRunSecs, checks };
     });
@@ -972,7 +997,7 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
         // both the lint p99 and the node's critical-path weight.
         if (foreign?.has(name)) continue;
         const nodeKey = matchingPrefix(name, activeKeys);
-        if (nodeKey != null) namesByNode.set(nodeKey, [...(namesByNode.get(nodeKey) ?? []), name]);
+        if (nodeKey != null) { const a = namesByNode.get(nodeKey); if (a) a.push(name); else namesByNode.set(nodeKey, [name]); }
         // lint joins against EVERY node (event activity doesn't gate a timeout)
         const lintKey = matchingPrefix(name, allKeys);
         if (lintKey != null) {
@@ -1379,8 +1404,12 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
     });
 
   // Recommendations digest (tuning tool): collect the advice the panels above
-  // already computed into one ranked list.
-  const recommendations = deriveRecommendations({ batchAdvisor, queueEfficiency, lint });
+  // already computed into one ranked list. Suggested requiredCheckPrefixes
+  // (roadmap 4.5 lever) come from the observed merge_group check names per repo.
+  const prefixSuggestions = [...mgByRepo.entries()].map(([repo, rows]) => ({
+    repo, prefixes: suggestRequiredPrefixes([...new Set(rows.map((r) => r.checkName))]),
+  }));
+  const recommendations = deriveRecommendations({ batchAdvisor, queueEfficiency, lint, prefixSuggestions });
 
   // Config-change annotations (tuning tool): the in-window tuning-knob changes,
   // exclude-filtered. The client overlays them as chart markers.

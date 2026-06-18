@@ -1,3 +1,9 @@
+// Notification event-type registry — single shared source of truth (server +
+// frontend); see shared/notification-events.ts. Imported for local use below and
+// re-exported so existing frontend importers are unchanged.
+import type { NotificationEventType, NotificationKind } from '../../shared/notification-events';
+export type { NotificationEventType, NotificationKind };
+
 export type StageId = 'ci' | 'parked' | 'ready' | 'queue' | 'qa-deploy' | 'awaiting-prod' | 'merged';
 export interface StageResult {
   stage: StageId; substate: string | null;
@@ -148,7 +154,11 @@ export interface DashboardState {
      *  /health) + awaiting-QA/awaiting-prod drift. Absent for repos with no
      *  deploy config. Mirror of server estimator/deploy-status.ts. */
     deploy?: { envs: { name: string; liveSha: string | null; reachable: boolean }[];
-      awaitingQa: number; awaitingProd: number };
+      awaitingQa: number; awaitingProd: number;
+      /** QA→prod chain with SHA supersession (roadmap 4.4c). */
+      chain?: { entries: { prNumber: number; sha: string | null; mergedAt: string;
+        stage: 'merged' | 'qa' | 'prod'; qaLiveAt: string | null; prodLiveAt: string | null; superseded: boolean }[];
+        inFlight: { prNumber: number; sha: string | null; stage: string } | null; supersededCount: number } };
     /** Advisory Scheduled-lane snapshot (Spec 4): the newest run per
      *  cron-scheduled workflow + the discovered-workflow count. Absent for
      *  repos with no scheduled workflows. Mirror of server poller.ts
@@ -180,14 +190,7 @@ export interface DashboardState {
 // ---- Notifications (issue #19) ----
 // Mirrors of server/notifier.ts — the payload of the named `notification` SSE
 // event and the file-only `notifications` config block (read-only in the UI).
-
-export type NotificationEventType =
-  | 'ci-failed' | 'group-failed' | 'queue-blocked' | 'ready' | 'overdue' | 'prod-live'
-  | 'queue-stalled' | 'duration-regression' | 'runner-starvation';
-
-/** Event types plus 'digest' (issue #51) — the daily summary frame, gated by
- *  `notifications.digest.enabled` rather than the per-event toggles. */
-export type NotificationKind = NotificationEventType | 'digest';
+// (The event-type registry is imported from shared/ at the top of this file.)
 
 export interface NotificationEvent {
   repo: string;
@@ -196,6 +199,10 @@ export interface NotificationEvent {
   title: string;
   type: NotificationKind;
   detail: string;
+  /** Server-rendered display strings — the single source of truth for what the
+   *  bell shows (server/notifier.ts renderNotification). The browser displays
+   *  these verbatim and never re-derives labels/subjects. */
+  rendered?: { title: string; body: string };
 }
 
 export interface NotificationsConfig {
@@ -339,6 +346,8 @@ export interface PromotionCandidate {
   currentTier: string;
   suggestedTier: string;
   realFailures: number;
+  /** Distinct real-failure incidents (consecutive reds collapsed, #150.3) — the rank key. */
+  incidents: number;
   failRatePct: number;
   runsInWindow: number;
   minutesInWindow: number;
@@ -415,7 +424,13 @@ export interface MetricsPayload {
    *  without an observed median. flakeRatePct cross-references the flake radar. */
   trainKillers: { repo: string; batchSize: number; medianGroupRunSecs: number | null;
     checks: { name: string; ejects: number; estCostTrainHours: number | null;
-      flakeRatePct: number | null }[] }[];
+      flakeRatePct: number | null;
+      /** Per-reason eject tally (roadmap 4.4b). */
+      reasonCounts: Record<'timeout' | 'test-fail' | 'infra' | 'unknown', number>;
+      /** Reason to lead with (most ejects; ties → most actionable); null if none. */
+      dominantReason: 'timeout' | 'test-fail' | 'infra' | 'unknown' | null;
+      /** Lead remedy for `dominantReason`; null when no ejects. */
+      remedy: string | null }[] }[];
   /** Critical path (issue #42): static expected longest chain per repo×event
    *  (node weight = median wait + median duration); offPath = 10 lowest-slack
    *  jobs. Window-independent (last-N medians) — label it as such. */

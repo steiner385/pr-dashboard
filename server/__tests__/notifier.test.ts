@@ -14,7 +14,7 @@ const ALL_ON: NotificationsConfig = {
   digest: { enabled: false, hourLocal: 8 },
   events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
     ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
-    'duration-regression': true, 'runner-starvation': true },
+    'duration-regression': true, 'runner-starvation': true, 'budget-breach': true },
 };
 
 type ExecCall = { cmd: string; args: string[]; cb: (err: Error | null) => void };
@@ -207,6 +207,7 @@ describe('Notifier events config filtering', () => {
       ready: false, overdue: false, 'prod-live': true, 'queue-stalled': true,
       'duration-regression': true, // alert types — default ON (issue #41)
       'runner-starvation': true,    // (issue #45)
+      'budget-breach': true,        // (roadmap 5.6c)
     });
     const h = harness({ ...DEFAULT_NOTIFICATIONS, enabled: true });
     h.observe(stage('ci'), stage('ready', 'armed'));
@@ -314,6 +315,16 @@ describe('renderNotification', () => {
       title: 'fix: the thing', type: 'prod-live', detail: 'live on prod' });
     expect(r.title).toBe('acme/widgets#7 live on prod');
     expect(r.body).toBe('fix: the thing — live on prod');
+  });
+
+  it('the fired SSE event carries the SAME rendered strings (single source of truth)', () => {
+    const h = harness();
+    h.observe(stage('ci'), stage('parked', 'ci-failed'));
+    expect(h.events).toHaveLength(1);
+    const ev = h.events[0]!;
+    // the browser bell consumes ev.rendered verbatim — it must equal renderNotification(ev)
+    expect(ev.rendered).toEqual(renderNotification(ev));
+    expect(ev.rendered?.title).toBe('acme/widgets#7 CI failed');
   });
 });
 
@@ -432,6 +443,58 @@ describe('Notifier durationRegression', () => {
     expect(title).toBe('acme/widgets duration regression');
     expect(title).not.toContain('#0');
     expect(body).toBe(`build-test — ${DETAIL}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Roadmap 5.6c: tool-global budget-breach events
+// ---------------------------------------------------------------------------
+
+describe('Notifier budgetBreach', () => {
+  const DETAIL = 'minutes — 12,000 of 10,000 (120%) over the trailing 30d';
+
+  it('fires once per (scope, kind) while the breach holds', () => {
+    const h = harness();
+    h.notifier.budgetBreach('fleet', 'minutes', true, DETAIL);
+    h.notifier.budgetBreach('fleet', 'minutes', true, DETAIL);
+    expect(h.events).toHaveLength(1);
+    expect(h.events[0]).toMatchObject({ repo: 'fleet', prNumber: 0, title: 'minutes', type: 'budget-breach', detail: DETAIL });
+  });
+
+  it('re-fires after the breach clears (spend back under threshold) and re-enters', () => {
+    const h = harness();
+    h.notifier.budgetBreach('fleet', 'minutes', true, DETAIL);
+    h.notifier.budgetBreach('fleet', 'minutes', false, '');
+    h.notifier.budgetBreach('fleet', 'minutes', true, DETAIL);
+    expect(h.events.map((e) => e.type)).toEqual(['budget-breach', 'budget-breach']);
+  });
+
+  it('debounce is keyed per kind — minutes and cost breach independently', () => {
+    const h = harness();
+    h.notifier.budgetBreach('fleet', 'minutes', true, DETAIL);
+    h.notifier.budgetBreach('fleet', 'cost', true, '$1,400 of $1,000');
+    expect(h.events).toHaveLength(2);
+  });
+
+  it('prune does not clear the debounce (tool-global key, no PR lifecycle)', () => {
+    const h = harness();
+    h.notifier.budgetBreach('fleet', 'minutes', true, DETAIL);
+    h.notifier.prune(new Set());
+    h.notifier.budgetBreach('fleet', 'minutes', true, DETAIL);
+    expect(h.events).toHaveLength(1);
+  });
+
+  it('renders "fleet budget breach" titled by scope, never "#0"', () => {
+    const { title, body } = renderNotification({ repo: 'fleet', prNumber: 0, title: 'minutes', type: 'budget-breach', detail: DETAIL });
+    expect(title).toBe('fleet budget breach');
+    expect(title).not.toContain('#0');
+    expect(body).toBe(`minutes — ${DETAIL}`);
+  });
+
+  it('events config can disable budget-breach', () => {
+    const h = harness({ ...ALL_ON, events: { ...ALL_ON.events, 'budget-breach': false } });
+    h.notifier.budgetBreach('fleet', 'minutes', true, DETAIL);
+    expect(h.events).toHaveLength(0);
   });
 });
 
@@ -591,7 +654,9 @@ describe('Notifier digest delivery (issue #51)', () => {
     const h = harness(WITH_HOOK);
     h.notifier.sendDigest('Daily CI digest (24h) — 14 merges, 2 ejects', 'r/a:\n  merged: 14');
     expect(h.events).toEqual([{ repo: '', prNumber: 0, type: 'digest',
-      title: 'Daily CI digest (24h) — 14 merges, 2 ejects', detail: 'r/a:\n  merged: 14' }]);
+      title: 'Daily CI digest (24h) — 14 merges, 2 ejects', detail: 'r/a:\n  merged: 14',
+      // pre-rendered display strings ride along for the browser bell (digest passes through)
+      rendered: { title: 'Daily CI digest (24h) — 14 merges, 2 ejects', body: 'r/a:\n  merged: 14' } }]);
     // command sink gets the digest subject/body verbatim (no "repo#0" mangling)
     expect(h.execCalls[0]!.args).toEqual([
       'Daily CI digest (24h) — 14 merges, 2 ejects', 'r/a:\n  merged: 14']);
