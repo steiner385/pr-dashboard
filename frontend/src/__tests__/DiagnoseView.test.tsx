@@ -35,6 +35,17 @@ describe('blockingCheck (pure)', () => {
   it('returns null when everything is green', () => {
     expect(blockingCheck(pr('o/r', 1, [check('lint'), check('build')]))).toBeNull();
   });
+  it('prefers a REAL failure over a flaky one and labels flake (roadmap 5.5)', () => {
+    const b = blockingCheck(pr('o/r', 1, [
+      check('flaky-e2e', { conclusion: 'failure', likelyFlake: true }),
+      check('real-build', { conclusion: 'failure', likelyFlake: false }),
+    ]));
+    expect(b).toMatchObject({ check: { name: 'real-build' }, flaky: false });
+  });
+  it('labels a lone flaky failure as flaky', () => {
+    const b = blockingCheck(pr('o/r', 1, [check('flaky-e2e', { conclusion: 'failure', likelyFlake: true })]));
+    expect(b).toMatchObject({ check: { name: 'flaky-e2e' }, flaky: true });
+  });
 });
 
 describe('prsForDiagnose', () => {

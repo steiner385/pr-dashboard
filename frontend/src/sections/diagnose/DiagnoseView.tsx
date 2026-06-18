@@ -12,13 +12,19 @@ const FAILED = new Set(['failure', 'cancelled', 'timed_out', 'action_required', 
 
 /** The check holding a PR up: first failed required check, else first still-running,
  *  else null (nothing blocking). Pure + testable. */
-export function blockingCheck(pr: PrView): { check: CheckView; why: 'failed' | 'running' } | null {
-  const failed = pr.checks.find((c) => c.isRequired && c.conclusion != null && FAILED.has(c.conclusion))
-    ?? pr.checks.find((c) => c.conclusion != null && FAILED.has(c.conclusion));
-  if (failed) return { check: failed, why: 'failed' };
+export function blockingCheck(pr: PrView): { check: CheckView; why: 'failed' | 'running'; flaky: boolean } | null {
+  // Rank failures so a REAL failure outranks a known-flaky one (roadmap 5.5 / the
+  // CI-CD review): a flaky required check shouldn't be named the blocker while a
+  // real failure sits below it. Score = real(2) + required(1); flaky is labelled.
+  const failed = pr.checks.filter((c) => c.conclusion != null && FAILED.has(c.conclusion));
+  if (failed.length) {
+    const score = (c: CheckView) => (c.likelyFlake ? 0 : 2) + (c.isRequired ? 1 : 0);
+    const best = failed.reduce((a, b) => (score(b) > score(a) ? b : a));
+    return { check: best, why: 'failed', flaky: !!best.likelyFlake };
+  }
   const running = pr.checks.find((c) => c.isRequired && c.status !== 'completed')
     ?? pr.checks.find((c) => c.status !== 'completed');
-  if (running) return { check: running, why: 'running' };
+  if (running) return { check: running, why: 'running', flaky: false };
   return null;
 }
 
@@ -82,7 +88,7 @@ export function DiagnoseView({ state, focusedRepo }: DiagnoseViewProps) {
         <section className="diagnose-detail" aria-label={`PR #${selected.number} detail`}>
           <p className="diagnose-blocker" role="status">
             {blocker
-              ? `Blocked by ${blocker.check.name} (${blocker.why === 'failed' ? 'failed' : 'still running'})`
+              ? `Blocked by ${blocker.check.name} (${blocker.why === 'failed' ? (blocker.flaky ? 'failed — likely FLAKE' : 'failed') : 'still running'})`
               : 'Nothing blocking — all checks green.'}
           </p>
           <CheckGantt checks={selected.checks} stage={selected.stage.stage} />
