@@ -74,6 +74,22 @@ export class ModelDeriver {
     return pinned;
   }
 
+  /**
+   * Re-derive at `baseSha` with per-file text overrides (candidate projection,
+   * FR-026). Returns `overrides[name]` for any overridden workflow basename and
+   * the base-SHA blob otherwise. UNCACHED — candidates are ephemeral. Returns the
+   * bare DerivedModel (no pin).
+   */
+  async deriveWithOverrides(repo: string, baseSha: string, overrides: Record<string, string>): Promise<DerivedModel | null> {
+    const since = this.deps.since ?? new Date(this.now() - 30 * 86_400_000).toISOString();
+    return computeProtectionMap(repo, since, {
+      fetchWorkflow: (r, name) => (name in overrides ? Promise.resolve(overrides[name]) : this.deps.fetchWorkflowAtSha(r, name, baseSha)),
+      successStatsByRepo: this.deps.successStatsByRepo,
+      flakeStatsByRepo: this.deps.flakeStatsByRepo,
+      conditionalCallerJobs: this.deps.conditionalCallerJobs,
+    });
+  }
+
   /** Derive at the current HEAD (resolves the SHA first, then pins to it). */
   async deriveAtHead(repo: string): Promise<PinnedModel | null> {
     const sha = await this.deps.resolveHeadSha(repo);

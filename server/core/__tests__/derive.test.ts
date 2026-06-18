@@ -110,3 +110,25 @@ describe('ModelDeriver (Tier-2 SHA-pinned deriver)', () => {
     expect((deps.fetchWorkflowAtSha as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(before);
   });
 });
+
+describe('deriveWithOverrides (candidate re-derivation from mutated YAML)', () => {
+  const CI_E2E = `name: CI\non: { pull_request: {}, merge_group: {} }\njobs:\n  e2e:\n    runs-on: ubuntu-latest\n    steps: [{ run: pnpm e2e }]\n  ci:\n    name: ci\n    needs: [e2e]\n    runs-on: ubuntu-latest\n`;
+  const odeps = (): ModelDeriveDeps => ({
+    resolveHeadSha: vi.fn(async () => 'sha-1'),
+    fetchWorkflowAtSha: vi.fn(async (_r: string, n: string) => (n === 'ci.yml' ? CI_E2E : null)),
+    successStatsByRepo: () => new Map(), flakeStatsByRepo: () => new Map(), since: '2026-01-01T00:00:00Z',
+  });
+
+  it('uses the override text for the named file and re-derives', async () => {
+    const d = new ModelDeriver(odeps());
+    const mutated = CI_E2E.replace('  e2e:\n    runs-on: ubuntu-latest', '  e2e:\n    timeout-minutes: 10\n    runs-on: ubuntu-latest');
+    const model = await d.deriveWithOverrides('o/r', 'sha-1', { 'ci.yml': mutated });
+    expect(model).not.toBeNull();
+    expect(model!.checks).toContain('e2e');
+  });
+
+  it('returns null when ci.yml cannot be derived (override empty + none fetched)', async () => {
+    const d = new ModelDeriver({ ...odeps(), fetchWorkflowAtSha: vi.fn(async () => null) });
+    expect(await d.deriveWithOverrides('o/r', 'sha-1', {})).toBeNull();
+  });
+});
