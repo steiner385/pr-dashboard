@@ -25,4 +25,16 @@ describe('SelfHealthDot (Group O spine indicator)', () => {
     render(<SelfHealthDot api={api(async () => { throw new Error('down'); })} pollMs={999_999} />);
     await waitFor(() => expect(screen.getByTitle(/tool health unknown/i)).toBeInTheDocument());
   });
+
+  it('surfaces the ingestion-freshness age visibly (roadmap 4.3)', async () => {
+    render(<SelfHealthDot api={api(async () => ok)} pollMs={999_999} />);
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/20s/));
+  });
+
+  it('flags STALE data even when the tool itself reports ok (roadmap 4.3)', async () => {
+    const staleButOk: ToolHealthDto = { ...ok, ingestionFreshnessSecs: 300, status: 'ok' };
+    render(<SelfHealthDot api={api(async () => staleButOk)} pollMs={999_999} />);
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/stale/i));
+    expect(screen.getByRole('status').className).toMatch(/stale/);
+  });
 });

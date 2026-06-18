@@ -164,6 +164,9 @@ button.model-chip { cursor: pointer; }
 .model-edit-tab { background: none; border: none; border-bottom: 2px solid transparent; color: var(--text); opacity: 0.6; font: inherit; font-size: 14px; padding: 8px 14px; cursor: pointer; }
 .model-edit-tab:hover { opacity: 0.85; }
 .model-edit-tab.active { opacity: 1; border-bottom-color: var(--accent, #6af); font-weight: 600; }
+.self-health-age { opacity: 0.7; font-size: 11px; }
+.self-health.stale { color: var(--amber); }
+.self-health.stale .self-health-age { opacity: 1; }
 /* roadmap 2.2 — clickable rows are real buttons; reset to look like the row */
 .fleet-row-btn, .leaderboard-row-btn, .diagnose-pr-btn {
   display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
