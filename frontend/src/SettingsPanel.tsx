@@ -7,7 +7,7 @@ import type {
   SettingSource,
   RepoSettingsReport,
 } from './types';
-import { SOURCE_DEFINITIONS } from './definitions';
+import { SOURCE_DEFINITIONS, SETTINGS_DEFINITIONS, defTitle, type Definition } from './definitions';
 
 interface SettingsPanelProps {
   open: boolean;
@@ -66,6 +66,18 @@ function toPatch(f: FormModel, initialNotifyEnabled: boolean): ConfigPatch {
       ? { notifications: { enabled: f.notifyCommandEnabled } }
       : {}),
   };
+}
+
+/** Per-sub-page help marker on a Settings section heading: the same copy the
+ *  LegendPanel lists under "Settings", surfaced in place as a hover tooltip
+ *  (title-only, like SourceTag — aria-hidden so it stays out of the heading's
+ *  accessible name; the LegendPanel carries the screen-reader-accessible copy). */
+function SectionHelp({ def }: { def: Definition }) {
+  return (
+    <span className="settings-help" title={defTitle(def)} aria-hidden="true">
+      ⓘ
+    </span>
+  );
 }
 
 function SourceTag({ source }: { source: SettingSource }) {
@@ -320,7 +332,7 @@ export function SettingsPanel({ open, onClose, returnFocusRef, connected }: Sett
           <div className="settings-body">
             {/* 1. Watched repos */}
             <section className="settings-section">
-              <h3>Watched repos</h3>
+              <h3>Watched repos <SectionHelp def={SETTINGS_DEFINITIONS.watchedRepos} /></h3>
               <p className="settings-label">Owners</p>
               <ChipEditor
                 label="add owner (e.g. acme)"
@@ -370,7 +382,7 @@ export function SettingsPanel({ open, onClose, returnFocusRef, connected }: Sett
 
             {/* 2. Tuning */}
             <section className="settings-section">
-              <h3>Tuning</h3>
+              <h3>Tuning <SectionHelp def={SETTINGS_DEFINITIONS.tuning} /></h3>
               <div className="settings-grid">
                 <label htmlFor="cfg-retention">Retention (days)</label>
                 <input
@@ -436,7 +448,7 @@ export function SettingsPanel({ open, onClose, returnFocusRef, connected }: Sett
 
             {/* 3. Per-repo (read-only) */}
             <section className="settings-section">
-              <h3>Per-repo settings</h3>
+              <h3>Per-repo settings <SectionHelp def={SETTINGS_DEFINITIONS.perRepo} /></h3>
               <p className="settings-hint">
                 edit via .pr-dashboard.yml in the repo, or repos./deploy. in config.json
               </p>
@@ -472,7 +484,7 @@ export function SettingsPanel({ open, onClose, returnFocusRef, connected }: Sett
 
             {/* 4. Instance (read-only) */}
             <section className="settings-section">
-              <h3>Instance</h3>
+              <h3>Instance <SectionHelp def={SETTINGS_DEFINITIONS.instance} /></h3>
               <p className="settings-hint">file-only for security</p>
               <dl className="repo-settings-grid">
                 <dt>tokenSource</dt>
@@ -514,7 +526,7 @@ export function SettingsPanel({ open, onClose, returnFocusRef, connected }: Sett
 
             {/* 5. Notifications — enabled is live; command/events stay file-only */}
             <section className="settings-section">
-              <h3>Notifications</h3>
+              <h3>Notifications <SectionHelp def={SETTINGS_DEFINITIONS.notifications} /></h3>
               <dl className="repo-settings-grid">
                 <dt>enabled</dt>
                 <dd>

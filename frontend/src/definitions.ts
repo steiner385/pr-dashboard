@@ -245,6 +245,107 @@ export const SOURCE_DEFINITIONS: Record<'override' | 'in-repo' | 'derived' | 'de
     text: 'built-in default — nothing configured anywhere' },
 };
 
+/**
+ * Per-lane help for the Delivery spine's 7 lanes (keyed by the lane `id` from
+ * buildLaneHealth). Distinct from LANE_STATE_DEFINITIONS (the 5 status colors):
+ * these say what each lane *is*. SpineLane renders them as the lane button's
+ * tooltip and the LegendPanel lists them under "Delivery lanes" — so the spine
+ * has the same per-sub-page depth the Pipeline tab already has.
+ */
+export const LANE_DEFINITIONS: Record<string, Definition> = {
+  'pr-ci': { label: 'PR CI',
+    text: 'per-PR checks on the head commit before it can enter the merge queue — the first gate; red here means an open PR is failing its own CI' },
+  'merge-queue': { label: 'Merge queue',
+    text: 'GitHub merge queue — speculative merge-group builds that run the full suite before landing; red means a group build is failing or the queue is churning' },
+  main: { label: 'main',
+    text: 'post-merge CI on the default branch — the truth after merge; red means main itself is broken' },
+  deploy: { label: 'Deploy',
+    text: 'rollout of merged commits to prod/QA; advisory — not-wired (and excluded from the rollup) until a repo ships a deploy snapshot' },
+  scheduled: { label: 'Scheduled',
+    text: 'cron / nightly workflows (e.g. nightly E2E); not-wired until a repo discovers scheduled workflows, gating once it has' },
+  failures: { label: 'Failures & flake',
+    text: 'cross-cutting view of failing and flaky checks across every lane — where to triage what is broken vs merely flaky' },
+  cost: { label: 'Cost',
+    text: 'CI runner spend across the lanes; advisory — blind (and excluded from the rollup) until per-pool $/min rates are configured' },
+};
+
+/**
+ * Per-sub-page help for the Settings dialog's 5 sections. SettingsPanel renders
+ * each as its section-heading help marker and the LegendPanel lists them under
+ * "Settings" — so every settings sub-page explains itself in place AND in the
+ * deep-dive, the same way the metrics figures do.
+ */
+export const SETTINGS_DEFINITIONS = {
+  watchedRepos: { label: 'Watched repos',
+    text: 'which owners and repositories the dashboard polls — add an owner to discover its repos, then toggle individual repos in or out; the repo list fills after the first sweep' },
+  tuning: { label: 'Tuning',
+    text: 'instance-wide knobs: history retention (days), the default merge-queue batch size, and the sweep / hot / deploy poll intervals (seconds); editable here and saved to the config file' },
+  perRepo: { label: 'Per-repo settings',
+    text: 'read-only view of each repo’s resolved config (rollup job, workflow path, batch size, required-check prefixes, deploy), each value tagged with its source — edit via .pr-dashboard.yml in the repo or repos./deploy. in config.json' },
+  instance: { label: 'Instance',
+    text: 'read-only, file-only-for-security instance settings: token source, API URL, port, ancestry source, cost-per-minute rates, and pool metadata — change these in the config file, not the UI' },
+  notifications: { label: 'Notifications',
+    text: 'desktop / command notifications — the enabled toggle is editable here; command, webhook, digest, and event filters are file-only. Distinct from per-tab browser notifications (the 🔔 bell)' },
+} as const satisfies Record<string, Definition>;
+
+/**
+ * Help for the Designer tab (ProtectionMap). The tab had no legend coverage at
+ * all; these explain the check × tier matrix, its 4 cell states, drift, the
+ * heat overlays, and the three finding goals. The LegendPanel renders them
+ * under "Designer (protection map)".
+ */
+export const DESIGNER_DEFINITIONS = {
+  overview: { label: 'Protection map',
+    text: 'a check × tier matrix of how every CI check is wired — what runs where and where the configured intent has drifted from observed behavior; pick a repo, then drag a cell to simulate moving a check between tiers and copy a Claude prompt for the change' },
+  gate: { label: '● gate', text: 'mandatory — this check must pass at this tier to merge' },
+  conditional: { label: '◐ conditional', text: 'runs only when matching paths / files are touched' },
+  advisory: { label: '○ advisory', text: 'runs but does not block merge' },
+  absent: { label: '· absent', text: 'the check does not run at this tier' },
+  drift: { label: 'drift',
+    text: 'configured intent ≠ observed behavior — the check is wired one way but ran another; the first thing to reconcile' },
+  overlayCost: { label: 'Cost overlay',
+    text: 'heat-shades each cell by runner-minutes — the hotter the cell, the more CI time it burns' },
+  overlayQuality: { label: 'Quality overlay',
+    text: 'heat-shades each cell by real failure rate — where the gate is actually catching breakage' },
+  findingDrift: { label: '⚠ drift finding',
+    text: 'a cell whose configuration and observed behavior disagree — wrong now' },
+  findingCost: { label: '💰 cost finding',
+    text: 'a demotion candidate — an expensive check that rarely catches anything; consider a cheaper tier' },
+  findingQuality: { label: '🛡 quality finding',
+    text: 'a promotion candidate — a check catching real failures late; consider shifting it left to an earlier gate' },
+} as const satisfies Record<string, Definition>;
+
+/**
+ * The flat METRIC_DEFINITIONS map, grouped to mirror where each figure actually
+ * lives: the Pipeline-tab queue-ops strip, then the 5 Metrics sub-tabs. The
+ * LegendPanel renders these as sub-headed lists instead of one alphabet soup,
+ * so the help depth follows the Metrics tab's own sub-page hierarchy. The
+ * definitions test asserts these groups cover every METRIC_DEFINITIONS key
+ * exactly once, so a new figure can't silently fall out of the legend.
+ */
+export const METRIC_SECTION_GROUPS: { label: string; keys: MetricDefinitionKey[] }[] = [
+  { label: 'Queue ops strip',
+    keys: ['queueDepth', 'trainsPerHour', 'batchSuccessRate', 'ejects24h', 'oldestWait', 'prCiCost'] },
+  { label: 'Metrics › Tuning',
+    keys: ['recommendationsPriority'] },
+  { label: 'Metrics › Throughput & queue',
+    keys: ['deployFrequency', 'leadTimeTotal', 'trendCounts', 'queueMerges', 'queueWaitP50', 'groupRunP50',
+      'queueEffRunsPerMerge', 'queueEffAdvisoryNoise', 'queueEffRequiredFailed', 'queueEffAdminBypass',
+      'batchAdvisorRecommend', 'batchAdvisorThroughput', 'batchAdvisorTimeInQueue',
+      'velocityMerged', 'mergeToQa', 'lifespan'] },
+  { label: 'Metrics › Performance',
+    keys: ['regressionRule', 'runnerWaitP50', 'poolWaitP50', 'starvationRule', 'concurrencyPeak',
+      'jobP50', 'jobP90', 'variability', 'sampleN', 'cpEndToEnd', 'cpStep', 'cpSlack',
+      'needsGraphNodes', 'calibrationError', 'calibrationP90Abs'] },
+  { label: 'Metrics › Reliability',
+    keys: ['flakeRate', 'reclaimEvents', 'spotReclaimRate', 'spotReclaimPerHour', 'spotJobsRan',
+      'trainEjects', 'ejectCost', 'lintP99', 'lintTimeout'] },
+  { label: 'Metrics › Cost',
+    keys: ['costActualsActual', 'costActualsAttributed', 'costActualsCoverage',
+      'costTotalMinutes', 'costPerMergedPr', 'costRetryBurden', 'costPoolShare', 'costInstanceType',
+      'costJobMinutes', 'costJobSamples', 'costRunMinutes', 'costRunJobs', 'costRunPr'] },
+];
+
 /** Metrics window / bucket controls. */
 export const CONTROL_DEFINITIONS = {
   window: { label: 'window',

@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef } from 'react';
 import type { Lane } from '../types';
 import { LANE_GLYPH, LANE_WORD } from './laneStatus';
+import { LANE_DEFINITIONS } from '../definitions';
 
 interface Props {
   lane: Lane; expanded: boolean; onToggle: () => void;
@@ -23,10 +24,13 @@ function SpineLaneInner({ lane, expanded, onToggle, focusNonce }: Props) {
   }, [focusNonce]);
   const glyph = <span className={`spine-glyph s-${lane.status}`} aria-hidden="true">{LANE_GLYPH[lane.status]}</span>;
   const word = LANE_WORD[lane.status];
+  // What this lane covers (issue #66) — hover the lane name; the LegendPanel
+  // lists the same copy under "Delivery lanes".
+  const help = LANE_DEFINITIONS[lane.id]?.text;
   const body = (
     <>
       {glyph}
-      <span className="spine-title">{lane.title}</span>
+      <span className="spine-title" title={help}>{lane.title}</span>
       <span className="spine-summary">{lane.summary}</span>
       <CostChip lane={lane} />
       {lane.efficiencyChip && <span className="spine-effic" aria-hidden="true">{lane.efficiencyChip}</span>}
