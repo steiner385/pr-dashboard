@@ -18,6 +18,7 @@ import { LegendPanel } from '../LegendPanel';
 import { ModelEditView } from '../sections/modelEdit/ModelEditView';
 import { makeWorkspaceApi } from './workspaceApi';
 import { SelfHealthDot } from './SelfHealthDot';
+import { CommandPalette } from './CommandPalette';
 import { ForecastBanner } from './ForecastBanner';
 import { laneToSection, hashForSection, type SectionId } from './sections';
 
@@ -83,6 +84,7 @@ export function WorkspaceApp() {
     <>
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} returnFocusRef={gearRef} connected={connected} />
       <LegendPanel open={legendOpen} onClose={() => setLegendOpen(false)} returnFocusRef={legendRef} />
+      <CommandPalette repos={repos} onFocusRepo={focus} />
     </>
   );
 
