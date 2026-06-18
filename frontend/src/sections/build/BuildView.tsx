@@ -108,8 +108,12 @@ export function BuildView({ repo, api }: BuildViewProps) {
           {candidate?.ok && candidate.files.length > 0 && (
             <pre className="build-diff" aria-label="generated diff">{candidate.files.map((f) => `# ${f.file}\n${f.diff}`).join('\n\n')}</pre>
           )}
-          {verdict.kind === 'safe' && <button type="button" className="build-exit">Open draft PR</button>}
-          {verdict.kind === 'scaffold' && <button type="button" className="build-exit">Generate scaffold</button>}
+          {verdict.kind === 'safe' && (
+            <p className="build-exit-note">Safe to apply — {candidate?.files.length} file{candidate?.files.length === 1 ? '' : 's'}. The governed multi-file draft-PR exit lands in the next increment.</p>
+          )}
+          {verdict.kind === 'scaffold' && (
+            <p className="build-exit-note">Low confidence — this would generate a review scaffold rather than a structured apply.</p>
+          )}
         </section>
       )}
     </div>
