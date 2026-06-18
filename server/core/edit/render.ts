@@ -86,3 +86,20 @@ export function renderQuarantine(yamlText: string, jobId: string): EditResult {
   const diff = [`@@ job ${jobId} — quarantine (flaky) @@`, ` ${lines[jobLine]}`, `+${addedLine}`, ...block.slice(0, 2).map((l) => ` ${l}`)].join('\n');
   return { ok: true, newText, addedLine, diff };
 }
+
+/** Add `timeout-minutes: <minutes>` to a job (hygiene; additive). Refuses a job
+ *  that already sets it, or one with no body / absent. */
+export function renderTimeout(yamlText: string, jobId: string, minutes: number): EditResult {
+  const lines = yamlText.split('\n');
+  const loc = locateJobBlock(lines, jobId);
+  if (!loc) return { ok: false, reason: `could not locate job "${jobId}" in the workflow` };
+  if (loc.propIndent === null) return { ok: false, reason: `job "${jobId}" has no body to edit` };
+  const { jobLine, block, propIndent } = loc;
+  if (block.some((l) => l.match(/^(\s*)/)![1] === propIndent && /^timeout-minutes\s*:/.test(l.trim()))) {
+    return { ok: false, reason: `job "${jobId}" already sets timeout-minutes — edit by hand` };
+  }
+  const addedLine = `${propIndent}timeout-minutes: ${minutes}`;
+  const newText = [...lines.slice(0, jobLine + 1), addedLine, ...lines.slice(jobLine + 1)].join('\n');
+  const diff = [`@@ job ${jobId} — timeout ${minutes}m @@`, ` ${lines[jobLine]}`, `+${addedLine}`, ...block.slice(0, 2).map((l) => ` ${l}`)].join('\n');
+  return { ok: true, newText, addedLine, diff };
+}

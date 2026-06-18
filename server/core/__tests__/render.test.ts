@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parse } from 'yaml';
-import { renderTierAssign, renderQuarantine } from '../edit/render';
+import { renderTierAssign, renderQuarantine, renderTimeout, renderRunnerRoute, pinActionSha, addConcurrency } from '../edit/render';
 
 const WF = `name: CI
 on:
@@ -84,5 +84,32 @@ describe('renderQuarantine (K2 edit-renderer)', () => {
 
   it('refuses a missing job', () => {
     expect(renderQuarantine(WF, 'nope').ok).toBe(false);
+  });
+});
+
+describe('renderTimeout (add timeout-minutes)', () => {
+  it('adds timeout-minutes to a job and round-trips to valid YAML, nothing else changed', () => {
+    const r = renderTimeout(WF, 'lint', 10);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.addedLine).toBe('    timeout-minutes: 10');
+    const before = parse(WF), after = parse(r.newText);
+    expect(after.jobs.lint['timeout-minutes']).toBe(10);
+    expect(before.jobs.lint['timeout-minutes']).toBeUndefined();
+    expect(after.jobs.lint.steps).toEqual(before.jobs.lint.steps);
+    expect(after.jobs.guarded).toEqual(before.jobs.guarded);
+    expect(r.diff).toMatch(/timeout 10m/);
+  });
+
+  it('refuses a job that already has timeout-minutes', () => {
+    const wf = `on: push\njobs:\n  a:\n    timeout-minutes: 5\n    runs-on: x\n    steps: []\n`;
+    const r = renderTimeout(wf, 'a', 10);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toMatch(/already (sets|has) .*timeout-minutes/);
+  });
+
+  it('refuses a missing job', () => {
+    expect(renderTimeout(WF, 'nope', 10).ok).toBe(false);
   });
 });
