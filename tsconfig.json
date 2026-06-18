@@ -9,5 +9,5 @@
     "noEmit": true,
     "types": ["node", "vitest/globals"]
   },
-  "include": ["server", "scripts", "frontend/src", "vitest.setup.ts", "*.config.ts"]
+  "include": ["server", "scripts", "frontend/src", "shared", "vitest.setup.ts", "*.config.ts"]
 }

@@ -1,3 +1,9 @@
+// Notification event-type registry — single shared source of truth (server +
+// frontend); see shared/notification-events.ts. Imported for local use below and
+// re-exported so existing frontend importers are unchanged.
+import type { NotificationEventType, NotificationKind } from '../../shared/notification-events';
+export type { NotificationEventType, NotificationKind };
+
 export type StageId = 'ci' | 'parked' | 'ready' | 'queue' | 'qa-deploy' | 'awaiting-prod' | 'merged';
 export interface StageResult {
   stage: StageId; substate: string | null;
@@ -184,14 +190,7 @@ export interface DashboardState {
 // ---- Notifications (issue #19) ----
 // Mirrors of server/notifier.ts — the payload of the named `notification` SSE
 // event and the file-only `notifications` config block (read-only in the UI).
-
-export type NotificationEventType =
-  | 'ci-failed' | 'group-failed' | 'queue-blocked' | 'ready' | 'overdue' | 'prod-live'
-  | 'queue-stalled' | 'duration-regression' | 'runner-starvation' | 'budget-breach';
-
-/** Event types plus 'digest' (issue #51) — the daily summary frame, gated by
- *  `notifications.digest.enabled` rather than the per-event toggles. */
-export type NotificationKind = NotificationEventType | 'digest';
+// (The event-type registry is imported from shared/ at the top of this file.)
 
 export interface NotificationEvent {
   repo: string;

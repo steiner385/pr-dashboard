@@ -1,6 +1,12 @@
 import { execFile } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import type { StageResult } from './types';
+import { NOTIFICATION_EVENT_TYPES, type NotificationEventType, type NotificationKind } from '../shared/notification-events';
+
+// Re-exported from the shared registry so existing server importers (config,
+// index) keep importing from notifier; the single definition lives in shared/.
+export { NOTIFICATION_EVENT_TYPES };
+export type { NotificationEventType, NotificationKind };
 
 /**
  * Notifier — the single detection source for alert-worthy PR transitions
@@ -17,17 +23,6 @@ import type { StageResult } from './types';
  * the condition clears, so a re-entered condition re-fires. `prod-live` can't
  * clear, so it fires once per PR per process lifetime.
  */
-
-export const NOTIFICATION_EVENT_TYPES = [
-  'ci-failed', 'group-failed', 'queue-blocked', 'ready', 'overdue', 'prod-live',
-  'queue-stalled', 'duration-regression', 'runner-starvation', 'budget-breach',
-] as const;
-export type NotificationEventType = (typeof NOTIFICATION_EVENT_TYPES)[number];
-
-/** Everything a notification frame can carry: the per-event-toggle types plus
- *  'digest' (issue #51) — the scheduled daily summary, gated by
- *  `notifications.digest.enabled` instead of the `events` map. */
-export type NotificationKind = NotificationEventType | 'digest';
 
 /** Repo-level event types: prNumber 0, debounce keys outside the PR lifecycle
  *  (prune() must not touch them), and the rendered subject is the repo. */
