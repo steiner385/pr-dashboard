@@ -1,6 +1,9 @@
 import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react';
 import { TILE_DEFINITIONS } from './StatusStrip';
-import { METRIC_DEFINITIONS, SUBLINE_TERMS, LANE_STATE_DEFINITIONS } from './definitions';
+import {
+  METRIC_DEFINITIONS, SUBLINE_TERMS, LANE_STATE_DEFINITIONS, LANE_DEFINITIONS,
+  SETTINGS_DEFINITIONS, DESIGNER_DEFINITIONS, METRIC_SECTION_GROUPS,
+} from './definitions';
 
 interface LegendPanelProps {
   open: boolean;
@@ -112,6 +115,17 @@ export function LegendPanel({ open, onClose, returnFocusRef }: LegendPanelProps)
             </p>
             <dl className="legend-dl">
               {Object.entries(LANE_STATE_DEFINITIONS).map(([key, def]) => (
+                <div className="legend-dl-row" key={key}>
+                  <dt>{def.label}</dt>
+                  <dd>{def.text}</dd>
+                </div>
+              ))}
+            </dl>
+            <p className="legend-caption">
+              The rail has one lane per delivery stage — what each lane covers:
+            </p>
+            <dl className="legend-dl">
+              {Object.entries(LANE_DEFINITIONS).map(([key, def]) => (
                 <div className="legend-dl-row" key={key}>
                   <dt>{def.label}</dt>
                   <dd>{def.text}</dd>
@@ -257,22 +271,59 @@ export function LegendPanel({ open, onClose, returnFocusRef }: LegendPanelProps)
             <p className="legend-caption">Click a tile to filter the board to that bucket; click again to clear.</p>
           </section>
 
-          {/* (f) Metrics & ops figures — the same copy the in-place tooltips
-              carry (issue #66); this is the browsable deep-dive. */}
+          {/* (f) Settings sub-pages — the same per-page copy the Settings dialog
+              shows on each section heading; the deep-dive lists all 5 together. */}
           <section className="settings-section">
-            <h3>Metrics &amp; ops figures</h3>
+            <h3>Settings</h3>
             <p className="legend-caption">
-              Every headline number also explains itself in place — hover it.
-              The full vocabulary:
+              What each section of the Settings dialog (⚙) controls:
             </p>
             <dl className="legend-dl">
-              {Object.entries(METRIC_DEFINITIONS).map(([key, def]) => (
+              {Object.entries(SETTINGS_DEFINITIONS).map(([key, def]) => (
                 <div className="legend-dl-row" key={key}>
                   <dt>{def.label}</dt>
                   <dd>{def.text}</dd>
                 </div>
               ))}
             </dl>
+          </section>
+
+          {/* (g) Designer (protection map) — the tab had no legend coverage; this
+              explains the matrix, its cell states, drift, overlays, and findings. */}
+          <section className="settings-section">
+            <h3>Designer (protection map)</h3>
+            <dl className="legend-dl">
+              {Object.entries(DESIGNER_DEFINITIONS).map(([key, def]) => (
+                <div className="legend-dl-row" key={key}>
+                  <dt>{def.label}</dt>
+                  <dd>{def.text}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+
+          {/* (h) Metrics & ops figures — the same copy the in-place tooltips
+              carry (issue #66); this is the browsable deep-dive, grouped by the
+              Metrics tab's own sub-pages instead of one flat list. */}
+          <section className="settings-section">
+            <h3>Metrics &amp; ops figures</h3>
+            <p className="legend-caption">
+              Every headline number also explains itself in place — hover it.
+              The full vocabulary, by where it appears:
+            </p>
+            {METRIC_SECTION_GROUPS.map((group) => (
+              <div className="legend-subgroup" key={group.label}>
+                <h4>{group.label}</h4>
+                <dl className="legend-dl">
+                  {group.keys.map((key) => (
+                    <div className="legend-dl-row" key={key}>
+                      <dt>{METRIC_DEFINITIONS[key].label}</dt>
+                      <dd>{METRIC_DEFINITIONS[key].text}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            ))}
           </section>
         </div>
       </div>

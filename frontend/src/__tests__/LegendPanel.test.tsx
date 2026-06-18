@@ -159,6 +159,52 @@ describe('LegendPanel — Delivery spine state vocabulary', () => {
   });
 });
 
+describe('LegendPanel — Delivery lanes (per-lane help)', () => {
+  it('lists what each of the 7 delivery lanes covers', () => {
+    render(<LegendPanel open={true} onClose={() => {}} />);
+    for (const label of ['PR CI', 'Merge queue', 'main', 'Deploy', 'Scheduled', 'Failures & flake', 'Cost']) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+    expect(screen.getByText(/the first gate/)).toBeInTheDocument();
+  });
+});
+
+describe('LegendPanel — Settings sub-pages', () => {
+  it('renders a "Settings" section listing all 5 sub-pages', () => {
+    render(<LegendPanel open={true} onClose={() => {}} />);
+    expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument();
+    for (const label of ['Watched repos', 'Tuning', 'Per-repo settings', 'Instance', 'Notifications']) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+  });
+});
+
+describe('LegendPanel — Designer (protection map)', () => {
+  it('renders a Designer section explaining the matrix cell states', () => {
+    render(<LegendPanel open={true} onClose={() => {}} />);
+    expect(screen.getByRole('heading', { name: 'Designer (protection map)' })).toBeInTheDocument();
+    for (const label of ['● gate', '◐ conditional', '○ advisory', '· absent']) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+  });
+});
+
+describe('LegendPanel — metrics figures grouped by sub-page', () => {
+  it('renders the metric vocabulary under its sub-page sub-headings', () => {
+    render(<LegendPanel open={true} onClose={() => {}} />);
+    for (const name of [
+      'Queue ops strip',
+      'Metrics › Tuning',
+      'Metrics › Throughput & queue',
+      'Metrics › Performance',
+      'Metrics › Reliability',
+      'Metrics › Cost',
+    ]) {
+      expect(screen.getByRole('heading', { name })).toBeInTheDocument();
+    }
+  });
+});
+
 describe('LegendPanel — flake radar legend line (issue #37)', () => {
   it('documents the ⚐ flakes annotation in the job-bars section', () => {
     render(<LegendPanel open={true} onClose={() => {}} />);

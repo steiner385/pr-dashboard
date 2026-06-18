@@ -16,7 +16,7 @@
     "service:install": "bash scripts/install-service.sh"
   },
   "dependencies": {
-    "better-sqlite3": "^12.10.0",
+    "better-sqlite3": "^12.11.1",
     "express": "^4.22.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
@@ -44,6 +44,6 @@
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "vite": "^8.0.16",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.9"
   }
 }
