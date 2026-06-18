@@ -157,6 +157,9 @@ button.model-chip { cursor: pointer; }
 .model-chip.ruleset.mismatch, .model-chip.ruleset.unreadable { color: var(--amber); border-color: var(--amber); }
 .model-chip.ruleset.in-sync { color: var(--done); border-color: var(--done); }
 .matrix-legend { font-size: 11px; color: var(--text); opacity: 0.7; margin: 4px 0; }
+.shard-toggle { background: none; border: none; color: inherit; font: inherit; cursor: pointer; padding: 0; text-align: left; }
+.shard-count { opacity: 0.6; font-size: 11px; }
+.shard-member > th { padding-left: 20px; opacity: 0.85; }
 /* roadmap 2.2 — clickable rows are real buttons; reset to look like the row */
 .fleet-row-btn, .leaderboard-row-btn, .diagnose-pr-btn {
   display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;

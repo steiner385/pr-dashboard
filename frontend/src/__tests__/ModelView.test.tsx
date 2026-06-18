@@ -88,6 +88,25 @@ describe('ModelView (US3)', () => {
     expect(await screen.findByLabelText('Protection matrix')).toBeInTheDocument(); // model still renders
   });
 
+  it('collapses sharded checks into one expandable matrix row (roadmap 2.3)', async () => {
+    const sharded: DerivedModelLike = {
+      ...MODEL,
+      checks: ['build', 'static / test: unit (shard 1/3)', 'static / test: unit (shard 2/3)', 'static / test: unit (shard 3/3)'],
+      cells: [cell('build', 'queue', 'gate'),
+        cell('static / test: unit (shard 1/3)', 'queue', 'gate'),
+        cell('static / test: unit (shard 2/3)', 'queue', 'gate'),
+        cell('static / test: unit (shard 3/3)', 'queue', 'gate')],
+      checkMeta: MODEL.checkMeta,
+    };
+    render(<ModelView repo="o/r" api={api({ getPipeline: vi.fn(async () => ({ repo: 'o/r', sourceSha: 's', model: sharded })) })} />);
+    await screen.findByLabelText('Protection matrix');
+    // the 3 shards collapse into one "(3 shards)" toggle; individual shards hidden
+    const toggle = screen.getByRole('button', { name: /static \/ test: unit.*3 shards/ });
+    expect(screen.queryByRole('rowheader', { name: /shard 1\/3/ })).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(screen.getByRole('rowheader', { name: /shard 1\/3/ })).toBeInTheDocument();
+  });
+
   it('surfaces a derivation error', async () => {
     render(<ModelView repo="o/r" api={api({ getPipeline: vi.fn(async () => { throw new Error('no derivable model'); }) })} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('no derivable model');

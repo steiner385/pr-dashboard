@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { WorkspaceApi, SecurityFindingDto, RulesetDto } from '../../shell/workspaceApi';
 import type { DerivedModelLike, CellLike } from '../optimize/types';
+import { groupShards } from './groupShards';
 
 const GLYPH: Record<string, string> = { gate: '🔒', conditional: '◐', advisory: '•', absent: '·' };
 
@@ -36,6 +37,7 @@ export function ModelView({ repo, api }: ModelViewProps) {
 
   const [showGates, setShowGates] = useState(false);
   const [driftOnly, setDriftOnly] = useState(false);
+  const [openShards, setOpenShards] = useState<Set<string>>(new Set());
   const required = useMemo(() => (model ? requiredGates(model) : []), [model]);
   const drift = useMemo(() => (model ? driftCells(model) : []), [model]);
   const driftChecks = useMemo(() => new Set(drift.map((c) => c.check)), [drift]);
@@ -46,6 +48,23 @@ export function ModelView({ repo, api }: ModelViewProps) {
   if (!model) return <div className="model-view" role="status">Deriving the pipeline model…</div>;
 
   const rows = driftOnly ? model.checks.filter((c) => driftChecks.has(c)) : model.checks;
+
+  const cellTds = (check: string) => model.tiers.map((t) => {
+    const cell = cellAt(check, t.id);
+    const state = cell?.state ?? 'absent';
+    return (
+      <td key={t.id} className={`cell state-${state}${cell?.drift ? ' drift' : ''}`} title={`${state}${cell?.drift ? ' — drift' : ''}`}>
+        {GLYPH[state] ?? '·'}{cell?.drift ? '⚠' : ''}
+      </td>
+    );
+  });
+  const checkRow = (check: string, shardMember = false) => (
+    <tr key={check} className={shardMember ? 'shard-member' : undefined}>
+      <th scope="row">{check}{required.includes(check) && <span title="required merge gate"> 🔒</span>}</th>
+      {cellTds(check)}
+    </tr>
+  );
+  const toggleShard = (base: string) => setOpenShards((p) => { const n = new Set(p); n.has(base) ? n.delete(base) : n.add(base); return n; });
 
   return (
     <div className="model-view">
@@ -78,20 +97,21 @@ export function ModelView({ repo, api }: ModelViewProps) {
           <tr><th scope="col">Check</th>{model.tiers.map((t) => <th key={t.id} scope="col">{t.label}</th>)}</tr>
         </thead>
         <tbody>
-          {rows.map((check) => (
-            <tr key={check}>
-              <th scope="row">{check}{required.includes(check) && <span title="required merge gate"> 🔒</span>}</th>
-              {model.tiers.map((t) => {
-                const cell = cellAt(check, t.id);
-                const state = cell?.state ?? 'absent';
-                return (
-                  <td key={t.id} className={`cell state-${state}${cell?.drift ? ' drift' : ''}`} title={`${state}${cell?.drift ? ' — drift' : ''}`}>
-                    {GLYPH[state] ?? '·'}{cell?.drift ? '⚠' : ''}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
+          {groupShards(rows).flatMap((r) => {
+            if (r.kind === 'single') return [checkRow(r.check)];
+            const expanded = openShards.has(r.base);
+            const summary = (
+              <tr key={r.base} className="shard-group">
+                <th scope="row">
+                  <button type="button" className="shard-toggle" aria-expanded={expanded} onClick={() => toggleShard(r.base)}>
+                    <span aria-hidden="true">{expanded ? '▾' : '▸'}</span> {r.base} <span className="shard-count">({r.members.length} shards)</span>
+                  </button>
+                </th>
+                {cellTds(r.members[0])}
+              </tr>
+            );
+            return expanded ? [summary, ...r.members.map((m) => checkRow(m, true))] : [summary];
+          })}
         </tbody>
       </table>
 
