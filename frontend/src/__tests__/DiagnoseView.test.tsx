@@ -62,4 +62,12 @@ describe('DiagnoseView', () => {
     render(<DiagnoseView state={state([])} />);
     expect(screen.getByText(/no open prs/i)).toBeInTheDocument();
   });
+
+  it('PR-list rows are keyboard-operable buttons (roadmap 2.2 a11y)', () => {
+    render(<DiagnoseView state={s} />);
+    const rows = screen.getAllByRole('button').filter((b) => /#\d+/.test(b.textContent ?? ''));
+    expect(rows.length).toBeGreaterThan(0);
+    rows[0].focus();
+    expect(rows[0]).toHaveFocus(); // tabbable
+  });
 });

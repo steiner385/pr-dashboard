@@ -67,11 +67,13 @@ export function DiagnoseView({ state, focusedRepo }: DiagnoseViewProps) {
       )}
       <ul className="diagnose-pr-list" role="list" aria-label="Open pull requests">
         {prs.map((p) => (
-          <li key={key(p)}
-            className={selected && key(p) === key(selected) ? 'diagnose-pr active' : 'diagnose-pr'}
-            aria-current={selected && key(p) === key(selected) ? 'true' : undefined}
-            onClick={() => setSelectedKey(key(p))}>
-            <span className="diagnose-pr-repo">{p.repo}</span> #{p.number} {p.title}
+          <li key={key(p)} className={selected && key(p) === key(selected) ? 'diagnose-pr active' : 'diagnose-pr'}>
+            <button type="button" className="diagnose-pr-btn"
+              aria-current={selected && key(p) === key(selected) ? 'true' : undefined}
+              aria-label={`${p.repo} #${p.number} ${p.title}`}
+              onClick={() => setSelectedKey(key(p))}>
+              <span className="diagnose-pr-repo">{p.repo}</span> #{p.number} {p.title}
+            </button>
           </li>
         ))}
         {prs.length === 0 && <li className="diagnose-pr empty">No open PRs.</li>}

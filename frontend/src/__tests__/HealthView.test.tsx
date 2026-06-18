@@ -49,6 +49,17 @@ describe('HealthView', () => {
     expect(onFocusRepo).toHaveBeenCalledWith('o/a');
   });
 
+  it('fleet rows are keyboard-operable buttons (roadmap 2.2 a11y)', () => {
+    const onFocusRepo = vi.fn();
+    render(<HealthView state={s} connected onFocusRepo={onFocusRepo} />);
+    const btn = screen.getByRole('button', { name: /o\/a/ });
+    expect(btn.tagName).toBe('BUTTON');
+    btn.focus();
+    expect(btn).toHaveFocus(); // tabbable, unlike a bare <li onClick>
+    fireEvent.click(btn);
+    expect(onFocusRepo).toHaveBeenCalledWith('o/a');
+  });
+
   it('shows a reconnecting notice when the live feed is down (SC-007 liveness)', () => {
     render(<HealthView state={s} connected={false} />);
     expect(screen.getByRole('status')).toHaveTextContent(/reconnecting/i);

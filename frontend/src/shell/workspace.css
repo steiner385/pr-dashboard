@@ -156,6 +156,13 @@ button.model-chip { cursor: pointer; }
 .model-chip.ruleset.mismatch, .model-chip.ruleset.unreadable { color: var(--amber); border-color: var(--amber); }
 .model-chip.ruleset.in-sync { color: var(--done); border-color: var(--done); }
 .matrix-legend { font-size: 11px; color: var(--text); opacity: 0.7; margin: 4px 0; }
+/* roadmap 2.2 — clickable rows are real buttons; reset to look like the row */
+.fleet-row-btn, .leaderboard-row-btn, .diagnose-pr-btn {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  background: none; border: none; color: inherit; font: inherit; cursor: pointer; padding: 6px 8px;
+}
+.fleet-row-btn:hover, .leaderboard-row-btn:hover, .diagnose-pr-btn:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.fleet-row-btn:focus-visible, .leaderboard-row-btn:focus-visible, .diagnose-pr-btn:focus-visible { outline: 2px solid var(--accent, #6af); outline-offset: -2px; }
 .canvas-node-gate { font-size: 10px; text-transform: uppercase; color: var(--text); opacity: 0.75; white-space: nowrap; }
 .canvas-lane-event { font-size: 11px; color: var(--text); opacity: 0.6; }
 button.canvas-node { width: 100%; cursor: pointer; background: var(--bg); text-align: left; }

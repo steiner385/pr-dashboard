@@ -49,15 +49,13 @@ export function HealthView({ state, connected, onJumpToLane, onFocusRepo }: Heal
         <h2 className="fleet-rollup-title">Pipelines ({fleet.length})</h2>
         <ul role="list">
           {fleet.map((r) => (
-            <li
-              key={r.repo}
-              className={`fleet-row verdict-${r.verdict}`}
-              data-verdict={r.verdict}
-              onClick={() => onFocusRepo?.(r.repo)}
-            >
-              <span className="fleet-repo">{r.repo}</span>
-              <span className="fleet-prs">{r.prCount} PR{r.prCount === 1 ? '' : 's'}</span>
-              <span className="fleet-verdict" title={r.reason}>{r.verdict === 'healthy' ? '✓' : r.verdict === 'attention' ? '⚠' : '✕'}</span>
+            <li key={r.repo} className={`fleet-row verdict-${r.verdict}`} data-verdict={r.verdict}>
+              <button type="button" className="fleet-row-btn" onClick={() => onFocusRepo?.(r.repo)}
+                aria-label={`${r.repo} — ${r.prCount} PRs, ${r.verdict}: ${r.reason}`}>
+                <span className="fleet-repo">{r.repo}</span>
+                <span className="fleet-prs">{r.prCount} PR{r.prCount === 1 ? '' : 's'}</span>
+                <span className="fleet-verdict" aria-hidden="true" title={r.reason}>{r.verdict === 'healthy' ? '✓' : r.verdict === 'attention' ? '⚠' : '✕'}</span>
+              </button>
             </li>
           ))}
           {fleet.length === 0 && <li className="fleet-row empty">No pipelines watched.</li>}
@@ -68,9 +66,12 @@ export function HealthView({ state, connected, onJumpToLane, onFocusRepo }: Heal
           <h3 className="fleet-leaderboard-title">Flakiest pipelines</h3>
           <ol>
             {leaderboard.map((r) => (
-              <li key={r.repo} className="leaderboard-row" onClick={() => onFocusRepo?.(r.repo)}>
-                <span className="leaderboard-repo">{r.repo}</span>
-                <span className="leaderboard-flaky">{r.flakyChecks} flaky check{r.flakyChecks === 1 ? '' : 's'}</span>
+              <li key={r.repo} className="leaderboard-row">
+                <button type="button" className="leaderboard-row-btn" onClick={() => onFocusRepo?.(r.repo)}
+                  aria-label={`${r.repo} — ${r.flakyChecks} flaky checks`}>
+                  <span className="leaderboard-repo">{r.repo}</span>
+                  <span className="leaderboard-flaky">{r.flakyChecks} flaky check{r.flakyChecks === 1 ? '' : 's'}</span>
+                </button>
               </li>
             ))}
           </ol>
