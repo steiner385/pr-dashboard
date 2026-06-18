@@ -206,6 +206,8 @@ button.model-chip { cursor: pointer; }
 .canvas-lane-event { font-size: 11px; color: var(--text); opacity: 0.6; }
 button.canvas-node { width: 100%; cursor: pointer; background: var(--bg); text-align: left; }
 button.canvas-node.selected { outline: 2px solid var(--accent, #6af); outline-offset: 1px; }
+/* needs-DAG edge: dependency of the selected node (roadmap 5.1) — dashed accent ring */
+.canvas-node.dep-highlight { outline: 1px dashed var(--accent, #6af); outline-offset: 1px; box-shadow: -3px 0 0 0 var(--accent, #6af) inset; }
 .node-inspector { border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin: 8px 0; }
 .node-inspector-title { margin: 0 0 8px; font-size: 13px; }
 .node-inspector-needs { margin: 0 0 8px; font-size: 11px; color: var(--muted, #8a94a6); }

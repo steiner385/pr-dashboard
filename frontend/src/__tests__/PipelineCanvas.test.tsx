@@ -36,6 +36,16 @@ describe('PipelineCanvas (read-only DAG lanes)', () => {
     expect(flaky).toHaveAccessibleName(/flaky.*conditional/i);
   });
 
+  it('highlights the selected node’s dependencies (needs DAG edges, roadmap 5.1)', () => {
+    // e2e selected; its needs = {lint} → lint is marked as a dependency, color-independently.
+    render(<PipelineCanvas lanes={LANES} onSelect={vi.fn()} selected="e2e" highlightDeps={new Set(['lint'])} />);
+    const lint = screen.getByTestId('node-pr-lint');
+    expect(lint.className).toMatch(/dep-highlight/);
+    expect(lint).toHaveAccessibleName(/dependency of the selected check/i); // word, not just color
+    // a non-dependency node is not marked
+    expect(screen.getByTestId('node-queue-flaky').className).not.toMatch(/dep-highlight/);
+  });
+
   it('renders an empty-state when no lanes have nodes', () => {
     render(<PipelineCanvas lanes={[{ tierId: 'pr', label: 'PR', event: 'pull_request', nodes: [] }]} />);
     expect(screen.getByText(/no checks/i)).toBeInTheDocument();

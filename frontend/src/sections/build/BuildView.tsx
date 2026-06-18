@@ -88,7 +88,8 @@ export function BuildView({ repo, api }: BuildViewProps) {
       <h2>Build — {repo}</h2>
       <p className="build-blurb">Shape the pipeline by applying structured changes — the tool generates the YAML and validates it. No required gate can be silently dropped.</p>
 
-      <PipelineCanvas lanes={lanes} onSelect={setSelectedCheck} selected={selectedCheck ?? undefined} />
+      <PipelineCanvas lanes={lanes} onSelect={setSelectedCheck} selected={selectedCheck ?? undefined}
+        highlightDeps={selectedCheck ? new Set(model.checkMeta.find((m) => m.check === selectedCheck)?.needs ?? []) : undefined} />
 
       {selectedCheck && jobIdFor(model, selectedCheck)
         ? <NodeInspector check={selectedCheck} jobId={jobIdFor(model, selectedCheck)!} needs={model.checkMeta.find((m) => m.check === selectedCheck)?.needs} onApply={add} />

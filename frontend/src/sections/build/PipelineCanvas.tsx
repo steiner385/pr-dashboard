@@ -11,11 +11,15 @@ function gatingWord(n: LaneNode): string {
   return 'advisory';
 }
 
-interface NodeProps { tierId: string; node: LaneNode; onSelect?: (check: string) => void; selected?: boolean }
+interface NodeProps { tierId: string; node: LaneNode; onSelect?: (check: string) => void; selected?: boolean; isDep?: boolean }
 
-function CanvasNode({ tierId, node, onSelect, selected }: NodeProps) {
+function CanvasNode({ tierId, node, onSelect, selected, isDep }: NodeProps) {
   const word = gatingWord(node);
   const cls = node.gates ? 'gate' : node.conditional ? 'conditional' : 'advisory';
+  // The needs-DAG edge is shown by marking dependency nodes — color-independently:
+  // the relationship is named in the accessible label, not signalled by colour alone.
+  const depCls = isDep ? ' dep-highlight' : '';
+  const depLabel = isDep ? ' — dependency of the selected check' : '';
   const inner = (<>
     <span className="canvas-node-name">{node.check}</span>
     <span className="canvas-node-gate" aria-hidden="true">{word}</span>
@@ -24,18 +28,19 @@ function CanvasNode({ tierId, node, onSelect, selected }: NodeProps) {
   if (onSelect) {
     return (
       <li>
-        <button type="button" className={`canvas-node n-${cls}${selected ? ' selected' : ''}`}
+        <button type="button" className={`canvas-node n-${cls}${selected ? ' selected' : ''}${depCls}`}
           data-testid={`node-${tierId}-${node.check}`} aria-pressed={!!selected}
-          aria-label={`${node.check} — ${word}`} onClick={() => onSelect(node.check)}>{inner}</button>
+          aria-label={`${node.check} — ${word}${depLabel}`} onClick={() => onSelect(node.check)}>{inner}</button>
       </li>
     );
   }
   return (
-    <li className={`canvas-node n-${cls}`} data-testid={`node-${tierId}-${node.check}`} aria-label={`${node.check} — ${word}`}>{inner}</li>
+    <li className={`canvas-node n-${cls}${depCls}`} data-testid={`node-${tierId}-${node.check}`} aria-label={`${node.check} — ${word}${depLabel}`}>{inner}</li>
   );
 }
 
-export function PipelineCanvas({ lanes, onSelect, selected }: { lanes: Lane[]; onSelect?: (check: string) => void; selected?: string }) {
+export function PipelineCanvas({ lanes, onSelect, selected, highlightDeps }:
+  { lanes: Lane[]; onSelect?: (check: string) => void; selected?: string; highlightDeps?: ReadonlySet<string> }) {
   const total = lanes.reduce((n, l) => n + l.nodes.length, 0);
   if (total === 0) return <div className="pipeline-canvas empty" role="status">No checks to lay out yet.</div>;
   return (
@@ -47,7 +52,8 @@ export function PipelineCanvas({ lanes, onSelect, selected }: { lanes: Lane[]; o
             <span className="canvas-lane-event">{lane.event}</span>
           </header>
           <ul className="canvas-lane-nodes" role="list">
-            {lane.nodes.map((n) => <CanvasNode key={n.check} tierId={lane.tierId} node={n} onSelect={onSelect} selected={selected === n.check} />)}
+            {lane.nodes.map((n) => <CanvasNode key={n.check} tierId={lane.tierId} node={n}
+              onSelect={onSelect} selected={selected === n.check} isDep={highlightDeps?.has(n.check) && selected !== n.check} />)}
           </ul>
         </section>
       ))}
