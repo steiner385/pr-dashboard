@@ -8,7 +8,7 @@ import { useMemo, useState, useEffect, useRef, type KeyboardEvent } from 'react'
 const STORE_KEY = 'workspace.focusedPipeline';
 
 /** Sticky focused-pipeline state (persisted to localStorage; falls back to first repo). */
-export function useFocusedPipeline(repos: readonly string[]): [string | null, (repo: string) => void] {
+export function useFocusedPipeline(repos: readonly string[], enabled = true): [string | null, (repo: string) => void] {
   const [focused, setFocused] = useState<string | null>(() => {
     try { const s = localStorage.getItem(STORE_KEY); if (s && repos.includes(s)) return s; } catch { /* ignore */ }
     return repos[0] ?? null;
@@ -19,13 +19,14 @@ export function useFocusedPipeline(repos: readonly string[]): [string | null, (r
   // never adopted a repo when focus started null — Model/Optimize then stayed on
   // their "select a pipeline" empty state forever. (Found via live browser testing.)
   useEffect(() => {
+    if (!enabled) return;
     if (repos.length === 0) return;
     if (!focused || !repos.includes(focused)) {
       let stored: string | null = null;
       try { stored = localStorage.getItem(STORE_KEY); } catch { /* ignore */ }
       setFocused(stored && repos.includes(stored) ? stored : repos[0]);
     }
-  }, [repos, focused]);
+  }, [repos, focused, enabled]);
   const focus = (repo: string) => {
     setFocused(repo);
     try { localStorage.setItem(STORE_KEY, repo); } catch { /* ignore */ }
