@@ -39,7 +39,7 @@ function LegacyBridge({ id }: { id: SectionId }) {
 }
 
 export function WorkspaceApp() {
-  const { state, connected, notifySupported, notifyEnabled, toggleNotify } = useDashboard();
+  const { state, connected, stale, notifySupported, notifyEnabled, toggleNotify } = useDashboard();
   const repos = useMemo(() => (state ? state.repos.map((r) => r.repo) : []), [state]);
   const [focused, focus] = useFocusedPipeline(repos);
   const api = useMemo(() => makeWorkspaceApi(), []);
@@ -63,9 +63,14 @@ export function WorkspaceApp() {
     <div className="workspace-spine">
       <span className="workspace-brand">CI/CD Workspace</span>
       <PipelineSwitcher repos={repos} focused={focused} onFocus={focus} />
-      <span className={connected ? 'liveness live' : 'liveness down'} title={connected ? 'live' : 'reconnecting'}>
-        {connected ? '● live' : '○ reconnecting'}
-      </span>
+      {(() => {
+        // Three-state spine indicator (roadmap 5.6): live (fresh frames) · stale
+        // (socket up but feed quiet) · reconnecting (socket down).
+        const liveness = !connected ? { cls: 'down', label: '○ reconnecting', title: 'reconnecting' }
+          : stale ? { cls: 'stale', label: '◐ stale', title: 'connected, but no fresh data in 90s — feed may be stalled' }
+          : { cls: 'live', label: '● live', title: 'live' };
+        return <span className={`liveness ${liveness.cls}`} title={liveness.title}>{liveness.label}</span>;
+      })()}
       <SelfHealthDot api={api} />
       <button type="button" className="cmdk-trigger" aria-label="Command palette (⌘K)"
         title="Command palette — jump to any section or pipeline (⌘K)" onClick={() => setPaletteOpen(true)}>

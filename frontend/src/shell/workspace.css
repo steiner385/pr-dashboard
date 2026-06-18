@@ -16,6 +16,7 @@
 .workspace-brand { font-weight: 700; font-size: 15px; letter-spacing: -0.01em; white-space: nowrap; }
 .liveness, .self-health { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .liveness.live { color: var(--done); }
+.liveness.stale { color: var(--warn, #d98a00); }
 .liveness.down { color: var(--amber); }
 .self-health.degraded { color: var(--amber); }
 .self-health.ok { color: var(--done); }

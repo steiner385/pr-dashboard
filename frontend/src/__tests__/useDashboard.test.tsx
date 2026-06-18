@@ -101,6 +101,34 @@ describe('useDashboard', () => {
   });
 });
 
+describe('useDashboard staleness (roadmap 5.6 — feed stalled while socket open)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('is not stale immediately after a frame', () => {
+    const { result } = renderHook(() => useDashboard());
+    act(() => { MockEventSource.instances[0]!.fireMessage(JSON.stringify(SAMPLE_STATE)); });
+    expect(result.current.stale).toBe(false);
+  });
+
+  it('goes stale when no frame arrives for the staleness window (socket still up)', () => {
+    const { result } = renderHook(() => useDashboard());
+    act(() => { MockEventSource.instances[0]!.fireMessage(JSON.stringify(SAMPLE_STATE)); });
+    act(() => { vi.advanceTimersByTime(91_000); });
+    expect(result.current.stale).toBe(true);
+    expect(result.current.connected).toBe(true); // still connected — just no fresh data
+  });
+
+  it('clears stale when a fresh frame arrives', () => {
+    const { result } = renderHook(() => useDashboard());
+    act(() => { MockEventSource.instances[0]!.fireMessage(JSON.stringify(SAMPLE_STATE)); });
+    act(() => { vi.advanceTimersByTime(91_000); });
+    expect(result.current.stale).toBe(true);
+    act(() => { MockEventSource.instances[0]!.fireMessage(JSON.stringify(SAMPLE_STATE)); });
+    expect(result.current.stale).toBe(false);
+  });
+});
+
 describe('useDashboard browser notifications (issue #19)', () => {
   const EV = { repo: 'acme/widgets', prNumber: 7, title: 'fix: the thing',
     type: 'ci-failed', detail: 'a required check failed' };

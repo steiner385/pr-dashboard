@@ -35,9 +35,17 @@ function writeNotifyPref(v: boolean): void {
   try { localStorage.setItem(LS_NOTIFY_KEY, String(v)); } catch { /* private mode — ignore */ }
 }
 
+/** Frames arrive once per poll cycle; if none lands within this window while the
+ *  socket is still open, the feed has stalled (poller hung / GitHub throttled) —
+ *  a distinct state from a dropped connection. */
+const STALE_AFTER_MS = 90_000;
+
 export interface DashboardHook {
   state: DashboardState | null;
   connected: boolean;
+  /** Connected but no fresh frame within STALE_AFTER_MS — the data on screen is
+   *  aging even though the socket is up. Drives the spine's three-state indicator. */
+  stale: boolean;
   /** Whether this browser supports Web Notifications (bell hidden otherwise). */
   notifySupported: boolean;
   /** Bell state: notifications are shown only when true AND permission granted. */
@@ -49,6 +57,8 @@ export interface DashboardHook {
 export function useDashboard(): DashboardHook {
   const [state, setState] = useState<DashboardState | null>(null);
   const [connected, setConnected] = useState(false);
+  const [stale, setStale] = useState(false);
+  const staleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const supported = notifySupported();
   // restore the persisted bell only while permission is still granted — a
   // revoked permission would otherwise show an on-bell that does nothing
@@ -60,9 +70,16 @@ export function useDashboard(): DashboardHook {
   useEffect(() => {
     // No initial fetch: the SSE endpoint sends a full state frame on connect,
     // and a parallel fetch can race it and overwrite fresher data.
+    // Each frame resets the staleness watchdog; if the timer fires first, the feed
+    // has gone quiet while the socket stayed open → stale (not disconnected).
+    const armStale = () => {
+      if (staleTimer.current) clearTimeout(staleTimer.current);
+      staleTimer.current = setTimeout(() => setStale(true), STALE_AFTER_MS);
+    };
+    const onFrame = (data: string) => { setConnected(true); setStale(false); armStale(); setState(JSON.parse(data) as DashboardState); };
     const es = new EventSource('/api/events');
     es.onopen = () => setConnected(true);
-    es.onmessage = (e) => { setConnected(true); setState(JSON.parse(e.data) as DashboardState); };
+    es.onmessage = (e) => onFrame(e.data);
     es.onerror = () => setConnected(false);
     // Named `notification` frames (issue #19) — never delivered to onmessage.
     es.addEventListener('notification', (e: MessageEvent) => {
@@ -84,7 +101,7 @@ export function useDashboard(): DashboardHook {
         });
       } catch { /* malformed frame — ignore */ }
     });
-    return () => es.close();
+    return () => { es.close(); if (staleTimer.current) clearTimeout(staleTimer.current); };
   }, []);
 
   const toggleNotify = useCallback(() => {
@@ -100,5 +117,5 @@ export function useDashboard(): DashboardHook {
     void Notification.requestPermission().then((p) => { if (p === 'granted') enable(); });
   }, []);
 
-  return { state, connected, notifySupported: supported, notifyEnabled, toggleNotify };
+  return { state, connected, stale, notifySupported: supported, notifyEnabled, toggleNotify };
 }
