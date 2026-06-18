@@ -146,6 +146,11 @@
 .canvas-node.n-conditional { border-color: var(--amber); }
 .canvas-node-name { word-break: break-word; }
 .canvas-node-gate { font-size: 9px; text-transform: uppercase; color: var(--muted, #888); white-space: nowrap; }
+button.canvas-node { width: 100%; cursor: pointer; background: var(--bg); text-align: left; }
+button.canvas-node.selected { outline: 2px solid var(--accent, #6af); outline-offset: 1px; }
+.node-inspector { border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin: 8px 0; }
+.node-inspector-title { margin: 0 0 8px; font-size: 13px; }
+.node-inspector-ops { display: flex; gap: 8px; flex-wrap: wrap; }
 .optimize-diff, .quarantine-diff, .optimize-sim pre { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 12px; overflow-x: auto; white-space: pre; }
 .optimize-prompt { white-space: pre-wrap !important; }
 .sim-note.legal, .plan-note.legal { color: var(--done); }

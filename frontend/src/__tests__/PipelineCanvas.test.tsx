@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, within, fireEvent } from '@testing-library/react';
 import { PipelineCanvas } from '../sections/build/PipelineCanvas';
 import type { Lane } from '../sections/build/laneLayout';
 
@@ -39,5 +39,15 @@ describe('PipelineCanvas (read-only DAG lanes)', () => {
   it('renders an empty-state when no lanes have nodes', () => {
     render(<PipelineCanvas lanes={[{ tierId: 'pr', label: 'PR', event: 'pull_request', nodes: [] }]} />);
     expect(screen.getByText(/no checks/i)).toBeInTheDocument();
+  });
+
+  it('with onSelect, nodes are keyboard-operable buttons that report the check', () => {
+    const onSelect = vi.fn();
+    render(<PipelineCanvas lanes={LANES} onSelect={onSelect} selected="e2e" />);
+    const e2e = screen.getByTestId('node-pr-e2e');
+    expect(e2e.tagName).toBe('BUTTON');
+    expect(e2e).toHaveAttribute('aria-pressed', 'true'); // selected, color-independent
+    fireEvent.click(screen.getByTestId('node-pr-lint'));
+    expect(onSelect).toHaveBeenCalledWith('lint');
   });
 });

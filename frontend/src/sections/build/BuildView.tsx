@@ -9,6 +9,7 @@ import type { WorkspaceApi, CandidateDto, CandidateMutationDto } from '../../she
 import type { DerivedModelLike } from '../optimize/types';
 import { laneLayout } from './laneLayout';
 import { PipelineCanvas } from './PipelineCanvas';
+import { NodeInspector } from './NodeInspector';
 
 const DEFAULT_TIMEOUT = 15;
 
@@ -38,6 +39,7 @@ export function BuildView({ repo, api }: BuildViewProps) {
   const [busy, setBusy] = useState(false);
   const [opened, setOpened] = useState<{ number: number; url: string } | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
+  const [selectedCheck, setSelectedCheck] = useState<string | null>(null);
 
   useEffect(() => {
     if (!repo) return;
@@ -87,7 +89,11 @@ export function BuildView({ repo, api }: BuildViewProps) {
       <h2>Build — {repo}</h2>
       <p className="build-blurb">Shape the pipeline by applying structured changes — the tool generates the YAML and validates it. No required gate can be silently dropped.</p>
 
-      <PipelineCanvas lanes={lanes} />
+      <PipelineCanvas lanes={lanes} onSelect={setSelectedCheck} selected={selectedCheck ?? undefined} />
+
+      {selectedCheck && jobIdFor(model, selectedCheck) && (
+        <NodeInspector check={selectedCheck} jobId={jobIdFor(model, selectedCheck)!} onApply={add} />
+      )}
 
       <ul className="build-checks" role="list">
         {model.checks.map((c) => {

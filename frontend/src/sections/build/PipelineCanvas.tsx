@@ -11,19 +11,31 @@ function gatingWord(n: LaneNode): string {
   return 'advisory';
 }
 
-function CanvasNode({ tierId, node }: { tierId: string; node: LaneNode }) {
+interface NodeProps { tierId: string; node: LaneNode; onSelect?: (check: string) => void; selected?: boolean }
+
+function CanvasNode({ tierId, node, onSelect, selected }: NodeProps) {
   const word = gatingWord(node);
   const cls = node.gates ? 'gate' : node.conditional ? 'conditional' : 'advisory';
+  const inner = (<>
+    <span className="canvas-node-name">{node.check}</span>
+    <span className="canvas-node-gate" aria-hidden="true">{word}</span>
+  </>);
+  // Keyboard-operable button is the accessible baseline (drag is a later enhancement).
+  if (onSelect) {
+    return (
+      <li>
+        <button type="button" className={`canvas-node n-${cls}${selected ? ' selected' : ''}`}
+          data-testid={`node-${tierId}-${node.check}`} aria-pressed={!!selected}
+          aria-label={`${node.check} — ${word}`} onClick={() => onSelect(node.check)}>{inner}</button>
+      </li>
+    );
+  }
   return (
-    <li className={`canvas-node n-${cls}`} data-testid={`node-${tierId}-${node.check}`}
-      aria-label={`${node.check} — ${word}`}>
-      <span className="canvas-node-name">{node.check}</span>
-      <span className="canvas-node-gate" aria-hidden="true">{word}</span>
-    </li>
+    <li className={`canvas-node n-${cls}`} data-testid={`node-${tierId}-${node.check}`} aria-label={`${node.check} — ${word}`}>{inner}</li>
   );
 }
 
-export function PipelineCanvas({ lanes }: { lanes: Lane[] }) {
+export function PipelineCanvas({ lanes, onSelect, selected }: { lanes: Lane[]; onSelect?: (check: string) => void; selected?: string }) {
   const total = lanes.reduce((n, l) => n + l.nodes.length, 0);
   if (total === 0) return <div className="pipeline-canvas empty" role="status">No checks to lay out yet.</div>;
   return (
@@ -35,7 +47,7 @@ export function PipelineCanvas({ lanes }: { lanes: Lane[] }) {
             <span className="canvas-lane-event">{lane.event}</span>
           </header>
           <ul className="canvas-lane-nodes" role="list">
-            {lane.nodes.map((n) => <CanvasNode key={n.check} tierId={lane.tierId} node={n} />)}
+            {lane.nodes.map((n) => <CanvasNode key={n.check} tierId={lane.tierId} node={n} onSelect={onSelect} selected={selected === n.check} />)}
           </ul>
         </section>
       ))}

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { BuildView } from '../sections/build/BuildView';
 import type { WorkspaceApi, CandidateDto } from '../shell/workspaceApi';
 import type { DerivedModelLike } from '../sections/optimize/types';
@@ -7,7 +7,10 @@ import type { DerivedModelLike } from '../sections/optimize/types';
 const MODEL: DerivedModelLike = {
   tiers: [{ id: 'pr', label: 'PR', event: 'pull_request' }, { id: 'queue', label: 'Queue', event: 'merge_group' }],
   checks: ['e2e', 'build'],
-  cells: [],
+  cells: [
+    { check: 'e2e', tierId: 'pr', intent: { runs: true, gates: false, conditional: false }, observed: null, state: 'advisory' },
+    { check: 'build', tierId: 'queue', intent: { runs: true, gates: true, conditional: false }, observed: null, state: 'gate' },
+  ],
   checkMeta: [
     { check: 'e2e', isRequiredMergeGate: false, provenance: [{ file: 'ci.yml', jobId: 'e2e' }] },
     { check: 'build', isRequiredMergeGate: true, provenance: [{ file: 'ci.yml', jobId: 'build' }] },
@@ -28,7 +31,7 @@ function api(candidate = vi.fn(async () => clean), candidateApply = vi.fn(async 
 describe('BuildView (Increment 3 — the no-code loop)', () => {
   it('loads the model and lists checks with structured op buttons', async () => {
     render(<BuildView repo="o/r" api={api()} />);
-    expect(await screen.findByText('e2e')).toBeInTheDocument();
+    expect((await screen.findAllByText('e2e')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('Add timeout').length).toBeGreaterThan(0);
   });
 
@@ -56,6 +59,15 @@ describe('BuildView (Increment 3 — the no-code loop)', () => {
     fireEvent.click(await screen.findByText('Open draft PR'));
     expect(apply).toHaveBeenCalledWith('o/r', [{ op: 'timeout', jobId: 'e2e', minutes: 15 }], 'sha');
     expect(await screen.findByRole('link', { name: /#9/ })).toHaveAttribute('href', 'https://example/pr/9');
+  });
+
+  it('selecting a canvas node opens the inspector, whose op composes a mutation and projects', async () => {
+    const cand = vi.fn(async () => clean);
+    render(<BuildView repo="o/r" api={api(cand)} />);
+    fireEvent.click(await screen.findByTestId('node-pr-e2e')); // select via the canvas
+    const inspector = await screen.findByLabelText('Edit e2e');
+    fireEvent.click(within(inspector).getByRole('button', { name: /add timeout/i }));
+    expect(cand).toHaveBeenCalledWith('o/r', [{ op: 'timeout', jobId: 'e2e', minutes: 15 }], 'sha');
   });
 
   it('removing the only pending mutation clears the candidate', async () => {
