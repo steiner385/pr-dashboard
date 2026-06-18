@@ -12,8 +12,6 @@ import { PipelineCanvas } from './PipelineCanvas';
 import { NodeInspector } from './NodeInspector';
 import { RawYamlHatch } from './RawYamlHatch';
 
-const DEFAULT_TIMEOUT = 15;
-
 /** The provenance job id an edit must target for a check (its defining anchor). */
 function jobIdFor(model: DerivedModelLike, check: string): string | null {
   return model.checkMeta.find((m) => m.check === check)?.provenance[0]?.jobId ?? null;
@@ -92,24 +90,9 @@ export function BuildView({ repo, api }: BuildViewProps) {
 
       <PipelineCanvas lanes={lanes} onSelect={setSelectedCheck} selected={selectedCheck ?? undefined} />
 
-      {selectedCheck && jobIdFor(model, selectedCheck) && (
-        <NodeInspector check={selectedCheck} jobId={jobIdFor(model, selectedCheck)!} onApply={add} />
-      )}
-
-      <ul className="build-checks" role="list">
-        {model.checks.map((c) => {
-          const job = jobIdFor(model, c);
-          if (!job) return null;
-          return (
-            <li key={c} className="build-check">
-              <span className="build-check-name">{c}</span>
-              <button type="button" disabled={busy} onClick={() => add({ op: 'timeout', jobId: job, minutes: DEFAULT_TIMEOUT })}>Add timeout</button>
-              <button type="button" disabled={busy} onClick={() => add({ op: 'shift-left', jobId: job })}>Shift-left</button>
-              <button type="button" disabled={busy} onClick={() => add({ op: 'remove', jobId: job })}>Remove</button>
-            </li>
-          );
-        })}
-      </ul>
+      {selectedCheck && jobIdFor(model, selectedCheck)
+        ? <NodeInspector check={selectedCheck} jobId={jobIdFor(model, selectedCheck)!} onApply={add} />
+        : <p className="build-hint">Select a check in the pipeline above to edit it — add a timeout, shift it left, or remove it. Changes are validated before any draft PR.</p>}
 
       {stack.length > 0 && (
         <section className="build-stack" aria-label="Pending changes">

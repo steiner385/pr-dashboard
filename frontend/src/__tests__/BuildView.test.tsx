@@ -29,16 +29,18 @@ function api(candidate = vi.fn(async () => clean), candidateApply = vi.fn(async 
 }
 
 describe('BuildView (Increment 3 — the no-code loop)', () => {
-  it('loads the model and lists checks with structured op buttons', async () => {
+  it('loads the model and renders the pipeline canvas (no redundant flat op list)', async () => {
     render(<BuildView repo="o/r" api={api()} />);
-    expect((await screen.findAllByText('e2e')).length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Add timeout').length).toBeGreaterThan(0);
+    expect(await screen.findByTestId('node-pr-e2e')).toBeInTheDocument();
+    // ops are NOT shown until a node is selected (de-triplicated — roadmap 1.2)
+    expect(screen.queryByText('Add timeout')).not.toBeInTheDocument();
   });
 
-  it('applying a timeout composes a mutation, projects a candidate, and shows the generated diff', async () => {
+  it('selecting a check and applying a timeout composes a mutation, projects, and shows the diff', async () => {
     const cand = vi.fn(async () => clean);
     render(<BuildView repo="o/r" api={api(cand)} />);
-    fireEvent.click((await screen.findAllByText('Add timeout'))[0]); // e2e
+    fireEvent.click(await screen.findByTestId('node-pr-e2e'));
+    fireEvent.click(within(screen.getByLabelText('Edit e2e')).getByRole('button', { name: /add timeout/i }));
     expect(await screen.findByLabelText('generated diff')).toHaveTextContent('timeout-minutes: 15');
     expect(cand).toHaveBeenCalledWith('o/r', [{ op: 'timeout', jobId: 'e2e', minutes: 15 }], 'sha');
     expect(screen.getByTestId('candidate-verdict')).toHaveTextContent(/safe/i);
@@ -46,7 +48,8 @@ describe('BuildView (Increment 3 — the no-code loop)', () => {
 
   it('a gating-regressed candidate is shown blocked with the lost gates and no draft-PR exit', async () => {
     render(<BuildView repo="o/r" api={api(vi.fn(async () => regressed))} />);
-    fireEvent.click((await screen.findAllByText('Remove'))[1]); // build (required)
+    fireEvent.click(await screen.findByTestId('node-queue-build')); // build (required)
+    fireEvent.click(within(screen.getByLabelText('Edit build')).getByRole('button', { name: /^remove$/i }));
     expect(await screen.findByTestId('candidate-verdict')).toHaveTextContent(/blocked/i);
     expect(screen.getByTestId('candidate-verdict')).toHaveTextContent('build');
     expect(screen.queryByText('Open draft PR')).not.toBeInTheDocument();
@@ -55,7 +58,8 @@ describe('BuildView (Increment 3 — the no-code loop)', () => {
   it('a safe candidate offers a real Open draft PR button that applies and shows the PR link', async () => {
     const apply = vi.fn(async () => ({ ok: true as const, number: 9, url: 'https://example/pr/9' }));
     render(<BuildView repo="o/r" api={api(vi.fn(async () => clean), apply)} />);
-    fireEvent.click((await screen.findAllByText('Add timeout'))[0]);
+    fireEvent.click(await screen.findByTestId('node-pr-e2e'));
+    fireEvent.click(within(screen.getByLabelText('Edit e2e')).getByRole('button', { name: /add timeout/i }));
     fireEvent.click(await screen.findByText('Open draft PR'));
     expect(apply).toHaveBeenCalledWith('o/r', [{ op: 'timeout', jobId: 'e2e', minutes: 15 }], 'sha');
     expect(await screen.findByRole('link', { name: /#9/ })).toHaveAttribute('href', 'https://example/pr/9');
@@ -72,7 +76,8 @@ describe('BuildView (Increment 3 — the no-code loop)', () => {
 
   it('removing the only pending mutation clears the candidate', async () => {
     render(<BuildView repo="o/r" api={api()} />);
-    fireEvent.click((await screen.findAllByText('Add timeout'))[0]);
+    fireEvent.click(await screen.findByTestId('node-pr-e2e'));
+    fireEvent.click(within(screen.getByLabelText('Edit e2e')).getByRole('button', { name: /add timeout/i }));
     await screen.findByLabelText('generated diff');
     fireEvent.click(screen.getByLabelText('remove pending change 1'));
     expect(screen.queryByLabelText('generated diff')).not.toBeInTheDocument();
