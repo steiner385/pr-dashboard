@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useApiBase } from './embed/ApiBaseContext';
 import { simulateMove, legalFromTiers, legalToTargets } from './protectionSimulate';
 import { buildClaudePrompt } from './protectionPrompt';
@@ -29,6 +29,7 @@ export interface DerivedModel { tiers: TierDef[]; checks: string[]; cells: Cell[
 
 // gate (mandatory) ▸ conditional (runs-when-touched) ▸ advisory ▸ absent
 const STATE_RANK: Record<CellState, number> = { gate: 3, conditional: 2, advisory: 1, absent: 0 };
+const ABSENT_META = { role: 'absent' as CellState, drift: false, minutes: 0, gateTiers: [] as string[] };
 const STATE_GLYPH: Record<CellState, string> = { gate: '●', conditional: '◐', advisory: '○', absent: '·' };
 const STATE_WORD: Record<CellState, string> = { gate: 'gate', conditional: 'conditional', advisory: 'advisory', absent: 'absent' };
 
@@ -206,12 +207,13 @@ export function ProtectionMap() {
       const g = groupOf(check);
       const arr = groups.get(g) ?? []; arr.push(check); groups.set(g, arr);
     }
-    const rank = (c: string) => { const m = checkMeta.get(c)!; return (m.drift ? 100 : 0) + STATE_RANK[m.role] * 10; };
+    const getMeta = (c: string) => checkMeta.get(c) ?? ABSENT_META;
+    const rank = (c: string) => { const m = getMeta(c); return (m.drift ? 100 : 0) + STATE_RANK[m.role] * 10; };
     return [...groups.entries()].map(([name, checks]) => {
-      checks.sort((a, b) => rank(b) - rank(a) || (checkMeta.get(b)!.minutes - checkMeta.get(a)!.minutes) || leafOf(a).localeCompare(leafOf(b)));
-      const drift = checks.some((c) => checkMeta.get(c)!.drift);
-      const gates = checks.filter((c) => checkMeta.get(c)!.role === 'gate').length;
-      const visible = checks.filter((c) => showAbsent || checkMeta.get(c)!.role !== 'absent');
+      checks.sort((a, b) => rank(b) - rank(a) || (getMeta(b).minutes - getMeta(a).minutes) || leafOf(a).localeCompare(leafOf(b)));
+      const drift = checks.some((c) => getMeta(c).drift);
+      const gates = checks.filter((c) => getMeta(c).role === 'gate').length;
+      const visible = checks.filter((c) => showAbsent || getMeta(c).role !== 'absent');
       return { name, checks, visible, drift, gates, hiddenAbsent: checks.length - visible.length };
     }).sort((a, b) => Number(b.drift) - Number(a.drift) || b.gates - a.gates || a.name.localeCompare(b.name));
   }, [model, checkMeta, showAbsent]);
@@ -369,7 +371,7 @@ export function ProtectionMap() {
                   {grouped.map((g) => {
                     const open = !collapsed.has(g.name);
                     return (
-                      <>
+                      <Fragment key={g.name}>
                         <tr key={`h-${g.name}`} className="pm-group-row" onClick={() => toggleGroup(g.name)}>
                           <td className="pm-group-name">
                             <span className="pm-caret">{open ? '▾' : '▸'}</span> {g.name}
@@ -402,7 +404,7 @@ export function ProtectionMap() {
                         {open && g.hiddenAbsent > 0 && (
                           <tr key={`a-${g.name}`} className="pm-absent-note"><td colSpan={model.tiers.length + 1}>+{g.hiddenAbsent} absent-only checks hidden</td></tr>
                         )}
-                      </>
+                      </Fragment>
                     );
                   })}
                 </tbody>

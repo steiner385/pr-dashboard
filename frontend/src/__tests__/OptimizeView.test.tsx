@@ -172,4 +172,50 @@ describe('OptimizeView (US4 — drives /api/workspace loop)', () => {
     render(<OptimizeView repo="o/r" api={api} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('no derivable model');
   });
+
+  // Issue #168: per-action pending state — one in-flight action must NOT disable unrelated buttons
+  it('#168: simulate in-flight does not disable the quarantine button for other rows', async () => {
+    let resolveSimulate!: (v: unknown) => void;
+    const hangingSimulate = new Promise((res) => { resolveSimulate = res; });
+    const api = fakeApi({
+      simulate: vi.fn(() => hangingSimulate as Promise<never>),
+    });
+    render(<OptimizeView repo="o/r" api={api} />);
+
+    // Wait for the model to render and click "Simulate demote" for e2e (row 0)
+    const simulateBtns = await screen.findAllByText('Simulate demote');
+    fireEvent.click(simulateBtns[0]); // e2e simulate — now in-flight
+
+    // The quarantine button for a DIFFERENT row (build, index 1) must NOT be disabled
+    const quarantineBtns = await screen.findAllByText('Quarantine (flaky)');
+    expect(quarantineBtns[1]).not.toBeDisabled();
+
+    // The simulate button for the SAME row (e2e, index 0) MUST be disabled (prevents double-submit)
+    expect(simulateBtns[0]).toBeDisabled();
+
+    // Unblock the promise so the component can settle
+    resolveSimulate({ legal: true, note: 'ok', costDeltaMinutes: 0, direction: 'remove', gatesLost: [], gatesGained: [], estimated: false });
+  });
+
+  it('#168: quarantine in-flight does not disable the simulate buttons', async () => {
+    let resolveQuarantine!: (v: unknown) => void;
+    const hangingQuarantine = new Promise((res) => { resolveQuarantine = res; });
+    const api = fakeApi({
+      quarantineDryRun: vi.fn(() => hangingQuarantine as Promise<never>),
+    });
+    render(<OptimizeView repo="o/r" api={api} />);
+
+    const quarantineBtns = await screen.findAllByText('Quarantine (flaky)');
+    fireEvent.click(quarantineBtns[0]); // e2e quarantine — now in-flight
+
+    // Simulate demote button for ANY row must NOT be disabled
+    const simulateBtns = await screen.findAllByText('Simulate demote');
+    expect(simulateBtns[0]).not.toBeDisabled();
+    expect(simulateBtns[1]).not.toBeDisabled();
+
+    // The quarantine button for THE SAME row (e2e, index 0) MUST be disabled
+    expect(quarantineBtns[0]).toBeDisabled();
+
+    resolveQuarantine({ dryRun: true, diff: '@@ @@', baseSha: 'abc' });
+  });
 });

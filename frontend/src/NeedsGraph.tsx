@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useId } from 'react';
 import { layoutNeedsGraph, type GraphNodeInput } from './needsLayout';
 
 /** Interactive needs-DAG (issue #74): a pure-SVG layered graph of the CI
@@ -10,6 +10,7 @@ export function NeedsGraph({ nodes, formatDur }: {
   nodes: GraphNodeInput[];
   formatDur: (secs: number) => string;
 }) {
+  const arrowId = useId();
   const [active, setActive] = useState<string | null>(null);
   const layout = useMemo(() => layoutNeedsGraph(nodes), [nodes]);
   const pad = 10;
@@ -36,13 +37,13 @@ export function NeedsGraph({ nodes, formatDur }: {
       viewBox={`${-pad} ${-pad} ${layout.width + 2 * pad} ${layout.height + 2 * pad}`}
       role="img" aria-label="CI needs graph — nodes are jobs, edges are needs dependencies, the critical path is highlighted">
       <defs>
-        <marker id="ng-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <marker id={arrowId} viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
           <path d="M0,0 L8,4 L0,8 z" className="ng-arrow-head" />
         </marker>
       </defs>
       {layout.edges.map((e, i) => (
         <line key={i} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
-          markerEnd="url(#ng-arrow)"
+          markerEnd={`url(#${arrowId})`}
           className={`ng-edge${e.onCriticalPath ? ' cp' : ''}${edgeLit(e.from, e.to) ? '' : ' dim'}`} />
       ))}
       {layout.nodes.map((n) => {

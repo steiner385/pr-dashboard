@@ -133,4 +133,16 @@ describe('ProtectionMap', () => {
     render(<ProtectionMap />);
     expect((await screen.findByTestId('pm-error')).textContent).toMatch(/no derivable ci.yml/);
   });
+
+  it('renders matrix tbody with keyed Fragments (no React key warnings)', async () => {
+    mockFetch(MODEL);
+    const consoleSpy = vi.spyOn(console, 'error');
+    render(<ProtectionMap />);
+    await screen.findByTestId('pm-grid');
+    // Assert no console.error call matches React's unique key warning
+    const keyWarnings = consoleSpy.mock.calls.filter((call) =>
+      typeof call[0] === 'string' && /unique "key"/i.test(call[0])
+    );
+    expect(keyWarnings).toHaveLength(0);
+  });
 });

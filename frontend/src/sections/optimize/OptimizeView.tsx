@@ -28,7 +28,9 @@ export function OptimizeView({ repo, api }: OptimizeViewProps) {
   const [sim, setSim] = useState<SimResultDto | null>(null);
   const [diff, setDiff] = useState<string | null>(null);
   const [prompt, setPrompt] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  // Per-action pending state (#168): key → true while that specific action is in-flight.
+  // Keys: 'simulate:<check>', 'quarantine:<check>', 'preview', 'copyPrompt', 'simulatePlan'
+  const [pending, setPending] = useState<Record<string, boolean>>({});
   const [quarantine, setQuarantine] = useState<{ check: string; diff?: string; error?: string } | null>(null);
   const [planChecks, setPlanChecks] = useState<Set<string>>(new Set());
   const [plan, setPlan] = useState<{ combinedCostDeltaMinutes: number; legal: boolean; reason?: string } | null>(null);
@@ -49,22 +51,26 @@ export function OptimizeView({ repo, api }: OptimizeViewProps) {
   const from = useMemo(() => (model && selected ? homeTier(model, selected) : null), [model, selected]);
   const findings = useMemo(() => (model ? demotionFindings(model).slice(0, 8) : []), [model]);
 
+  function startPending(key: string) { setPending((p) => ({ ...p, [key]: true })); }
+  function clearPending(key: string) { setPending((p) => { const n = { ...p }; delete n[key]; return n; }); }
+
   async function simulate(check: string) {
     setSelected(check); setSim(null); setDiff(null); setPrompt(null);
     const tier = model ? homeTier(model, check) : null;
     if (!repo || !tier) return;
-    setBusy(true);
+    const key = `simulate:${check}`;
+    startPending(key);
     try { setSim(await api.simulate(repo, { check, fromTierId: tier, toTierId: null })); }
     catch (e) { setError((e as Error).message); }
-    finally { setBusy(false); }
+    finally { clearPending(key); }
   }
   async function preview() {
     if (!repo || !selected || !from || !model) return;
     const job = model.checkMeta.find((m) => m.check === selected)?.provenance[0]?.jobId ?? selected;
-    setBusy(true);
+    startPending('preview');
     try { setDiff((await api.draftPrDryRun(repo, { kind: 'tier', check: selected, jobId: job, fromTierId: from, targetEvent: 'merge_group' })).diff); }
     catch (e) { setError((e as Error).message); }
-    finally { setBusy(false); }
+    finally { clearPending('preview'); }
   }
 
   // "Author one" path (FR-013/016): hand the demote to Claude Code as a prompt.
@@ -72,22 +78,23 @@ export function OptimizeView({ repo, api }: OptimizeViewProps) {
   // (always copy-able) and best-effort write it to the clipboard.
   async function copyPrompt() {
     if (!repo || !selected || !from) return;
-    setBusy(true);
+    startPending('copyPrompt');
     try {
       const { prompt: text } = await api.prompt(repo, { goal: 'cost', check: selected, detail: sim?.note ?? '', fromTierId: from, toTierId: null });
       setPrompt(text);
       try { await navigator.clipboard?.writeText(text); } catch { /* clipboard unavailable — text is still shown to copy manually */ }
     } catch (e) { setError((e as Error).message); }
-    finally { setBusy(false); }
+    finally { clearPending('copyPrompt'); }
   }
 
   async function doQuarantine(check: string) {
     if (!repo || !model) return;
     const job = model.checkMeta.find((m) => m.check === check)?.provenance[0]?.jobId ?? check;
-    setQuarantine({ check }); setBusy(true);
+    const key = `quarantine:${check}`;
+    setQuarantine({ check }); startPending(key);
     try { setQuarantine({ check, diff: (await api.quarantineDryRun(repo, check, job)).diff }); }
     catch (e) { setQuarantine({ check, error: (e as Error).message }); } // server refuses a required gate (FR-038)
-    finally { setBusy(false); }
+    finally { clearPending(key); }
   }
 
   function togglePlan(check: string) {
@@ -97,10 +104,10 @@ export function OptimizeView({ repo, api }: OptimizeViewProps) {
   async function simulatePlan() {
     if (!repo || !model || planChecks.size === 0) return;
     const moves = [...planChecks].map((check) => ({ check, fromTierId: homeTier(model, check) ?? 'pr', toTierId: null }));
-    setBusy(true);
+    startPending('simulatePlan');
     try { setPlan(await api.plan(repo, moves)); }
     catch (e) { setError((e as Error).message); }
-    finally { setBusy(false); }
+    finally { clearPending('simulatePlan'); }
   }
 
   if (!repo) return <div className="optimize-view empty">Select a pipeline to optimize.</div>;
@@ -131,7 +138,7 @@ export function OptimizeView({ repo, api }: OptimizeViewProps) {
                 <span className="finding-impact" aria-hidden="true">💰</span>
                 <span className="finding-check">{f.check}</span>
                 <span className="finding-why">{f.minutes.toLocaleString()} min/window · never failed — demote candidate</span>
-                <button type="button" disabled={busy} onClick={() => simulate(f.check)}>Simulate</button>
+                <button type="button" disabled={!!pending[`simulate:${f.check}`]} onClick={() => simulate(f.check)}>Simulate</button>
               </li>
             ))}
           </ul>
@@ -145,14 +152,14 @@ export function OptimizeView({ repo, api }: OptimizeViewProps) {
               <input type="checkbox" checked={planChecks.has(c)} onChange={() => togglePlan(c)} aria-label={`Add ${c} to plan`} />
             </label>
             <span className="optimize-check-name">{c}</span>
-            <button type="button" disabled={busy} onClick={() => simulate(c)}>Simulate demote</button>
-            <button type="button" className="quarantine-btn" disabled={busy} onClick={() => doQuarantine(c)}>Quarantine (flaky)</button>
+            <button type="button" disabled={!!pending[`simulate:${c}`]} onClick={() => simulate(c)}>Simulate demote</button>
+            <button type="button" className="quarantine-btn" disabled={!!pending[`quarantine:${c}`]} onClick={() => doQuarantine(c)}>Quarantine (flaky)</button>
           </li>
         ))}
       </ul>
       {planChecks.size > 0 && (
         <section className="optimize-plan" aria-label="Multi-change plan">
-          <button type="button" disabled={busy} onClick={simulatePlan}>Simulate plan ({planChecks.size} change{planChecks.size === 1 ? '' : 's'})</button>
+          <button type="button" disabled={!!pending['simulatePlan']} onClick={simulatePlan}>Simulate plan ({planChecks.size} change{planChecks.size === 1 ? '' : 's'})</button>
           {plan && (
             <p className={plan.legal ? 'plan-note legal' : 'plan-note illegal'} role="status">
               {plan.legal
@@ -179,8 +186,8 @@ export function OptimizeView({ repo, api }: OptimizeViewProps) {
           )}
           {sim.legal
             ? <div className="optimize-actions">
-                <button type="button" disabled={busy} onClick={preview}>Preview draft PR</button>
-                <button type="button" disabled={busy} onClick={copyPrompt}>Copy Claude Code prompt</button>
+                <button type="button" disabled={!!pending['preview']} onClick={preview}>Preview draft PR</button>
+                <button type="button" disabled={!!pending['copyPrompt']} onClick={copyPrompt}>Copy Claude Code prompt</button>
               </div>
             : <p className="sim-blocked">This change is blocked: {sim.reason}.</p>}
           {diff && <pre className="optimize-diff" aria-label="draft PR diff">{diff}</pre>}
