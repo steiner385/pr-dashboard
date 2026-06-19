@@ -14,3 +14,6 @@ logs/
 # Playwright MCP session artifacts (screenshots, snapshots)
 .playwright-mcp/
 ws*.png
+
+# Claude Code agent worktrees (never commit)
+.claude/worktrees/
