@@ -109,6 +109,33 @@ describe('CheckGantt — duration bound band (p10–p90)', () => {
   });
 });
 
+describe('CheckGantt — bar fill uses GPU-composited transform (perf+a11y #176)', () => {
+  it('fill element uses transform: scaleX(fraction) not width, with transform-origin left', () => {
+    const { container } = render(<CheckGantt stage="ci" checks={[
+      check({ name: 'long', elapsedSeconds: 600, expectedSeconds: null, status: 'IN_PROGRESS', conclusion: null }),
+      check({ name: 'short', elapsedSeconds: 300, expectedSeconds: null, status: 'IN_PROGRESS', conclusion: null }),
+    ]} />);
+    const fills = container.querySelectorAll('.g-bar i') as NodeListOf<HTMLElement>;
+    // scaleX(1) for 100%, scaleX(0.5) for 50%
+    expect(fills[0]!.style.transform).toBe('scaleX(1)');
+    expect(fills[1]!.style.transform).toBe('scaleX(0.5)');
+    expect(fills[0]!.style.transformOrigin).toBe('left');
+    expect(fills[1]!.style.transformOrigin).toBe('left');
+    // width must NOT be set as a percentage (fill amount driven by transform now)
+    expect(fills[0]!.style.width).toBe('');
+    expect(fills[1]!.style.width).toBe('');
+  });
+
+  it('queued faint fill uses scaleX(0.15)', () => {
+    const { container } = render(<CheckGantt stage="ci" checks={[
+      check({ name: 'wait', status: 'QUEUED', conclusion: null, elapsedSeconds: null, expectedSeconds: null }),
+    ]} />);
+    const fill = container.querySelector('.g-bar i') as HTMLElement;
+    expect(fill.style.transform).toBe('scaleX(0.15)');
+    expect(fill.style.transformOrigin).toBe('left');
+  });
+});
+
 describe('CheckGantt', () => {
   it('the longest check defines 100%; others fill proportionally', () => {
     const { container } = render(<CheckGantt stage="ci" checks={[
@@ -116,8 +143,8 @@ describe('CheckGantt', () => {
       check({ name: 'short', elapsedSeconds: 300, expectedSeconds: null, status: 'IN_PROGRESS', conclusion: null }),
     ]} />);
     const fills = container.querySelectorAll('.g-bar i') as NodeListOf<HTMLElement>;
-    expect(fills[0]!.style.width).toBe('100%');
-    expect(fills[1]!.style.width).toBe('50%');
+    expect(fills[0]!.style.transform).toBe('scaleX(1)');
+    expect(fills[1]!.style.transform).toBe('scaleX(0.5)');
   });
 
   it('renders the expected tick only when expectedSeconds is present, at expected/scale', () => {
@@ -171,7 +198,7 @@ describe('CheckGantt', () => {
       check({ name: 'wait', status: 'QUEUED', conclusion: null, elapsedSeconds: null, expectedSeconds: null }),
     ]} />);
     const fill = container.querySelector('.g-bar i') as HTMLElement;
-    expect(fill.style.width).toBe('15%');
+    expect(fill.style.transform).toBe('scaleX(0.15)');
   });
 
   it('links the check name to its run when url is present', () => {
@@ -294,8 +321,8 @@ describe('CheckGantt — workflow grouping (Y2)', () => {
         elapsedSeconds: 300, expectedSeconds: null, status: 'IN_PROGRESS', conclusion: null }),
     ]} />);
     const fills = container.querySelectorAll('.g-bar i') as NodeListOf<HTMLElement>;
-    expect(fills[0]!.style.width).toBe('100%');
-    expect(fills[1]!.style.width).toBe('50%');
+    expect(fills[0]!.style.transform).toBe('scaleX(1)');
+    expect(fills[1]!.style.transform).toBe('scaleX(0.5)');
   });
 });
 

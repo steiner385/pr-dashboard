@@ -71,9 +71,9 @@ function timeText(c: CheckView, kind: RowKind): string {
 
 function GanttRow({ c, scale }: { c: CheckView; scale: number }) {
   const kind = rowKind(c);
-  const fillPct = kind === 'queued'
-    ? 15
-    : Math.min(100, ((c.elapsedSeconds ?? 0) / scale) * 100);
+  const fillFraction = kind === 'queued'
+    ? 0.15
+    : Math.min(1, (c.elapsedSeconds ?? 0) / scale);
 
   // For runner-wait queued rows, determine extra CSS class
   const isRunnerWait = kind === 'queued' && c.waitKind === 'runner';
@@ -110,7 +110,7 @@ function GanttRow({ c, scale }: { c: CheckView; scale: number }) {
           const highPct = Math.min(100, (c.expectedHighSeconds! / scale) * 100);
           return <span className="band" style={{ left: `${lowPct}%`, width: `${highPct - lowPct}%` }} />;
         })()}
-        <i style={{ width: `${fillPct}%` }} />
+        <i style={{ transform: `scaleX(${fillFraction})`, transformOrigin: 'left' }} />
         {c.expectedSeconds != null && (() => {
           const pct = Math.min(100, (c.expectedSeconds / scale) * 100);
           return <span className="exp" style={{ left: pct >= 100 ? 'calc(100% - 2px)' : `${pct}%` }} />;

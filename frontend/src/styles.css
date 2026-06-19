@@ -114,8 +114,10 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
 .g-name a { color: var(--text); }
 .g-bar { height: 12px; background: var(--border); border-radius: 3px; position: relative;
   overflow: hidden; display: block; }
-.g-bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px;
-  transition: width 1s linear; }
+.g-bar i { position: absolute; left: 0; top: 0; bottom: 0; width: 100%; }
+@media (prefers-reduced-motion: no-preference) {
+  .g-bar i { transition: transform 1s linear; }
+}
 .g-done .g-bar i { background: var(--done); }
 .g-running .g-bar i { background: var(--accent); }
 .g-overdue .g-bar i { background: var(--amber); }
