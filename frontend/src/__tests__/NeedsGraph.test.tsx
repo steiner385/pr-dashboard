@@ -92,6 +92,15 @@ describe('NeedsGraph — a11y: node as button with keyboard + aria-pressed (#173
     expect(buildNode.getAttribute('aria-pressed')).toBe('false');
   });
 
+  it('pressing Space again on an active node toggles it off (aria-pressed semantics)', () => {
+    const { container } = render(<NeedsGraph nodes={nodes} formatDur={formatDur} />);
+    const lintNode = container.querySelector('[data-testid="ng-node-lint"]')!;
+    fireEvent.keyDown(lintNode, { key: ' ' });
+    expect(lintNode.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.keyDown(lintNode, { key: ' ' }); // second press toggles off
+    expect(lintNode.getAttribute('aria-pressed')).toBe('false');
+  });
+
   it('pressing Enter on a node sets aria-pressed="true"', () => {
     const { container } = render(<NeedsGraph nodes={nodes} formatDur={formatDur} />);
     const buildNode = container.querySelector('[data-testid="ng-node-build"]')!;

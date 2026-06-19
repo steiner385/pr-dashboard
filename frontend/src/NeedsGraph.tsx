@@ -64,7 +64,7 @@ export function NeedsGraph({ nodes, formatDur }: {
             onKeyDown={(e) => {
               if (e.key === ' ' || e.key === 'Enter') {
                 e.preventDefault();
-                setActive(n.name);
+                setActive(isPressed ? null : n.name); // toggle — matches aria-pressed semantics
               } else if (e.key === 'Escape') {
                 setActive(null);
               }
