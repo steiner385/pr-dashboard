@@ -64,11 +64,11 @@ describe('WorkspaceApp (Increment 1 MVP composition)', () => {
     expect(link).toHaveAttribute('href', '?legacy=1');
   });
 
-  it('surfaces the Insights section (Metrics + Tune folded together — WS3a)', () => {
+  it('surfaces the Insights section (Metrics + Tune folded together — WS3a)', async () => {
     mockHook.mockReturnValue({ state: STATE, connected: true });
     renderApp();
     fireEvent.click(screen.getByText('Insights'));
-    expect(screen.getByTestId('metrics-view')).toBeInTheDocument();
+    expect(await screen.findByTestId('metrics-view')).toBeInTheDocument();
     // the Tune panels are folded in too
     expect(screen.getByLabelText('Budgets')).toBeInTheDocument();
   });

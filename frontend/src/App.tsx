@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useDashboard } from './useDashboard';
 import { readKioskConfig } from './kiosk';
 import { PrRow } from './PrRow';
@@ -6,8 +6,11 @@ import { StatusStrip, bucketPr, isActivePr, isFailedPr, type Bucket } from './St
 import { QueueTrain } from './QueueTrain';
 import { SettingsPanel } from './SettingsPanel';
 import { LegendPanel } from './LegendPanel';
-import { MetricsView } from './MetricsView';
 import { ProtectionMap } from './ProtectionMap';
+
+const MetricsView = lazy(() =>
+  import('./MetricsView').then((m) => ({ default: m.MetricsView })),
+);
 import { DeliverySpine } from './spine/DeliverySpine';
 import { HealthHeader } from './HealthHeader';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -297,7 +300,11 @@ export function App() {
         {/* one boundary instance per tab: a render crash in one panel must
             not white-screen the other */}
         <ErrorBoundary>
-          {metricsVisited && <MetricsView focusCostNonce={costFocusNonce} />}
+          {metricsVisited && (
+            <Suspense fallback={<div role="status">Loading metrics…</div>}>
+              <MetricsView focusCostNonce={costFocusNonce} />
+            </Suspense>
+          )}
         </ErrorBoundary>
       </div>
       <div id="tabpanel-designer" hidden={tab !== 'designer'}

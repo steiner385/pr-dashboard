@@ -200,12 +200,12 @@ describe('App tab bar', () => {
     }
   });
 
-  it('switching to Metrics shows MetricsView and hides the pipeline panel', () => {
+  it('switching to Metrics shows MetricsView and hides the pipeline panel', async () => {
     render(<App />);
     fireEvent.click(screen.getByRole('tab', { name: 'Metrics' }));
     expect(screen.getByRole('tab', { name: 'Metrics' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tab', { name: 'Pipeline' })).toHaveAttribute('aria-selected', 'false');
-    expect(screen.getByTestId('metrics-view-stub')).toBeInTheDocument();
+    expect(await screen.findByTestId('metrics-view-stub')).toBeInTheDocument();
     expect(document.getElementById('tabpanel-pipeline')).toHaveAttribute('hidden');
     expect(document.getElementById('tabpanel-metrics')).not.toHaveAttribute('hidden');
   });
@@ -230,11 +230,11 @@ describe('App tab bar', () => {
     expect(window.location.hash).toBe('#delivery');
   });
 
-  it('opens the tab named by the initial URL hash (deep link) and mounts it', () => {
+  it('opens the tab named by the initial URL hash (deep link) and mounts it', async () => {
     window.history.replaceState(null, '', '#metrics');
     render(<App />);
     expect(screen.getByRole('tab', { name: 'Metrics' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByTestId('metrics-view-stub')).toBeInTheDocument();   // lazy-mount seeded
+    expect(await screen.findByTestId('metrics-view-stub')).toBeInTheDocument();   // lazy-mount seeded
   });
 
   it('a deep link to #delivery mounts the spine up front', () => {
@@ -289,11 +289,11 @@ describe('App tab bar', () => {
     expect(screen.getByRole('tab', { name: 'Pipeline' })).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('the Cost chip routes to the Metrics tab (the coverage view)', () => {
+  it('the Cost chip routes to the Metrics tab (the coverage view)', async () => {
     render(<App />);
     fireEvent.click(screen.getByTestId('health-lane-cost'));
     expect(screen.getByRole('tab', { name: 'Metrics' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByTestId('metrics-view-stub')).toBeInTheDocument();
+    expect(await screen.findByTestId('metrics-view-stub')).toBeInTheDocument();
   });
 
   // ---- per-tab error boundary ----
