@@ -1,9 +1,10 @@
-import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react';
+import { useId, useRef, type ReactNode, type RefObject } from 'react';
 import { TILE_DEFINITIONS } from './StatusStrip';
 import {
   METRIC_DEFINITIONS, SUBLINE_TERMS, LANE_STATE_DEFINITIONS, LANE_DEFINITIONS,
   SETTINGS_DEFINITIONS, DESIGNER_DEFINITIONS, METRIC_SECTION_GROUPS,
 } from './definitions';
+import { useFocusTrap } from './hooks/useFocusTrap';
 
 interface LegendPanelProps {
   open: boolean;
@@ -66,23 +67,8 @@ export function LegendPanel({ open, onClose, returnFocusRef }: LegendPanelProps)
   const panelRef = useRef<HTMLDivElement>(null);
   const headingId = useId();
 
-  // Esc to close + focus management — same mechanics as SettingsPanel.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    const focusTarget =
-      panelRef.current?.querySelector<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      ) ?? panelRef.current;
-    focusTarget?.focus();
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      returnFocusRef?.current?.focus();
-    };
-  }, [open, onClose, returnFocusRef]);
+  // Esc to close + focus management + Tab-trap (via shared hook).
+  useFocusTrap(panelRef, open, { onClose, returnFocusRef });
 
   if (!open) return null;
 

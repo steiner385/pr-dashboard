@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, fireEvent } from '@testing-library/react';
 import { NeedsGraph } from '../NeedsGraph';
 import type { GraphNodeInput } from '../needsLayout';
 
@@ -60,5 +60,75 @@ describe('NeedsGraph', () => {
       const markerEnd = line.getAttribute('markerEnd') || line.getAttribute('marker-end');
       expect(markerEnd).toBe(`url(#${markerIds[1]})`);
     });
+  });
+});
+
+describe('NeedsGraph — a11y: node as button with keyboard + aria-pressed (#173)', () => {
+  const nodes = [node('lint', []), node('build', ['lint']), node('test', ['lint'])];
+
+  it('each job node has role="button" (not "group")', () => {
+    const { container } = render(<NeedsGraph nodes={nodes} formatDur={formatDur} />);
+    const gs = container.querySelectorAll('[data-testid^="ng-node-"]');
+    gs.forEach((g) => {
+      expect(g.getAttribute('role')).toBe('button');
+    });
+  });
+
+  it('each job node has aria-pressed="false" when nothing is active', () => {
+    const { container } = render(<NeedsGraph nodes={nodes} formatDur={formatDur} />);
+    const gs = container.querySelectorAll('[data-testid^="ng-node-"]');
+    gs.forEach((g) => {
+      expect(g.getAttribute('aria-pressed')).toBe('false');
+    });
+  });
+
+  it('pressing Space on a node sets aria-pressed="true" on that node', () => {
+    const { container } = render(<NeedsGraph nodes={nodes} formatDur={formatDur} />);
+    const lintNode = container.querySelector('[data-testid="ng-node-lint"]')!;
+    fireEvent.keyDown(lintNode, { key: ' ' });
+    expect(lintNode.getAttribute('aria-pressed')).toBe('true');
+    // other nodes are not pressed
+    const buildNode = container.querySelector('[data-testid="ng-node-build"]')!;
+    expect(buildNode.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('pressing Space again on an active node toggles it off (aria-pressed semantics)', () => {
+    const { container } = render(<NeedsGraph nodes={nodes} formatDur={formatDur} />);
+    const lintNode = container.querySelector('[data-testid="ng-node-lint"]')!;
+    fireEvent.keyDown(lintNode, { key: ' ' });
+    expect(lintNode.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.keyDown(lintNode, { key: ' ' }); // second press toggles off
+    expect(lintNode.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('pressing Enter on a node sets aria-pressed="true"', () => {
+    const { container } = render(<NeedsGraph nodes={nodes} formatDur={formatDur} />);
+    const buildNode = container.querySelector('[data-testid="ng-node-build"]')!;
+    fireEvent.keyDown(buildNode, { key: 'Enter' });
+    expect(buildNode.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('pressing Escape clears the active/pressed node', () => {
+    const { container } = render(<NeedsGraph nodes={nodes} formatDur={formatDur} />);
+    const lintNode = container.querySelector('[data-testid="ng-node-lint"]')!;
+    fireEvent.keyDown(lintNode, { key: ' ' });
+    expect(lintNode.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.keyDown(lintNode, { key: 'Escape' });
+    expect(lintNode.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('mouseEnter also reflects in aria-pressed (hover = active = pressed)', () => {
+    const { container } = render(<NeedsGraph nodes={nodes} formatDur={formatDur} />);
+    const testNode = container.querySelector('[data-testid="ng-node-test"]')!;
+    const buildNode = container.querySelector('[data-testid="ng-node-build"]')!;
+    // Before hover: all nodes are unpressed
+    expect(testNode.getAttribute('aria-pressed')).toBe('false');
+    // Hover sets active → aria-pressed=true on hovered, false on others
+    fireEvent.mouseEnter(testNode);
+    expect(testNode.getAttribute('aria-pressed')).toBe('true');
+    expect(buildNode.getAttribute('aria-pressed')).toBe('false');
+    // Mouse leave clears
+    fireEvent.mouseLeave(testNode);
+    expect(testNode.getAttribute('aria-pressed')).toBe('false');
   });
 });

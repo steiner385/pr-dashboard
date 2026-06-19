@@ -80,6 +80,7 @@ export function PipelineSwitcher({ repos, focused, onFocus }: PipelineSwitcherPr
       <button
         type="button"
         className="pipeline-switcher-current"
+        aria-label="Switch pipeline"
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}

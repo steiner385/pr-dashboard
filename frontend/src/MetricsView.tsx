@@ -812,10 +812,10 @@ export function MetricsView({ now, focusCostNonce }: {
               <table className="metric-table">
                 <thead>
                   <tr>
-                    <th>day</th>
-                    <th title={defTitle(DEFS.costActualsActual)}>actual $</th>
-                    <th title={defTitle(DEFS.costActualsAttributed)}>attributed $</th>
-                    <th title="Coverage to date — attributed ÷ actual summed over comparable
+                    <th scope="col">day</th>
+                    <th scope="col" title={defTitle(DEFS.costActualsActual)}>actual $</th>
+                    <th scope="col" title={defTitle(DEFS.costActualsAttributed)}>attributed $</th>
+                    <th scope="col" title="Coverage to date — attributed ÷ actual summed over comparable
                       days up to and including this one. Cumulative, not per-day: a single
                       day's attributed (jobs that ran × rate) and actual (what AWS billed
                       that date) aren't comparable, so this running figure is the honest one.
@@ -908,12 +908,12 @@ export function MetricsView({ now, focusCostNonce }: {
                   <table className="metric-table">
                     <thead>
                       <tr>
-                        <th>job</th><th>event</th>
-                        <th title={defTitle(DEFS.costPoolShare)}>pool</th>
-                        <th title={defTitle(DEFS.costInstanceType)}>instance</th>
-                        <th title={defTitle(DEFS.costJobMinutes)}>minutes</th>
-                        <th title={defTitle(DEFS.costJobMinutes)}>$</th>
-                        <th title={defTitle(DEFS.costJobSamples)}>n</th>
+                        <th scope="col">job</th><th scope="col">event</th>
+                        <th scope="col" title={defTitle(DEFS.costPoolShare)}>pool</th>
+                        <th scope="col" title={defTitle(DEFS.costInstanceType)}>instance</th>
+                        <th scope="col" title={defTitle(DEFS.costJobMinutes)}>minutes</th>
+                        <th scope="col" title={defTitle(DEFS.costJobMinutes)}>$</th>
+                        <th scope="col" title={defTitle(DEFS.costJobSamples)}>n</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -940,13 +940,13 @@ export function MetricsView({ now, focusCostNonce }: {
                   <table className="metric-table">
                     <thead>
                       <tr>
-                        <th title={defTitle(DEFS.costRunMinutes)}>run #</th>
-                        <th>event</th>
-                        <th title={defTitle(DEFS.costRunPr)}>PR</th>
-                        <th>sha</th>
-                        <th title={defTitle(DEFS.costRunJobs)}>jobs</th>
-                        <th title={defTitle(DEFS.costRunMinutes)}>minutes</th>
-                        <th title={defTitle(DEFS.costRunMinutes)}>$</th>
+                        <th scope="col" title={defTitle(DEFS.costRunMinutes)}>run #</th>
+                        <th scope="col">event</th>
+                        <th scope="col" title={defTitle(DEFS.costRunPr)}>PR</th>
+                        <th scope="col">sha</th>
+                        <th scope="col" title={defTitle(DEFS.costRunJobs)}>jobs</th>
+                        <th scope="col" title={defTitle(DEFS.costRunMinutes)}>minutes</th>
+                        <th scope="col" title={defTitle(DEFS.costRunMinutes)}>$</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1079,9 +1079,9 @@ export function MetricsView({ now, focusCostNonce }: {
             <table className="metric-table">
               <thead>
                 <tr>
-                  <th>batch</th>
-                  <th title={defTitle(DEFS.batchAdvisorThroughput)}>throughput /h</th>
-                  <th title={defTitle(DEFS.batchAdvisorTimeInQueue)}>time in queue</th>
+                  <th scope="col">batch</th>
+                  <th scope="col" title={defTitle(DEFS.batchAdvisorThroughput)}>throughput /h</th>
+                  <th scope="col" title={defTitle(DEFS.batchAdvisorTimeInQueue)}>time in queue</th>
                 </tr>
               </thead>
               <tbody>
@@ -1110,12 +1110,12 @@ export function MetricsView({ now, focusCostNonce }: {
             <table className="metric-table">
               <thead>
                 <tr>
-                  <th>job</th><th>event</th>
-                  <th title={defTitle(DEFS.jobP50)}>p50</th>
-                  <th title={defTitle(DEFS.jobP90)}>p90</th>
-                  <th title={defTitle(DEFS.variability)}>p90/p50</th>
-                  <th title={defTitle(DEFS.sampleN)}>n</th>
-                  <th>trend (p50 + band)</th>
+                  <th scope="col">job</th><th scope="col">event</th>
+                  <th scope="col" title={defTitle(DEFS.jobP50)}>p50</th>
+                  <th scope="col" title={defTitle(DEFS.jobP90)}>p90</th>
+                  <th scope="col" title={defTitle(DEFS.variability)}>p90/p50</th>
+                  <th scope="col" title={defTitle(DEFS.sampleN)}>n</th>
+                  <th scope="col">trend (p50 + band)</th>
                 </tr>
               </thead>
               <tbody>
@@ -1148,10 +1148,10 @@ export function MetricsView({ now, focusCostNonce }: {
             <table className="metric-table">
               <thead>
                 <tr>
-                  <th>job</th><th>event</th>
-                  <th title={defTitle(DEFS.flakeRate)}>flake rate</th>
-                  <th title={defTitle(DEFS.flakeRate)}>events / runs</th>
-                  <th>trend (rate)</th>
+                  <th scope="col">job</th><th scope="col">event</th>
+                  <th scope="col" title={defTitle(DEFS.flakeRate)}>flake rate</th>
+                  <th scope="col" title={defTitle(DEFS.flakeRate)}>events / runs</th>
+                  <th scope="col">trend (rate)</th>
                 </tr>
               </thead>
               <tbody>
@@ -1192,11 +1192,11 @@ export function MetricsView({ now, focusCostNonce }: {
             <table className="metric-table">
               <thead>
                 <tr>
-                  <th>check</th><th>runs on</th>
-                  <th title="success rate over distinct (sha, attempt) runs in the window">green</th>
-                  <th title="runner-minutes spent in the window — the cost basis for ranking">cost</th>
-                  <th>suggested</th>
-                  <th></th>
+                  <th scope="col">check</th><th scope="col">runs on</th>
+                  <th scope="col" title="success rate over distinct (sha, attempt) runs in the window">green</th>
+                  <th scope="col" title="runner-minutes spent in the window — the cost basis for ranking">cost</th>
+                  <th scope="col">suggested</th>
+                  <th scope="col"></th>
                 </tr>
               </thead>
               <tbody>
@@ -1246,10 +1246,10 @@ export function MetricsView({ now, focusCostNonce }: {
             <table className="metric-table">
               <thead>
                 <tr>
-                  <th>check</th><th>runs on</th>
-                  <th title="real (non-flaky) failures — failing runs minus same-sha-resolved flakes">real fails</th>
-                  <th>suggested</th>
-                  <th></th>
+                  <th scope="col">check</th><th scope="col">runs on</th>
+                  <th scope="col" title="real (non-flaky) failures — failing runs minus same-sha-resolved flakes">real fails</th>
+                  <th scope="col">suggested</th>
+                  <th scope="col"></th>
                 </tr>
               </thead>
               <tbody>
@@ -1325,7 +1325,7 @@ export function MetricsView({ now, focusCostNonce }: {
               </ChartBlock>
             )}
             <table className="metric-table">
-              <thead><tr><th>pool</th><th>events</th></tr></thead>
+              <thead><tr><th scope="col">pool</th><th scope="col">events</th></tr></thead>
               <tbody>
                 {r.byPool.map((bp) => (
                   <tr key={bp.pool}>
@@ -1352,11 +1352,11 @@ export function MetricsView({ now, focusCostNonce }: {
             <table className="metric-table">
               <thead>
                 <tr>
-                  <th>job</th>
-                  <th title={defTitle(DEFS.trainEjects)}>trains ejected</th>
-                  <th title={defTitle(DEFS.ejectCost)}>est. cost (train-hours)</th>
-                  <th title={defTitle(DEFS.flakeRate)}>flake rate</th>
-                  <th title="Why the trains ejected, classified from the failing check's conclusion (roadmap 4.4b) — with the lead remedy">reason → remedy</th>
+                  <th scope="col">job</th>
+                  <th scope="col" title={defTitle(DEFS.trainEjects)}>trains ejected</th>
+                  <th scope="col" title={defTitle(DEFS.ejectCost)}>est. cost (train-hours)</th>
+                  <th scope="col" title={defTitle(DEFS.flakeRate)}>flake rate</th>
+                  <th scope="col" title="Why the trains ejected, classified from the failing check's conclusion (roadmap 4.4b) — with the lead remedy">reason → remedy</th>
                 </tr>
               </thead>
               <tbody>
@@ -1463,9 +1463,9 @@ export function MetricsView({ now, focusCostNonce }: {
             <table className="metric-table">
               <thead>
                 <tr>
-                  <th>severity</th><th>job</th><th>finding</th>
-                  <th title={defTitle(DEFS.lintP99)}>p99</th>
-                  <th title={defTitle(DEFS.lintTimeout)}>timeout</th>
+                  <th scope="col">severity</th><th scope="col">job</th><th scope="col">finding</th>
+                  <th scope="col" title={defTitle(DEFS.lintP99)}>p99</th>
+                  <th scope="col" title={defTitle(DEFS.lintTimeout)}>timeout</th>
                 </tr>
               </thead>
               <tbody>

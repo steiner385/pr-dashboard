@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useApiBase } from './embed/ApiBaseContext';
 import { simulateMove, legalFromTiers, legalToTargets } from './protectionSimulate';
 import { buildClaudePrompt } from './protectionPrompt';
+import { useFocusTrap } from './hooks/useFocusTrap';
 
 // ---- DerivedModel mirror (server/pipeline-model/derived) --------------------
 
@@ -170,41 +171,11 @@ export function ProtectionMap() {
     return () => { cancelled = true; };
   }, [model, metrics]);
 
-  // Esc to close the drawer + focus management + focus trap.
-  // Same mechanics as LegendPanel and SettingsPanel.
-  const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-  useEffect(() => {
-    if (!drilled) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setDrilled(null);
-        return;
-      }
-      // Focus trap: wrap Tab / Shift-Tab within the drawer's focusable elements.
-      if (e.key === 'Tab' && drawerRef.current) {
-        const focusable = [...drawerRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)];
-        if (focusable.length === 0) return;
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        if (e.shiftKey) {
-          if (document.activeElement === first) { e.preventDefault(); last.focus(); }
-        } else {
-          if (document.activeElement === last) { e.preventDefault(); first.focus(); }
-        }
-      }
-    };
-    document.addEventListener('keydown', onKey);
-    // Move focus into the drawer: prefer close button, fall back to the drawer itself.
-    const focusTarget =
-      drawerRef.current?.querySelector<HTMLElement>(FOCUSABLE) ?? drawerRef.current;
-    focusTarget?.focus();
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      // Restore focus to the trigger that opened the drawer.
-      drawerTriggerRef.current?.focus();
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drilled]);
+  // Esc to close the drawer + focus management + focus trap (via shared hook).
+  useFocusTrap(drawerRef, !!drilled, {
+    onClose: () => setDrilled(null),
+    returnFocusRef: drawerTriggerRef,
+  });
 
   const findings = useMemo(() => buildFindings(repo ?? '', model, metrics), [repo, model, metrics]);
   const byCell = useMemo(() => {
@@ -406,10 +377,10 @@ export function ProtectionMap() {
 
             {/* ── MATRIX (reference) ────────────────────────────────────── */}
             <div className="pm-grid-wrap">
-              <table className="pm-grid" data-testid="pm-grid">
+              <table className="pm-grid" data-testid="pm-grid" aria-label="Protection check matrix">
                 <thead>
                   <tr>
-                    <th className="pm-check-h">
+                    <th scope="col" className="pm-check-h">
                       check
                       <label className="pm-show-absent">
                         <input type="checkbox" checked={showAbsent} onChange={(e) => setShowAbsent(e.target.checked)} /> absent
@@ -418,7 +389,7 @@ export function ProtectionMap() {
                     {model.tiers.map((t) => {
                       const st = tierStats.get(t.id)!;
                       return (
-                        <th key={t.id} className="pm-tier-h" title={`trigger: ${t.event}`}>
+                        <th scope="col" key={t.id} className="pm-tier-h" title={`trigger: ${t.event}`}>
                           {t.label}<i>{st.gates}g · {fmtMin(st.minutes)}</i>
                         </th>
                       );
@@ -431,7 +402,7 @@ export function ProtectionMap() {
                     return (
                       <Fragment key={g.name}>
                         <tr key={`h-${g.name}`} className="pm-group-row" onClick={() => toggleGroup(g.name)}>
-                          <td className="pm-group-name">
+                          <th scope="rowgroup" className="pm-group-name">
                             <button
                               type="button"
                               className="pm-group-btn"
@@ -443,7 +414,7 @@ export function ProtectionMap() {
                               {' '}{g.name}
                               <span className="pm-group-meta">{g.checks.length}{g.gates ? ` · ${g.gates}g` : ''}{g.drift ? ' · ⚠' : ''}</span>
                             </button>
-                          </td>
+                          </th>
                           {model.tiers.map((t) => {
                             const best = g.tierBest.get(t.id) ?? 'absent';
                             return <td key={t.id} className={`pm-mini pm-${best}`}>{STATE_GLYPH[best]}</td>;
@@ -523,8 +494,8 @@ export function ProtectionMap() {
                 </p>
                 <p className="pm-drawer-why">{drilled.detail}</p>
 
-                <table className="pm-evidence" data-testid="pm-evidence">
-                  <thead><tr><th>tier</th><th>state</th><th>runs</th><th>fail%</th><th>min</th></tr></thead>
+                <table className="pm-evidence" data-testid="pm-evidence" aria-label="Per-tier evidence">
+                  <thead><tr><th scope="col">tier</th><th scope="col">state</th><th scope="col">runs</th><th scope="col">fail%</th><th scope="col">min</th></tr></thead>
                   <tbody>
                     {model.tiers.map((t) => {
                       const c = byCell.get(cellKey(dcheck, t.id));

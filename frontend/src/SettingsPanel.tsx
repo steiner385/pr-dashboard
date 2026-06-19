@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type RefObject } from 'react';
+import { useFocusTrap } from './hooks/useFocusTrap';
 import { useApiBase } from './embed/ApiBaseContext';
 import type {
   ConfigResponse,
@@ -221,25 +222,8 @@ export function SettingsPanel({ open, onClose, returnFocusRef, connected }: Sett
     }
   }, [open]);
 
-  // Esc to close + focus management (move focus in on open, restore on close).
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    // Move focus into the panel.
-    const focusTarget =
-      panelRef.current?.querySelector<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      ) ?? panelRef.current;
-    focusTarget?.focus();
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      // Restore focus to the trigger.
-      returnFocusRef?.current?.focus();
-    };
-  }, [open, onClose, returnFocusRef]);
+  // Esc to close + focus management + Tab-trap (via shared hook).
+  useFocusTrap(panelRef, open, { onClose, returnFocusRef });
 
   // Restart reconnect detection: once a restart was requested, the SSE stream
   // drops then comes back. When `connected` flips back to true, show "back online".

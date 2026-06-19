@@ -1516,3 +1516,66 @@ describe('MetricsView — scroll rAF cancelled on unmount (#213)', () => {
     cancelSpy.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 4 a11y: table header scope attributes (#174)
+// ---------------------------------------------------------------------------
+describe('MetricsView — a11y: <th> scope attributes (#174)', () => {
+  it('batch-size advisor table column headers all have scope="col"', async () => {
+    mockFetchOk({ ...PAYLOAD, batchAdvisor: [
+      { repo: 'acme/widgets', arrivalPerHour: 2.5, trainDurationSecs: 600,
+        ejectProbPerGroup: 0.14, ejectProbPerPr: 0.05, currentBatch: 3, recommendedBatch: 5,
+        curve: [{ batch: 1, throughputPerHour: 1, timeInQueueSecs: 900, stable: true }] }] });
+    render(<MetricsView now={NOW} />);
+    await screen.findByRole('heading', { name: 'Batch-size advisor' });
+    fireEvent.click(screen.getByTestId('metrics-subtab-throughput'));
+    const table = screen.getByTestId('batch-advisor-acme/widgets').querySelector('table')!;
+    const ths = [...table.querySelectorAll('thead th')];
+    expect(ths.length).toBeGreaterThan(0);
+    for (const th of ths) {
+      expect(th).toHaveAttribute('scope', 'col');
+    }
+  });
+
+  it('slowest-jobs table column headers all have scope="col"', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    await screen.findByRole('heading', { name: 'Slowest / most-variable jobs' });
+    fireEvent.click(screen.getByTestId('metrics-subtab-performance'));
+    await waitFor(() => expect(screen.getByText('Integration Tests')).toBeInTheDocument());
+    const table = screen.getByText('Integration Tests').closest('table')!;
+    const ths = [...table.querySelectorAll('thead th')];
+    expect(ths.length).toBeGreaterThan(0);
+    for (const th of ths) {
+      expect(th).toHaveAttribute('scope', 'col');
+    }
+  });
+
+  it('workflow lint table column headers all have scope="col"', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    const heading = await screen.findByRole('heading', { name: 'Workflow lint' });
+    fireEvent.click(screen.getByTestId('metrics-subtab-reliability'));
+    const panel = heading.closest('section')! as HTMLElement;
+    const table = within(panel).getByText('unit-tests').closest('table')!;
+    const ths = [...table.querySelectorAll('thead th')];
+    expect(ths.length).toBeGreaterThan(0);
+    for (const th of ths) {
+      expect(th).toHaveAttribute('scope', 'col');
+    }
+  });
+
+  it('spot-reclaims pool/events table column headers have scope="col"', async () => {
+    mockFetchOk();
+    render(<MetricsView now={NOW} />);
+    await screen.findByRole('heading', { name: 'Spot reclaims' });
+    fireEvent.click(screen.getByTestId('metrics-subtab-reliability'));
+    const panel = screen.getByRole('heading', { name: 'Spot reclaims' }).closest('section')! as HTMLElement;
+    const table = within(panel).getByText('pool').closest('table')!;
+    const ths = [...table.querySelectorAll('thead th')];
+    expect(ths.length).toBeGreaterThan(0);
+    for (const th of ths) {
+      expect(th).toHaveAttribute('scope', 'col');
+    }
+  });
+});

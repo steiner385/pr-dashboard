@@ -84,3 +84,37 @@ describe('Waterfall', () => {
     expect(container.firstChild).toBeNull();
   });
 });
+
+describe('Waterfall — a11y: enriched aria-label with actual segment data (#173)', () => {
+  it('svg aria-label includes each segment name and formatted duration', () => {
+    const { container } = render(<Waterfall timeline={FULL} />);
+    const svg = container.querySelector('svg')!;
+    const label = svg.getAttribute('aria-label')!;
+    // Must include segment names
+    expect(label).toContain('to first green');
+    expect(label).toContain('queue');
+    // Must include formatted durations
+    expect(label).toContain('1h');    // toFirstGreen is 60m = 1h
+    expect(label).toContain('30m');   // greenToEnqueued and queue are each 30m
+  });
+
+  it('svg aria-label has a descriptive prefix, not just the generic placeholder', () => {
+    const { container } = render(<Waterfall timeline={FULL} />);
+    const svg = container.querySelector('svg')!;
+    const label = svg.getAttribute('aria-label')!;
+    // Should have a lead-in that names what this chart is
+    expect(label.toLowerCase()).toContain('waterfall');
+  });
+
+  it('svg aria-label reflects only present segments (partial timeline)', () => {
+    const partial = { ...FULL, enqueuedAt: null, qaLiveAt: null, prodLiveAt: null };
+    const { container } = render(<Waterfall timeline={partial} />);
+    const svg = container.querySelector('svg')!;
+    const label = svg.getAttribute('aria-label')!;
+    // toFirstGreen is present
+    expect(label).toContain('to first green');
+    // queue/qaDeploy/awaitingProd are absent — their segment labels must not appear
+    expect(label).not.toContain('queue');
+    expect(label).not.toContain('QA deploy');
+  });
+});

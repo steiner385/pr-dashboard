@@ -178,7 +178,42 @@ describe('MetroTrack', () => {
 
   it('exposes a stage-position aria-label sized to the track', () => {
     const { container } = render(<MetroTrack stage={stage({ stage: 'queue' })} hasDeploy />);
-    expect(container.querySelector('.track')!.getAttribute('aria-label')).toBe('stage 2 of 5');
+    // Updated to descriptive per-node summary (#173); must contain queue-stage semantics
+    const label = container.querySelector('.track')!.getAttribute('aria-label')!;
+    expect(label).toContain('Queue');
+    expect(label).toContain('in progress');
+  });
+
+  // ---- a11y: descriptive track aria-label (#173) ----
+
+  it('track aria-label is a descriptive node-by-node summary for screen readers', () => {
+    const { container } = render(<MetroTrack stage={stage({ stage: 'queue' })} hasDeploy />);
+    const label = container.querySelector('.track')!.getAttribute('aria-label')!;
+    // Must include each node's label and its human-readable state
+    expect(label).toContain('CI');
+    expect(label).toContain('complete');
+    expect(label).toContain('Queue');
+    expect(label).toContain('in progress');
+    expect(label).toContain('Merged');
+    expect(label).toContain('pending');
+  });
+
+  it('track aria-label for a simple-repo merged PR reads all three nodes done', () => {
+    const { container } = render(<MetroTrack stage={stage({ stage: 'merged' })} hasDeploy={false} />);
+    const label = container.querySelector('.track')!.getAttribute('aria-label')!;
+    expect(label).toContain('CI');
+    expect(label).toContain('Queue');
+    expect(label).toContain('Merged');
+    // all done → no "pending" in label
+    expect(label).not.toContain('pending');
+  });
+
+  it('individual node <span>s carry aria-hidden="true" (redundant once track has full label)', () => {
+    const { container } = render(<MetroTrack stage={stage({ stage: 'ci' })} hasDeploy />);
+    const nodes = container.querySelectorAll('span.node');
+    nodes.forEach((n) => {
+      expect(n.getAttribute('aria-hidden')).toBe('true');
+    });
   });
 
   it('does not show a node ETA when overdue or when ETA is missing', () => {

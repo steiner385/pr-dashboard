@@ -184,6 +184,7 @@ button.model-chip { cursor: pointer; }
 .cmdk-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; z-index: 1000; }
 .cmdk { width: min(560px, 92vw); background: var(--panel, var(--bg)); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 16px 48px rgba(0,0,0,0.4); overflow: hidden; }
 .cmdk-input { width: 100%; box-sizing: border-box; border: none; border-bottom: 1px solid var(--border); background: transparent; color: var(--text); font-size: 15px; padding: 14px 16px; outline: none; }
+.cmdk-input:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 2px; }
 .cmdk-list, #cmdk-list { list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow-y: auto; }
 .cmdk-opt { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; padding: 9px 12px; border-radius: 8px; cursor: pointer; }
 .cmdk-opt.active { background: var(--accent, #6af); color: #fff; }

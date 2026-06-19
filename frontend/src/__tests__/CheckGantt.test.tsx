@@ -521,3 +521,47 @@ describe('CheckGantt — spot-reclaim re-run marker (issue #46)', () => {
     expect(screen.queryByText(/likely flake, consider re-run/)).toBeNull();
   });
 });
+
+describe('CheckGantt — a11y: accessible list label + progressbar bars (#173)', () => {
+  it('the <ul> has an aria-label derived from the stage context', () => {
+    const { container } = render(<CheckGantt stage="ci" checks={[
+      check({ name: 'ESLint', status: 'IN_PROGRESS', conclusion: null, elapsedSeconds: 60, expectedSeconds: 120 }),
+    ]} />);
+    const ul = container.querySelector('ul.checks.gantt')!;
+    expect(ul.getAttribute('aria-label')).toBeTruthy();
+    expect(ul.getAttribute('aria-label')).toContain('ci');
+  });
+
+  it('each bar has role="progressbar" with aria-valuenow/min/max and aria-label', () => {
+    const { container } = render(<CheckGantt stage="ci" checks={[
+      check({ name: 'ESLint', status: 'IN_PROGRESS', conclusion: null, elapsedSeconds: 300, expectedSeconds: 600 }),
+    ]} />);
+    // scale = 600; elapsed 300 → fill 0.5 → 50%
+    const bar = container.querySelector('.g-bar')!;
+    expect(bar.getAttribute('role')).toBe('progressbar');
+    expect(bar.getAttribute('aria-valuemin')).toBe('0');
+    expect(bar.getAttribute('aria-valuemax')).toBe('100');
+    expect(Number(bar.getAttribute('aria-valuenow'))).toBeCloseTo(50, 0);
+    const label = bar.getAttribute('aria-label')!;
+    expect(label).toContain('ESLint');
+  });
+
+  it('queued bar has aria-valuenow=15 (faint fill fraction × 100)', () => {
+    const { container } = render(<CheckGantt stage="ci" checks={[
+      check({ name: 'big-tests', status: 'QUEUED', conclusion: null, elapsedSeconds: null, expectedSeconds: null }),
+    ]} />);
+    const bar = container.querySelector('.g-bar')!;
+    expect(bar.getAttribute('role')).toBe('progressbar');
+    expect(Number(bar.getAttribute('aria-valuenow'))).toBeCloseTo(15, 0);
+  });
+
+  it('bar aria-label includes the check state', () => {
+    const { container } = render(<CheckGantt stage="ci" checks={[
+      check({ name: 'Build', status: 'COMPLETED', conclusion: 'SUCCESS', elapsedSeconds: 120 }),
+    ]} />);
+    const bar = container.querySelector('.g-bar')!;
+    const label = bar.getAttribute('aria-label')!;
+    expect(label).toContain('Build');
+    expect(label.toLowerCase()).toMatch(/done|success|complete/);
+  });
+});

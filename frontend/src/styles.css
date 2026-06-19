@@ -967,7 +967,7 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
 
 .pm-group-row { cursor: pointer; border-top: 1px solid var(--border); }
 .pm-group-row:hover { background: color-mix(in srgb, var(--muted) 8%, transparent); }
-.pm-group-name { padding: 5px 8px; font-weight: 600; color: var(--text); white-space: nowrap; }
+.pm-group-name { padding: 5px 8px; font-weight: 600; color: var(--text); white-space: nowrap; text-align: left; }
 .pm-caret { color: var(--muted); font-size: 10px; }
 .pm-group-meta { color: var(--muted); font-weight: 400; font-size: 11px; margin-left: 8px; }
 

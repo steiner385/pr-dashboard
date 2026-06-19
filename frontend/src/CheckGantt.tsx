@@ -69,6 +69,18 @@ function timeText(c: CheckView, kind: RowKind): string {
   }
 }
 
+/** Human-readable state word for progressbar aria-label. */
+function kindLabel(kind: RowKind): string {
+  switch (kind) {
+    case 'done': return 'done';
+    case 'running': return 'running';
+    case 'overdue': return 'overdue';
+    case 'failed': return 'failed';
+    case 'queued': return 'queued';
+    case 'skipped': return 'skipped';
+  }
+}
+
 function GanttRow({ c, scale }: { c: CheckView; scale: number }) {
   const kind = rowKind(c);
   const fillFraction = kind === 'queued'
@@ -93,6 +105,10 @@ function GanttRow({ c, scale }: { c: CheckView; scale: number }) {
   // full name always hoverable (names truncate); advisory keeps its annotation
   const nameTitle = c.isRequired ? c.name : `${c.name} — advisory, does not gate merging`;
 
+  // Progressbar semantics: fill fraction × 100, clamped to [0, 100]
+  const barValueNow = Math.round(Math.min(1, fillFraction) * 100);
+  const barAriaLabel = `${c.name} — ${kindLabel(kind)}`;
+
   return (
     <li className={`g-row g-${kind}${extraClass}${advisoryClass}`}>
       <span className="g-name" title={nameTitle}>
@@ -104,7 +120,9 @@ function GanttRow({ c, scale }: { c: CheckView; scale: number }) {
             title={regressTitle(c)}>↑</span>
         )}
       </span>
-      <span className="g-bar" title={barTitle}>
+      <span className="g-bar" title={barTitle}
+        role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={barValueNow}
+        aria-label={barAriaLabel}>
         {hasBand && (() => {
           const lowPct = Math.min(100, (c.expectedLowSeconds! / scale) * 100);
           const highPct = Math.min(100, (c.expectedHighSeconds! / scale) * 100);
@@ -159,7 +177,7 @@ export function CheckGantt({ checks, stage }: {
   const groups = useMemo(() => groupByWorkflow(checks), [checks]);
   const grouped = groups.length > 1;
   return (
-    <ul className="checks gantt">
+    <ul className="checks gantt" aria-label={`checks for ${stage} stage`}>
       {groups.map((g, gi) => {
         const required = g.checks.filter((c) => c.isRequired);
         const advisory = g.checks.filter((c) => !c.isRequired);

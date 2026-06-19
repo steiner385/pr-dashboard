@@ -52,13 +52,23 @@ export function NeedsGraph({ nodes, formatDur }: {
           + (n.waitP50 ? ` · wait ${formatDur(n.waitP50)}` : '')
           + (n.onCriticalPath ? ' · on critical path'
             : n.slackSecs != null ? ` · slack ${formatDur(n.slackSecs)}` : '');
+        const isPressed = active === n.name;
         return (
           <g key={n.name}
             className={`ng-node${n.onCriticalPath ? ' cp' : ''}${lit(n.name) ? '' : ' dim'}`}
             data-testid={`ng-node-${n.name}`}
-            tabIndex={0} role="group" aria-label={detail.replace('\n', ': ')}
+            tabIndex={0} role="button" aria-label={detail.replace('\n', ': ')}
+            aria-pressed={isPressed}
             onMouseEnter={() => setActive(n.name)} onMouseLeave={() => setActive(null)}
-            onFocus={() => setActive(n.name)} onBlur={() => setActive(null)}>
+            onFocus={() => setActive(n.name)} onBlur={() => setActive(null)}
+            onKeyDown={(e) => {
+              if (e.key === ' ' || e.key === 'Enter') {
+                e.preventDefault();
+                setActive(isPressed ? null : n.name); // toggle — matches aria-pressed semantics
+              } else if (e.key === 'Escape') {
+                setActive(null);
+              }
+            }}>
             <title>{detail}</title>
             <rect x={n.x} y={n.y} width={n.w} height={n.h} rx={5} className="ng-rect" />
             <text x={n.x + 9} y={n.y + 17} className="ng-name">{trunc(n.name)}</text>

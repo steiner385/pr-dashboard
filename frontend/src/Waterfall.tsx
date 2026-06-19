@@ -77,10 +77,12 @@ export function Waterfall({ timeline }: { timeline: PrTimeline }) {
   const ticks = [0, spanMs / 2, spanMs].map((off, i) => ({
     off, text: i === 0 ? '0m' : formatDur(off / 1000),
   }));
+  const svgAriaLabel = 'Lead-time waterfall: '
+    + segs.map((s) => `${s.label} ${formatDur((s.endMs - s.startMs) / 1000)}`).join(', ');
   return (
     <div className="waterfall" data-testid="waterfall">
       <svg className="chart-svg" width="100%" viewBox={`0 0 ${VB_W} ${height}`}
-        role="img" aria-label="where did the time go — per-stage waterfall">
+        role="img" aria-label={svgAriaLabel}>
         {ticks.map((tk, i) => (
           <g key={`tick${i}`}>
             <line x1={x(t0 + tk.off)} x2={x(t0 + tk.off)} y1={PAD_T} y2={axisY}

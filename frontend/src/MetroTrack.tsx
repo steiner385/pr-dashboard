@@ -56,6 +56,22 @@ export function trackState(stage: StageResult, hasDeploy: boolean): TrackNode[] 
 
 const GLYPH: Partial<Record<NodeStatus, string>> = { done: '✓', fail: '✗', parked: '!' };
 
+/** Human-readable state word for aria-label summary. */
+function nodeStateSummary(status: NodeStatus): string {
+  switch (status) {
+    case 'done': return 'complete';
+    case 'active': return 'in progress';
+    case 'pending': return 'pending';
+    case 'fail': return 'failed';
+    case 'parked': return 'blocked';
+  }
+}
+
+/** Descriptive aria-label: "CI: complete, Queue: in progress, Merged: pending" */
+function trackAriaLabel(nodes: TrackNode[]): string {
+  return nodes.map((n) => `${n.label}: ${nodeStateSummary(n.status)}`).join(', ');
+}
+
 /** Hover tooltip per node: states are generic except fail/parked, which carry
  *  the concrete reason derived from the stage/substate that produced them. */
 export function nodeTitle(node: TrackNode, stage: StageResult): string {
@@ -97,11 +113,11 @@ export function MetroTrack({ stage, hasDeploy }: { stage: StageResult; hasDeploy
   const nodeEta = stage.etaSeconds != null && stage.etaSeconds > 0 && !stage.overdue
     ? `~${formatDur(stage.etaSeconds)}` : null;
   return (
-    <div className="track" aria-label={`stage ${pos + 1} of ${nodes.length}`}>
+    <div className="track" aria-label={trackAriaLabel(nodes)}>
       {nodes.map((n, i) => (
         <Fragment key={`${n.label}-${i}`}>
           {i > 0 && segment(nodes[i - 1]!, stage.percent, `seg-${i}`)}
-          <span className={`node ${n.status}`} title={nodeTitle(n, stage)}>
+          <span className={`node ${n.status}`} title={nodeTitle(n, stage)} aria-hidden="true">
             <span className="c" aria-hidden="true">{GLYPH[n.status] ?? i + 1}</span>
             <span className="node-label">{n.label}</span>
             {n.status === 'active' && nodeEta && <span className="node-eta">{nodeEta}</span>}

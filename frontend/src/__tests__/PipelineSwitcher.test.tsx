@@ -57,7 +57,7 @@ describe('PipelineSwitcher', () => {
     const onFocus = vi.fn();
     render(<PipelineSwitcher repos={REPOS} focused="cairnea/KinDash" onFocus={onFocus} />);
     expect(screen.getByText('cairnea/KinDash')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /cairnea\/KinDash/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Switch pipeline' }));
     fireEvent.change(screen.getByLabelText('Filter pipelines'), { target: { value: 'infra' } });
     const opts = screen.getAllByRole('option');
     expect(opts).toHaveLength(1);
@@ -91,5 +91,12 @@ describe('PipelineSwitcher', () => {
     fireEvent.keyDown(screen.getByLabelText('Filter pipelines'), { key: 'Escape' });
     expect(screen.queryByLabelText('Filter pipelines')).not.toBeInTheDocument();
     expect(onFocus).not.toHaveBeenCalled();
+  });
+
+  it('trigger button has aria-label="Switch pipeline" (Fix 1 — a11y)', () => {
+    render(<PipelineSwitcher repos={REPOS} focused="cairnea/KinDash" onFocus={vi.fn()} />);
+    const trigger = screen.getByRole('button', { name: 'Switch pipeline' });
+    expect(trigger).toBeInTheDocument();
+    expect(trigger).toHaveClass('pipeline-switcher-current');
   });
 });

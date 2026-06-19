@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useDashboard } from './useDashboard';
 import { readKioskConfig } from './kiosk';
 import { PrRow } from './PrRow';
@@ -75,7 +75,6 @@ export function App() {
   const [legendOpen, setLegendOpen] = useState(false);
   const legendRef = useRef<HTMLButtonElement>(null);
   const handleLegendClose = useCallback(() => setLegendOpen(false), []);
-
   // ---- kiosk mode (issue #20): read-only wall-display view + auto-cycle ----
   // URL params are read once at mount; a wall display reloads to change them.
   const [{ kiosk, cycleSeconds }] = useState(readKioskConfig);
@@ -107,6 +106,21 @@ export function App() {
     if (next === 'metrics') setMetricsVisited(true);
     if (next === 'designer') setDesignerVisited(true);
   }, []);
+
+  // Refs for the tab buttons — used by the roving-tabIndex arrow-key handler.
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const onTabKeyDown = useCallback((e: KeyboardEvent<HTMLButtonElement>) => {
+    const idx = TAB_IDS.indexOf(tab);
+    let next = idx;
+    if (e.key === 'ArrowRight') next = (idx + 1) % TAB_IDS.length;
+    else if (e.key === 'ArrowLeft') next = (idx - 1 + TAB_IDS.length) % TAB_IDS.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = TAB_IDS.length - 1;
+    else return;
+    e.preventDefault();
+    selectTab(TAB_IDS[next]);
+    tabRefs.current[next]?.focus();
+  }, [tab, selectTab]);
 
   // Global health header → richest detail for each lane (decision: best-detail
   // cross-tab routing). PR CI → Pipeline filtered; Cost → Metrics; the rest →
@@ -261,27 +275,39 @@ export function App() {
       </ErrorBoundary>
       <nav className="tab-bar" role="tablist" aria-label="Dashboard views">
         <button type="button" role="tab" id="tab-pipeline"
+          ref={(el) => { tabRefs.current[0] = el; }}
           aria-selected={tab === 'pipeline'} aria-controls="tabpanel-pipeline"
+          tabIndex={tab === 'pipeline' ? 0 : -1}
           className={tab === 'pipeline' ? 'tab active' : 'tab'}
-          onClick={() => selectTab('pipeline')}>
+          onClick={() => selectTab('pipeline')}
+          onKeyDown={onTabKeyDown}>
           Pipeline
         </button>
         <button type="button" role="tab" id="tab-delivery"
+          ref={(el) => { tabRefs.current[1] = el; }}
           aria-selected={tab === 'delivery'} aria-controls="tabpanel-delivery"
+          tabIndex={tab === 'delivery' ? 0 : -1}
           className={tab === 'delivery' ? 'tab active' : 'tab'}
-          onClick={() => selectTab('delivery')}>
+          onClick={() => selectTab('delivery')}
+          onKeyDown={onTabKeyDown}>
           Delivery
         </button>
         <button type="button" role="tab" id="tab-metrics"
+          ref={(el) => { tabRefs.current[2] = el; }}
           aria-selected={tab === 'metrics'} aria-controls="tabpanel-metrics"
+          tabIndex={tab === 'metrics' ? 0 : -1}
           className={tab === 'metrics' ? 'tab active' : 'tab'}
-          onClick={() => selectTab('metrics')}>
+          onClick={() => selectTab('metrics')}
+          onKeyDown={onTabKeyDown}>
           Metrics
         </button>
         <button type="button" role="tab" id="tab-designer"
+          ref={(el) => { tabRefs.current[3] = el; }}
           aria-selected={tab === 'designer'} aria-controls="tabpanel-designer"
+          tabIndex={tab === 'designer' ? 0 : -1}
           className={tab === 'designer' ? 'tab active' : 'tab'}
-          onClick={() => selectTab('designer')}>
+          onClick={() => selectTab('designer')}
+          onKeyDown={onTabKeyDown}>
           Designer
         </button>
       </nav>

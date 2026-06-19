@@ -227,4 +227,51 @@ describe('ProtectionMap', () => {
     fireEvent.click(groupBtn);
     expect(groupBtn).toHaveAttribute('aria-expanded', 'false');
   });
+
+  // ---- Phase 4 a11y: WCAG 1.3.1 table semantics (#174) ----
+
+  it('a11y: pm-grid table has aria-label "Protection check matrix"', async () => {
+    mockFetch(MODEL);
+    render(<ProtectionMap />);
+    await screen.findByTestId('pm-grid');
+    expect(screen.getByRole('table', { name: /protection check matrix/i })).toBeInTheDocument();
+  });
+
+  it('a11y: pm-grid column header th elements have scope="col"', async () => {
+    mockFetch(MODEL);
+    render(<ProtectionMap />);
+    await screen.findByTestId('pm-grid');
+    const table = screen.getByRole('table', { name: /protection check matrix/i });
+    const ths = [...table.querySelectorAll('thead th')];
+    expect(ths.length).toBeGreaterThan(0);
+    for (const th of ths) {
+      expect(th).toHaveAttribute('scope', 'col');
+    }
+  });
+
+  it('a11y: pm-grid group-name cells are <th scope="rowgroup"> (not <td>)', async () => {
+    mockFetch(MODEL);
+    render(<ProtectionMap />);
+    await screen.findByTestId('pm-grid');
+    const table = screen.getByRole('table', { name: /protection check matrix/i });
+    // The group row has a button "Toggle group other"; its parent cell should be a th
+    const groupBtn = within(table as HTMLElement).getByRole('button', { name: /toggle group other/i });
+    const groupCell = groupBtn.closest('th');
+    expect(groupCell).not.toBeNull();
+    expect(groupCell).toHaveAttribute('scope', 'rowgroup');
+  });
+
+  it('a11y: pm-evidence table column headers have scope="col"', async () => {
+    mockFetch(MODEL);
+    render(<ProtectionMap />);
+    const rail = await screen.findByTestId('pm-findings');
+    fireEvent.click(within(rail).getAllByText('build: production')[0]);
+    await screen.findByTestId('pm-evidence');
+    const table = screen.getByTestId('pm-evidence');
+    const ths = [...table.querySelectorAll('thead th')];
+    expect(ths.length).toBeGreaterThan(0);
+    for (const th of ths) {
+      expect(th).toHaveAttribute('scope', 'col');
+    }
+  });
 });

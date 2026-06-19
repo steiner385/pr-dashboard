@@ -103,3 +103,4 @@ describe('WorkspaceApp (Increment 1 MVP composition)', () => {
     expect(toggleNotify).toHaveBeenCalledTimes(1);
   });
 });
+
