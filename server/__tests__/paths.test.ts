@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 // We test the module's exported functions. Because the module reads env vars at
 // call time (not at import time), we can set/clear them around each test.
@@ -33,9 +33,13 @@ describe('paths', () => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
-  it('APP_ROOT ends with pr-dashboard', async () => {
+  it('APP_ROOT resolves to the package root (absolute, contains package.json)', async () => {
+    // The contract is "the directory containing package.json", anchored to the
+    // module location — NOT a specific folder basename (the checkout/clone dir
+    // can be named anything, e.g. the repo rename to `chartroom`).
     const { APP_ROOT } = await import('../paths.js');
-    expect(APP_ROOT.endsWith('pr-dashboard')).toBe(true);
+    expect(isAbsolute(APP_ROOT)).toBe(true);
+    expect(existsSync(join(APP_ROOT, 'package.json'))).toBe(true);
   });
 
   it('dataDir() returns APP_ROOT/data by default', async () => {
