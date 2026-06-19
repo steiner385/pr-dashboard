@@ -723,35 +723,44 @@ webhook receiver**:
 
 ## Embedding pr-dashboard in a host app
 
-pr-dashboard ships a content-only React component alongside the standalone app.
-For the full host-integration handoff — routing/nested-router bridge, the proxy
-& backend contract, theming, SSR/React constraints, and a setup checklist — see
-[docs/embedding-host-guide.md](docs/embedding-host-guide.md).
+pr-dashboard is **source-only**: a host app consumes it and hosts **both tiers
+in-process** — there is no separate pr-dashboard service and no cross-service
+proxy. It exposes two mountable surfaces, frontend (`./embed`) and backend
+(`./server`). The standalone (`pnpm start`, `:4400`) is unchanged for local/dev.
+Full handoff: [docs/embedding-host-guide.md](docs/embedding-host-guide.md).
 
+**Backend — mount the API + poller in your own Express server (`pr-dashboard/server`):**
+```ts
+import { createPrDashboardBackend } from 'pr-dashboard/server';
+
+const prdash = await createPrDashboardBackend({
+  config,                                   // resolved config object, or { path }
+  dataDir: '/data/prdash',                  // YOUR volume: history.db / workspace.db / clones
+  githubApp: { appId, privateKey },         // PEM string from YOUR env (not a file path)
+  // serveStatic defaults false (you serve the frontend); trustHostAuth defaults true
+});
+app.use('/bff/ops/prdash', requireAdminSession, prdash.router); // YOUR auth gates it
+const stopPoller = prdash.startPoller();    // run the poller in-process; call stopPoller() on shutdown
+```
+- `router` is a mountable Express app — **no `.listen()`**. `trustHostAuth` (default true) skips the built-in same-origin guard because **your** middleware (`requireAdminSession`) is the gate — there is no shared secret.
+- **Single instance + a persistent volume** at `dataDir` (better-sqlite3 is single-writer; don't horizontally scale the poller). `/api/admin/restart` is a **no-op** when mounted (it never `process.exit`es your host).
+
+**Frontend — mount the component (`pr-dashboard/embed`), pointing `apiBase` at your own backend mount:**
 ```tsx
 import { PrDashboard } from 'pr-dashboard/embed';
 import 'pr-dashboard/embed/style.css';
-
-<PrDashboard
-  apiBase="/api/ci"        // host proxy root (auth is the host's job); default '/api'
-  basename="/console/ci"   // URL prefix for path routing; default ''
-  routerMode="path"        // 'path' (default) | 'hash'
-  focusedRepo={repo}       // optional controlled repo; else an in-content sticky switcher
-  onFocusChange={setRepo}  // optional
-  withCredentials          // optional — send cookies on the SSE (cookie-proxy hosts)
-/>
+// the API lives under `${mount}/api`, so apiBase = your mount path + /api
+<PrDashboard apiBase="/bff/ops/prdash/api" basename="/ops/prdash" routerMode="path" />
 ```
-
 **Props:** `apiBase?`, `basename?`, `routerMode?`, `focusedRepo?`, `onFocusChange?`, `className?`, `withCredentials?`.
 
-**Consumption:** `dist/` is built on install via the `prepare` script, so a git dependency works:
-`"pr-dashboard": "github:<org>/pr-dashboard#<sha>"`. React 19 is a peer dependency — the host provides the single React instance.
-
-**Deployment & proxy contract (host session must provision):**
-- Add the host origin to the backend's `allowedOriginHosts` **or** strip the inbound `Origin` at the proxy — otherwise the backend's `originGuard` 403s every mutating call (ready-merge, draft-PR levers).
-- Point the backend's `bindHosts` at an address the proxy can reach (default is loopback-only).
-- Allow-list the proxied paths; **exclude `/admin/*`** (`/api/admin/restart` exits the process) and decide whether `/config` and the write levers are exposed to host-authed users.
-- SSE: inject credentials server-side at the proxy (native `EventSource` can't set headers) or use a cookie + `withCredentials`; disable proxy buffering (the backend already sends `X-Accel-Buffering: no`); keep the proxy read-timeout above the 25s server ping. Note: `withCredentials` affects only the SSE `EventSource` (cookie-mode fallback, since native EventSource can't set headers); the mutating fetch calls do NOT send browser cookies — fetch-path auth must be injected by the host proxy (same-origin proxy or server-side credential injection).
+**Consumption:** `prepare` builds **both** `dist/embed` (frontend) and `dist/server`
+(backend, tsc), so a git dependency works today:
+`"pr-dashboard": "github:<org>/pr-dashboard#<sha>"`. React 19 is a peer dependency
+(host provides the single instance). The `./server` export's emitted ESM uses
+extensionless imports — **import it under `tsx` or a bundler** (plain `node` ESM
+needs `.js` extensions; a public-npm build that's plain-`node`-importable is a
+follow-up). A public npm package under a better name is planned.
 
 ---
 

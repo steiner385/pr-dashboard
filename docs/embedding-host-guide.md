@@ -1,5 +1,24 @@
 # Embedding pr-dashboard in the KinDash admin SPA — host integration guide
 
+> ## ⚠️ ARCHITECTURE SUPERSEDED — read this first
+> The **"separate service + proxy"** model described below is **obsolete**. The
+> corrected architecture (per the project owner): pr-dashboard is **source-only**
+> and the host hosts **both tiers in-process** — there is **no separate
+> pr-dashboard service and no cross-service proxy**.
+> - **Backend:** mount `createPrDashboardBackend()` from **`pr-dashboard/server`** in
+>   your own Express server (`app.use('/bff/ops/prdash', requireAdminSession, router)`)
+>   and run `startPoller()` in-process. Your auth gates it (`trustHostAuth` default true,
+>   no shared secret). SQLite lives on your `dataDir` volume (single instance).
+> - **Frontend:** mount `<PrDashboard apiBase="/bff/ops/prdash/api" .../>` from `pr-dashboard/embed`.
+>
+> See the **README "Embedding pr-dashboard in a host app"** section and the
+> coordination channel (`/home/tony/.config/kindash/coordination/pr-dashboard-integration.md`,
+> DECISIONS D1–D4) for the current contract. The frontend/routing/styling/SSR notes
+> below remain valid; **ignore every "proxy", "separate service", "allowedOriginHosts",
+> and "bindHosts" instruction** — those are the old model. (Full rewrite of this file is a follow-up.)
+
+---
+
 This is the handoff for the host (`admin.kindash.com`) team consuming the
 `pr-dashboard/embed` component. It covers the package API, the routing
 integration (read the **Routing** section carefully — it has a real nested-router
