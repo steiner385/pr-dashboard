@@ -33,6 +33,18 @@ jobs:
       - name: Build embed bundle
         run: pnpm build:embed
 
+      - name: Build server bundle
+        run: pnpm build:server
+
+      - name: Gate — ./server export is plain-node-ESM importable (#200)
+        run: |
+          # The published ./server must run under plain `node`, not just tsx/bundlers,
+          # so no extensionless relative import may survive in the emitted artifact.
+          if grep -rhoE "(from|import\() *['\"]\.[^'\"]*['\"]" dist/server --include='*.js' --include='*.d.ts' | grep -vE "\.(js|json)['\"]"; then
+            echo "Extensionless relative import in dist/server — tsc-alias -f must resolve full paths (#200)"; exit 1
+          fi
+          node --input-type=module -e "import('./dist/server/server/backend.js').then(()=>console.log('plain-node ESM import ok')).catch(e=>{console.error(e);process.exit(1)})"
+
       - name: Gate — no absolute /api literals in frontend
         run: |
           if grep -rn "fetch('/api\|fetch(\"/api\|fetch(\`/api\|new EventSource('/api\|new EventSource(\"/api\|new EventSource(\`/api" frontend/src --include='*.ts' --include='*.tsx' | grep -v __tests__; then
