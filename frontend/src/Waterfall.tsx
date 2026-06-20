@@ -1,6 +1,18 @@
+import { useId } from 'react';
 import type { LeadTimeSegmentId, PrTimeline } from './types';
 import { LEAD_TIME_SEGMENTS } from './leadtime';
 import { formatDur } from './format';
+
+/* #172: a distinct white-line texture per segment, overlaid on the segment color,
+   so the waterfall is readable under colour-vision deficiency + grayscale (not by
+   the 5 fills alone). null = solid baseline. Path is drawn in an 8×8 tile. */
+const SEG_PATTERN: Record<LeadTimeSegmentId, string | null> = {
+  toFirstGreen: null,                  // solid (baseline)
+  greenToEnqueued: 'M0,4 H8',          // horizontal
+  queue: 'M0,8 L8,0',                  // diagonal
+  qaDeploy: 'M0,8 L8,0 M0,0 L8,8',     // crosshatch
+  awaitingProd: 'M4,0 V8',             // vertical
+};
 
 /**
  * Per-PR "where did the time go" waterfall (issue #50): one horizontal bar per
@@ -65,6 +77,7 @@ function localTime(ms: number): string {
 }
 
 export function Waterfall({ timeline }: { timeline: PrTimeline }) {
+  const uid = useId(); // unique pattern ids per instance (avoids url(#) collisions)
   const segs = waterfallSegments(timeline);
   if (!segs.length) return null;
   const t0 = Math.min(...segs.map((s) => s.startMs));
@@ -83,6 +96,13 @@ export function Waterfall({ timeline }: { timeline: PrTimeline }) {
     <div className="waterfall" data-testid="waterfall">
       <svg className="chart-svg" width="100%" viewBox={`0 0 ${VB_W} ${height}`}
         role="img" aria-label={svgAriaLabel}>
+        <defs>
+          {segs.map((s) => SEG_PATTERN[s.id] && (
+            <pattern key={s.id} id={`${uid}-${s.id}`} patternUnits="userSpaceOnUse" width="8" height="8">
+              <path d={SEG_PATTERN[s.id]!} stroke="#fff" strokeOpacity="0.32" strokeWidth="1.4" />
+            </pattern>
+          ))}
+        </defs>
         {ticks.map((tk, i) => (
           <g key={`tick${i}`}>
             <line x1={x(t0 + tk.off)} x2={x(t0 + tk.off)} y1={PAD_T} y2={axisY}
@@ -104,6 +124,10 @@ export function Waterfall({ timeline }: { timeline: PrTimeline }) {
                 fontSize={FONT} fill="var(--muted)">{s.label}</text>
               <rect x={x(s.startMs)} y={y + (ROW_H - BAR_H) / 2} width={w} height={BAR_H}
                 rx={2} fill={s.color} />
+              {SEG_PATTERN[s.id] && (
+                <rect x={x(s.startMs)} y={y + (ROW_H - BAR_H) / 2} width={w} height={BAR_H}
+                  rx={2} fill={`url(#${uid}-${s.id})`} />
+              )}
               <text data-testid={`waterfall-dur-${s.id}`}
                 x={VB_W - 4} y={y + ROW_H / 2 + FONT / 2 - 1} textAnchor="end"
                 fontSize={FONT} fill="var(--text)">{formatDur(durSecs)}</text>

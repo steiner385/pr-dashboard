@@ -118,3 +118,18 @@ describe('Waterfall — a11y: enriched aria-label with actual segment data (#173
     expect(label).not.toContain('QA deploy');
   });
 });
+
+describe('Waterfall — a11y: per-segment texture for colour-vision deficiency (#172)', () => {
+  it('overlays a unique SVG pattern on the textured segments (solid baseline has none)', () => {
+    const { container, getByTestId } = render(<Waterfall timeline={FULL} />);
+    // 4 of the 5 segments are textured; toFirstGreen is the solid baseline
+    expect(container.querySelectorAll('defs pattern').length).toBe(4);
+    // a textured segment has TWO rects: the colour fill + a pattern overlay via url(#…)
+    const queueRects = getByTestId('waterfall-seg-queue').querySelectorAll('rect');
+    expect(queueRects.length).toBe(2);
+    expect(queueRects[0].getAttribute('fill')).toBe('var(--purple)');          // colour preserved
+    expect(queueRects[1].getAttribute('fill')).toMatch(/^url\(#.*-queue\)$/);   // texture overlay
+    // the solid baseline segment carries only the colour rect, no overlay
+    expect(getByTestId('waterfall-seg-toFirstGreen').querySelectorAll('rect').length).toBe(1);
+  });
+});

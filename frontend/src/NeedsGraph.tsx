@@ -35,7 +35,7 @@ export function NeedsGraph({ nodes, formatDur }: {
   return (
     <svg className="needs-graph"
       viewBox={`${-pad} ${-pad} ${layout.width + 2 * pad} ${layout.height + 2 * pad}`}
-      role="img" aria-label="CI needs graph — nodes are jobs, edges are needs dependencies, the critical path is highlighted">
+      role="img" aria-label="CI needs graph — nodes are jobs, edges are needs dependencies; the critical path is drawn as thick solid edges, other edges thin and dashed">
       <defs>
         <marker id={arrowId} viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
           <path d="M0,0 L8,4 L0,8 z" className="ng-arrow-head" />

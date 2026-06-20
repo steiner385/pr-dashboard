@@ -141,8 +141,20 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
 }
 .g-done .g-bar i { background: var(--done); }
 .g-running .g-bar i { background: var(--accent); }
-.g-overdue .g-bar i { background: var(--amber); }
-.g-failed .g-bar i { background: var(--fail); }
+/* #172: a texture overlay gives failed/overdue a non-color channel, so they're
+   distinguishable from each other AND from done/running under colour-vision
+   deficiency + grayscale (the bar fill alone was the only signal). The white
+   overlay reads on both themes; done/running stay solid. */
+.g-overdue .g-bar i {
+  background:
+    repeating-linear-gradient(90deg, transparent 0 4px, rgba(255, 255, 255, 0.24) 4px 6px),
+    var(--amber);
+}
+.g-failed .g-bar i {
+  background:
+    repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0.30) 0 2px, transparent 2px 6px),
+    var(--fail);
+}
 /* row color exposed for the p10–p90 band tint (matches the fill color) */
 .g-done { --row-color: var(--done); }
 .g-running { --row-color: var(--accent); }
@@ -610,9 +622,11 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
 /* --- Interactive needs-graph (#74) — pure-SVG layered DAG --- */
 .needs-graph { width: 100%; height: auto; max-width: 100%; display: block;
   /* viewBox scales to the container, so the graph is readable on mobile */ }
+/* #172: critical path = thick SOLID, other edges = thin DASHED — so the path
+   reads in grayscale/CVD, not by amber-vs-gray colour alone. */
 .needs-graph .ng-edge { stroke: var(--border); stroke-width: 1.5; fill: none;
-  transition: opacity 0.12s; }
-.needs-graph .ng-edge.cp { stroke: var(--amber); stroke-width: 2.5; }
+  stroke-dasharray: 4 3; transition: opacity 0.12s; }
+.needs-graph .ng-edge.cp { stroke: var(--amber); stroke-width: 2.5; stroke-dasharray: none; }
 .needs-graph .ng-arrow-head { fill: var(--border); }
 .needs-graph .ng-edge.cp ~ * .ng-arrow-head { fill: var(--amber); }
 .needs-graph .ng-edge.dim { opacity: 0.12; }
@@ -995,11 +1009,13 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
 .pm-mini { font-size: 11px; opacity: 0.8; }
 /* state colors (class-based so overlay heat via inline style is distinguishable) */
 .pm-gate .pm-glyph, .pm-mini.pm-gate { color: var(--done); }
-.pm-cond .pm-glyph, .pm-mini.pm-cond { color: var(--done); opacity: 0.85; }
+/* #172: conditional = BLUE (was green-at-0.85, too close to the green gate for
+   CVD at this glyph size). gate=green · conditional=blue · advisory=gray. */
+.pm-cond .pm-glyph, .pm-mini.pm-cond { color: var(--accent); }
 .pm-adv .pm-glyph, .pm-mini.pm-advisory { color: var(--muted); }
 .pm-absent .pm-glyph, .pm-mini.pm-absent { color: color-mix(in srgb, var(--muted) 35%, transparent); }
 .pm-gate { background: color-mix(in srgb, var(--done) 13%, transparent); }
-.pm-conditional { background: color-mix(in srgb, var(--done) 6%, transparent); }
+.pm-conditional { background: color-mix(in srgb, var(--accent) 6%, transparent); }
 .pm-cell.pm-has-drift { outline: 1.6px solid var(--fail); outline-offset: -1.6px; }
 .pm-drift-badge { position: absolute; top: -1px; right: 1px; font-size: 8px; color: var(--fail); }
 .pm-cell.pm-overlaid .pm-glyph { opacity: 0.55; }
@@ -1007,7 +1023,7 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
 
 .pm-legend { margin-top: 12px; font-size: 11px; color: var(--muted); line-height: 1.6; }
 .pm-legend .pm-gate { color: var(--done); background: none; }
-.pm-legend .pm-cond { color: var(--done); }
+.pm-legend .pm-cond { color: var(--accent); }
 .pm-legend .pm-adv { color: var(--muted); }
 .pm-legend .pm-drift { color: var(--fail); }
 
