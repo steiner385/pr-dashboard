@@ -45,6 +45,14 @@ jobs:
           fi
           node --input-type=module -e "import('./dist/server/server/backend.js').then(()=>console.log('plain-node ESM import ok')).catch(e=>{console.error(e);process.exit(1)})"
 
+      - name: Gate — no raw NUL bytes in source (use \x00 escapes; #214)
+        run: |
+          # A raw 0x00 byte makes the whole file read as "binary" to grep/rg.
+          # Use a \x00 escape in string/template literals instead.
+          if grep -rlP '\x00' server frontend/src --include='*.ts' --include='*.tsx'; then
+            echo "Raw NUL byte in source — use a \\x00 escape so files stay greppable (#214)"; exit 1
+          fi
+
       - name: Gate — no absolute /api literals in frontend
         run: |
           if grep -rn "fetch('/api\|fetch(\"/api\|fetch(\`/api\|new EventSource('/api\|new EventSource(\"/api\|new EventSource(\`/api" frontend/src --include='*.ts' --include='*.tsx' | grep -v __tests__; then

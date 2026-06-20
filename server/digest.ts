@@ -180,7 +180,7 @@ export function gatherDigestInput(src: DigestSources): DigestInput {
   for (const [repo, stats] of flakeByRepo) {
     for (const s of stats) {
       if (s.totalRuns < FLAKE_MIN_RUNS) continue;
-      const k = `${repo} ${s.name}`;
+      const k = `${repo}\x00${s.name}`;
       flakeRate.set(k, Math.max(flakeRate.get(k) ?? 0, s.flakeRatePct));
     }
   }
@@ -204,7 +204,7 @@ export function gatherDigestInput(src: DigestSources): DigestInput {
       if (byCheck && byCheck.size > 0) {
         const [name, count] = [...byCheck].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]!;
         topCulprit = { name, ejects: count,
-          flakeRatePct: flakeRate.get(`${repo} ${name}`) ?? null };
+          flakeRatePct: flakeRate.get(`${repo}\x00${name}`) ?? null };
       }
       return {
         repo,

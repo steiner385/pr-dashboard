@@ -793,9 +793,9 @@ export class HistoryStore {
     const already = new Set(
       (this.db.prepare('SELECT old_name, new_name FROM applied_aliases WHERE repo = ?').all(repo) as {
         old_name: string; new_name: string;
-      }[]).map((r) => `${r.old_name} ${r.new_name}`),
+      }[]).map((r) => `${r.old_name}\x00${r.new_name}`),
     );
-    const pending = Object.entries(aliases).filter(([from, to]) => !already.has(`${from} ${to}`));
+    const pending = Object.entries(aliases).filter(([from, to]) => !already.has(`${from}\x00${to}`));
     if (!pending.length) return 0;
 
     const move = this.db.transaction((pairs: [string, string][]) => {
@@ -1513,7 +1513,7 @@ export class HistoryStore {
     for (const r of rows) {
       const repo = r.repo as string;
       const m = out.get(repo) ?? new Map<string, number>();
-      m.set(`${r.name as string} ${r.event as string}`, (r.incidents as number) ?? 0);
+      m.set(`${r.name as string}\x00${r.event as string}`, (r.incidents as number) ?? 0);
       out.set(repo, m);
     }
     return out;

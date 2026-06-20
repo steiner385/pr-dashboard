@@ -286,7 +286,7 @@ export class Notifier extends EventEmitter {
    * or the budget was removed) clears the debounce key so a re-breach re-fires.
    */
   budgetBreach(scope: string, kind: string, active: boolean, detail: string): void {
-    const key = `${scope} ${kind}|budget-breach`;
+    const key = `${scope}\x00${kind}|budget-breach`;
     if (!active) {
       this.active.delete(key);
       return;

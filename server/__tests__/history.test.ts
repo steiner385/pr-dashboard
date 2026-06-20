@@ -1701,7 +1701,7 @@ describe('failureIncidentsByRepo (#150.3)', () => {
     h.recordCheckDuration(REPO, 'e2e', 'merge_group', at, done(at), 'FAILURE', sha, 1);
   const pass = (sha: string, at: string) =>
     h.recordCheckDuration(REPO, 'e2e', 'merge_group', at, done(at), 'SUCCESS', sha, 1);
-  const incidents = () => h.failureIncidentsByRepo(SINCE).get(REPO)?.get('e2e merge_group') ?? 0;
+  const incidents = () => h.failureIncidentsByRepo(SINCE).get(REPO)?.get('e2e\x00merge_group') ?? 0;
 
   it('collapses a stretch of consecutive real-failing shas into ONE incident', () => {
     fail('s1', '2026-06-10T01:00:00Z');
