@@ -7,8 +7,10 @@ import { useEffect, useMemo, useState } from 'react';
 import type { WorkspaceApi, SecurityFindingDto, RulesetDto } from '../../shell/workspaceApi';
 import type { DerivedModelLike, CellLike } from '../optimize/types';
 import { groupShards } from './groupShards';
-
-const GLYPH: Record<string, string> = { gate: '🔒', conditional: '◐', advisory: '•', absent: '·' };
+// Shared protection vocabulary (#183/convergence): the canonical state glyphs and the
+// raw-template stripper, so this matrix and the legacy ProtectionMap can't drift in
+// iconography or leak `${{ … }}` GitHub expressions into check names.
+import { STATE_GLYPH, stripCheckTemplate, type CellState } from '../../protectionModel';
 
 export function requiredGates(model: DerivedModelLike): string[] {
   return model.checkMeta.filter((m) => m.isRequiredMergeGate).map((m) => m.check);
@@ -54,13 +56,13 @@ export function ModelView({ repo, api }: ModelViewProps) {
     const state = cell?.state ?? 'absent';
     return (
       <td key={t.id} className={`cell state-${state}${cell?.drift ? ' drift' : ''}`} title={`${state}${cell?.drift ? ' — drift' : ''}`}>
-        {GLYPH[state] ?? '·'}{cell?.drift ? '⚠' : ''}
+        {STATE_GLYPH[state as CellState] ?? '·'}{cell?.drift ? '⚠' : ''}
       </td>
     );
   });
   const checkRow = (check: string, shardMember = false) => (
     <tr key={check} className={shardMember ? 'shard-member' : undefined}>
-      <th scope="row">{check}{required.includes(check) && <span title="required merge gate"> 🔒</span>}</th>
+      <th scope="row">{stripCheckTemplate(check)}{required.includes(check) && <span title="required merge gate"> 🔒</span>}</th>
       {cellTds(check)}
     </tr>
   );
@@ -90,7 +92,9 @@ export function ModelView({ repo, api }: ModelViewProps) {
         <p className="merge-contract">required gates: {required.length ? required.join(', ') : 'none detected'}</p>
       )}
 
-      <p className="matrix-legend" aria-label="Matrix legend">{GLYPH.gate} gate · {GLYPH.conditional} conditional · {GLYPH.advisory} advisory · {GLYPH.absent} absent · ⚠ drift</p>
+      <p className="matrix-legend" aria-label="Matrix legend">
+        <span className="state-gate">{STATE_GLYPH.gate}</span> gate · <span className="state-conditional">{STATE_GLYPH.conditional}</span> conditional · <span className="state-advisory">{STATE_GLYPH.advisory}</span> advisory · {STATE_GLYPH.absent} absent · <span className="state-drift">⚠</span> drift
+      </p>
 
       <table className="protection-matrix" aria-label="Protection matrix">
         <thead>
@@ -104,7 +108,7 @@ export function ModelView({ repo, api }: ModelViewProps) {
               <tr key={r.base} className="shard-group">
                 <th scope="row">
                   <button type="button" className="shard-toggle" aria-expanded={expanded} onClick={() => toggleShard(r.base)}>
-                    <span aria-hidden="true">{expanded ? '▾' : '▸'}</span> {r.base} <span className="shard-count">({r.members.length} shards)</span>
+                    <span aria-hidden="true">{expanded ? '▾' : '▸'}</span> {stripCheckTemplate(r.base)} <span className="shard-count">({r.members.length} shards)</span>
                   </button>
                 </th>
                 {cellTds(r.members[0])}
@@ -118,9 +122,9 @@ export function ModelView({ repo, api }: ModelViewProps) {
       {/* Details below the matrix — ruleset specifics + security (roadmap 2.4) */}
       {ruleset && ruleset.readable && !ruleset.inSync && (
         <p className="model-ruleset-detail mismatch">
-          ⚠ Ruleset mismatch — {ruleset.missingFromModel.length ? `ruleset requires ${ruleset.missingFromModel.join(', ')} not enforced by config` : ''}
+          ⚠ Ruleset mismatch — {ruleset.missingFromModel.length ? `the ruleset requires ${ruleset.missingFromModel.map(stripCheckTemplate).join(', ')}, not enforced by config` : ''}
           {ruleset.missingFromModel.length && ruleset.extraInModel.length ? '; ' : ''}
-          {ruleset.extraInModel.length ? `config gates ${ruleset.extraInModel.join(', ')} the ruleset doesn’t` : ''}
+          {ruleset.extraInModel.length ? `config enforces ${ruleset.extraInModel.map(stripCheckTemplate).join(', ')}, not required by the ruleset` : ''}
         </p>
       )}
       {ruleset && !ruleset.readable && (

@@ -73,7 +73,7 @@ describe('ModelView (US3)', () => {
   it('shows a ruleset mismatch (the dangerous gap — ruleset requires a check config misses)', async () => {
     const mismatch = api({ ruleset: vi.fn(async () => ({ readable: true, derivedRequired: ['build'], liveRequired: ['build', 'security-scan'], missingFromModel: ['security-scan'], extraInModel: [], inSync: false })) });
     render(<ModelView repo="o/r" api={mismatch} />);
-    expect(await screen.findByText(/Ruleset mismatch/)).toHaveTextContent(/requires security-scan not enforced by config/);
+    expect(await screen.findByText(/Ruleset mismatch/)).toHaveTextContent(/requires security-scan, not enforced by config/);
   });
 
   it('shows "grant administration:read" when the ruleset is unreadable (no false in-sync)', async () => {

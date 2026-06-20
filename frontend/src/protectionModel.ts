@@ -66,10 +66,20 @@ export function buildFindings(repo: string, model: DerivedModel | null, metrics:
 export function cellKey(check: string, tierId: string): string { return `${check} ${tierId}`; }
 export function groupOf(check: string): string { const i = check.indexOf(' / '); return i === -1 ? 'other' : check.slice(0, i); }
 export function leafOf(check: string): string { const i = check.indexOf(' / '); return i === -1 ? check : check.slice(i + 3); }
-/** Display label for a check leaf: drop the raw `(${{ matrix.x }}/N)` template
- *  (the `(i/N)` shard suffix already carries the readable index). */
+/** Drop the raw `(${{ matrix.x }}/N)` GitHub-expression template from a check name
+ *  (the `(i/N)` shard suffix already carries the readable index). Keeps the rest of
+ *  the name — including the `group / ` prefix — so it's the right cleanup for the
+ *  full-name matrix; use {@link displayName} where the compact leaf is wanted. */
+export function stripCheckTemplate(check: string): string {
+  // any parenthesised group that CONTAINS a `${{ … }}` expression — covers both
+  // "(${{ matrix.shard }}/8)" and "(API ${{ inputs.api-level }})" where prose
+  // precedes the expression inside the parens.
+  return check.replace(/\([^()]*\$\{\{[^}]*\}\}[^()]*\)/g, '').replace(/\s{2,}/g, ' ').trim();
+}
+/** Compact display label for a check: the leaf (no workflow-group prefix) with the
+ *  raw matrix template stripped. */
 export function displayName(check: string): string {
-  return leafOf(check).replace(/\(\$\{\{[^}]*\}\}[^)]*\)/g, '').replace(/\s{2,}/g, ' ').trim();
+  return stripCheckTemplate(leafOf(check));
 }
 export function fmtMin(m: number): string { return m >= 60 ? `${(m / 60).toFixed(m >= 600 ? 0 : 1)}h` : `${m}m`; }
 

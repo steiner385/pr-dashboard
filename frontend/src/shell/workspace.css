@@ -129,6 +129,15 @@
 .protection-matrix thead th { background: var(--bg); position: sticky; top: 0; }
 .protection-matrix th[scope=row] { font-weight: 500; white-space: nowrap; }
 .protection-matrix td.cell { text-align: center; font-size: 14px; }
+/* #172 parity (matrix convergence): redundant colour on top of the glyph shape so
+   gate/conditional/advisory are distinguishable without relying on either channel
+   alone. gate=green ● · conditional=blue ◐ · advisory=gray ○ (matches the legacy
+   ProtectionMap). The drift amber background stays the dominant signal. */
+.protection-matrix td.cell.state-gate,        .matrix-legend .state-gate        { color: var(--done); }
+.protection-matrix td.cell.state-conditional, .matrix-legend .state-conditional { color: var(--accent); }
+.protection-matrix td.cell.state-advisory,    .matrix-legend .state-advisory    { color: var(--muted); }
+.protection-matrix td.cell.state-absent { color: color-mix(in srgb, var(--muted) 35%, transparent); }
+.matrix-legend .state-drift { color: var(--fail); }
 .protection-matrix td.cell.drift { background: color-mix(in srgb, var(--amber) 22%, transparent); }
 .model-sha { color: var(--muted); font-weight: 400; font-size: 12px; }
 .sec-finding { font-size: 12px; padding: 4px 0; border-bottom: 1px solid var(--border); }

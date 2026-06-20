@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  buildFindings, cellKey, groupOf, leafOf, displayName, fmtMin, cellTitle, cellHeat,
+  buildFindings, cellKey, groupOf, leafOf, displayName, stripCheckTemplate, fmtMin, cellTitle, cellHeat,
   type Cell, type DerivedModel, type MetricsSlice,
 } from '../protectionModel';
 
@@ -22,6 +22,19 @@ describe('protectionModel — check-name helpers', () => {
   it('displayName drops the raw matrix-template shard and collapses whitespace', () => {
     expect(displayName('ci.yml / shard (${{ matrix.index }}/4)')).toBe('shard');
     expect(displayName('ci.yml / unit')).toBe('unit');
+  });
+
+  it('stripCheckTemplate removes the raw GitHub-expression template but KEEPS the group prefix', () => {
+    // matrix wants the full grouped name, just without the `${{ … }}` leak
+    expect(stripCheckTemplate('accessibility / a11y: axe (${{ inputs.mode }}) (advisory)'))
+      .toBe('accessibility / a11y: axe (advisory)');
+    expect(stripCheckTemplate('static-checks / test: unit (${{ matrix.shard }}/8)'))
+      .toBe('static-checks / test: unit');
+    // prose can precede the expression inside the parens
+    expect(stripCheckTemplate('android-build / android: debug build (API ${{ inputs.api-level }}) (advisory)'))
+      .toBe('android-build / android: debug build (advisory)');
+    // a numeric shard suffix is NOT a template — left untouched (groupShards owns it)
+    expect(stripCheckTemplate('static / test: unit (shard 1/3)')).toBe('static / test: unit (shard 1/3)');
   });
 });
 
