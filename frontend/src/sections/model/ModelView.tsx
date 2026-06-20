@@ -139,7 +139,10 @@ export function ModelView({ repo, api }: ModelViewProps) {
                 <span className="sec-kind">{f.kind}</span>
                 <span className="sec-conf">[{f.confidence}]</span>{' '}
                 <span className="sec-detail">{f.detail}</span>
-                {f.jobId && <span className="sec-loc"> — {f.file} · {f.jobId}</span>}
+                {/* Always show the source file — workflow-level findings (e.g.
+                    broad-permissions) carry a file but no jobId, and without it a
+                    dozen of them render identically. Append the job only when set. */}
+                <span className="sec-loc"> — {f.file}{f.jobId ? ` · ${f.jobId}` : ''}</span>
               </li>
             ))}
           </ul>

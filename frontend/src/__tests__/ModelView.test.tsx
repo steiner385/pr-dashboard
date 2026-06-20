@@ -70,6 +70,19 @@ describe('ModelView (US3)', () => {
     expect(within(panel).getByText('[high]')).toBeInTheDocument();
   });
 
+  it('shows the source file for workflow-level findings that have no jobId (so they are not all identical)', async () => {
+    const withFindings = api({ security: vi.fn(async () => ({ repo: 'o/r', sourceSha: 's', scannedFiles: 2,
+      findings: [
+        { file: '_android-build.yml', kind: 'broad-permissions', detail: 'workflow-level write permission(s)', confidence: 'medium' as const },
+        { file: '_android-smoke.yml', kind: 'broad-permissions', detail: 'workflow-level write permission(s)', confidence: 'medium' as const },
+      ] })) });
+    render(<ModelView repo="o/r" api={withFindings} />);
+    const panel = await screen.findByLabelText('Security findings');
+    // both same kind/detail — the file is what distinguishes them
+    expect(within(panel).getByText(/_android-build\.yml/)).toBeInTheDocument();
+    expect(within(panel).getByText(/_android-smoke\.yml/)).toBeInTheDocument();
+  });
+
   it('shows a ruleset mismatch (the dangerous gap — ruleset requires a check config misses)', async () => {
     const mismatch = api({ ruleset: vi.fn(async () => ({ readable: true, derivedRequired: ['build'], liveRequired: ['build', 'security-scan'], missingFromModel: ['security-scan'], extraInModel: [], inSync: false })) });
     render(<ModelView repo="o/r" api={mismatch} />);
