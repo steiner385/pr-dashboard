@@ -49,6 +49,9 @@ export function HealthView({ state, connected, onJumpToLane, onFocusRepo }: Heal
   );
   return (
     <div className="health-view">
+      {/* #184: a section heading (sr-only — the standalone rail already labels the
+          active section visibly; the embed has no rail, so this gives it structure). */}
+      <h2 className="sr-only">Health</h2>
       {!connected && (
         <div className="health-liveness" role="status">Reconnecting to the live feed…</div>
       )}

@@ -28,8 +28,14 @@ describe('PipelineView (the PR pipeline view, ported into the workspace)', () =>
 
   it('orders the focused repo first', () => {
     render(<PipelineView state={state()} focusedRepo="acme/beta" />);
-    const headers = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
+    // #184: per-repo headers are now h3 (under the section's sr-only "Pipeline" h2)
+    const headers = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
     expect(headers[0]).toContain('acme/beta');
+  });
+
+  it('has a section heading matching its rail label (#184)', () => {
+    render(<PipelineView state={state()} focusedRepo={null} />);
+    expect(screen.getByRole('heading', { level: 2, name: 'Pipeline' })).toBeInTheDocument();
   });
 
   it('collapsing a repo hides its PRs and shows a summary', () => {

@@ -63,6 +63,7 @@ export function DiagnoseView({ state, focusedRepo, api }: DiagnoseViewProps) {
 
   return (
     <div className="diagnose-view">
+      <h2 className="sr-only">Diagnose</h2>
       {remediations.length > 0 && (
         <section className="remediation-proposals" aria-label="Auto-remediation proposals">
           <strong>🛠 Remediation proposals</strong> — flaky required gates blocking merges:

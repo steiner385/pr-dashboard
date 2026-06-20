@@ -43,6 +43,7 @@ export function PipelineView({ state, focusedRepo }: { state: DashboardState | n
 
   return (
     <div className="pipeline-view">
+      <h2 className="sr-only">Pipeline</h2>
       <StatusStrip prs={allPrs} activeFilter={activeFilter} onFilter={setActiveFilter} />
       {repos.map((r) => {
         const isCollapsed = collapsed.has(r.repo);
@@ -52,7 +53,7 @@ export function PipelineView({ state, focusedRepo }: { state: DashboardState | n
         const failedCount = r.prs.filter(isFailedPr).length;
         return (
           <section key={r.repo}>
-            <h2 className="repo-header">
+            <h3 className="repo-header">
               <button type="button" className="repo-header-btn" aria-expanded={!isCollapsed} onClick={() => toggle(r.repo)}>
                 <span aria-hidden="true" className="repo-chevron">{isCollapsed ? '▸' : '▾'}</span>
                 {r.repo}
@@ -65,7 +66,7 @@ export function PipelineView({ state, focusedRepo }: { state: DashboardState | n
                   </span>
                 )}
               </button>
-            </h2>
+            </h3>
             {!isCollapsed && (() => {
               const { lead, cohort } = splitCohort(visiblePrs);
               const cohortOpen = openCohorts.has(r.repo);

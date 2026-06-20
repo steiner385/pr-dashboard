@@ -27,6 +27,7 @@ export function ModelEditView({ repo, api }: { repo: string | null; api: Workspa
 
   return (
     <div className="model-edit-view">
+      <h2 className="sr-only">Model &amp; Edit</h2>
       <div className="model-edit-modes" role="tablist" aria-label="Model & Edit mode">
         {MODES.map((m) => (
           <button key={m.id} type="button" role="tab" id={`me-tab-${m.id}`}
