@@ -9,6 +9,10 @@ import type { WorkspaceApi, SimResultDto } from '../../shell/workspaceApi';
 import type { DerivedModelLike } from './types';
 import { PrefixesLever } from './PrefixesLever';
 import { demotionFindings } from './findings';
+// Strip raw `${{ … }}` GitHub-expression templates from displayed check names
+// (shared with ModelView / ProtectionMap) — display only; the raw name stays the
+// key for plan/simulate/quarantine handlers.
+import { stripCheckTemplate } from '../../protectionModel';
 
 /** first tier id where the check runs (its "home" tier to move from) */
 function homeTier(model: DerivedModelLike, check: string): string | null {
@@ -136,7 +140,7 @@ export function OptimizeView({ repo, api }: OptimizeViewProps) {
             {findings.map((f) => (
               <li key={f.check} className="optimize-finding">
                 <span className="finding-impact" aria-hidden="true">💰</span>
-                <span className="finding-check">{f.check}</span>
+                <span className="finding-check">{stripCheckTemplate(f.check)}</span>
                 <span className="finding-why">{f.minutes.toLocaleString()} min/window · never failed — demote candidate</span>
                 <button type="button" disabled={!!pending[`simulate:${f.check}`]} onClick={() => simulate(f.check)}>Simulate</button>
               </li>
@@ -149,9 +153,9 @@ export function OptimizeView({ repo, api }: OptimizeViewProps) {
         {model.checks.map((c) => (
           <li key={c} className={c === selected ? 'optimize-check active' : 'optimize-check'}>
             <label className="plan-toggle">
-              <input type="checkbox" checked={planChecks.has(c)} onChange={() => togglePlan(c)} aria-label={`Add ${c} to plan`} />
+              <input type="checkbox" checked={planChecks.has(c)} onChange={() => togglePlan(c)} aria-label={`Add ${stripCheckTemplate(c)} to plan`} />
             </label>
-            <span className="optimize-check-name">{c}</span>
+            <span className="optimize-check-name">{stripCheckTemplate(c)}</span>
             <button type="button" disabled={!!pending[`simulate:${c}`]} onClick={() => simulate(c)}>Simulate demote</button>
             <button type="button" className="quarantine-btn" disabled={!!pending[`quarantine:${c}`]} onClick={() => doQuarantine(c)}>Quarantine (flaky)</button>
           </li>
@@ -170,16 +174,16 @@ export function OptimizeView({ repo, api }: OptimizeViewProps) {
         </section>
       )}
       {quarantine && (
-        <section className="optimize-quarantine" aria-label={`Quarantine ${quarantine.check}`}>
+        <section className="optimize-quarantine" aria-label={`Quarantine ${stripCheckTemplate(quarantine.check)}`}>
           {quarantine.error
-            ? <p className="quarantine-blocked" role="status">Can’t quarantine {quarantine.check}: {quarantine.error}</p>
+            ? <p className="quarantine-blocked" role="status">Can’t quarantine {stripCheckTemplate(quarantine.check)}: {quarantine.error}</p>
             : quarantine.diff
-              ? <><p role="status">Quarantine {quarantine.check} (adds continue-on-error):</p><pre className="quarantine-diff" aria-label="quarantine diff">{quarantine.diff}</pre></>
-              : <p role="status">Preparing quarantine for {quarantine.check}…</p>}
+              ? <><p role="status">Quarantine {stripCheckTemplate(quarantine.check)} (adds continue-on-error):</p><pre className="quarantine-diff" aria-label="quarantine diff">{quarantine.diff}</pre></>
+              : <p role="status">Preparing quarantine for {stripCheckTemplate(quarantine.check)}…</p>}
         </section>
       )}
       {selected && sim && (
-        <section className="optimize-sim" aria-label={`Simulation for ${selected}`}>
+        <section className="optimize-sim" aria-label={`Simulation for ${stripCheckTemplate(selected)}`}>
           <p className={sim.legal ? 'sim-note legal' : 'sim-note illegal'} role="status">{sim.note}</p>
           {sim.legal && sim.confidence === 'low' && (
             <p className="sim-low-confidence" role="status">⚠ Low-confidence projection (thin/estimated data) — this would generate a review scaffold, not a structured apply.</p>

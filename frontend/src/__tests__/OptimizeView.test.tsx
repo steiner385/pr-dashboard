@@ -59,6 +59,21 @@ describe('OptimizeView (US4 — drives /api/workspace loop)', () => {
     expect(screen.getByText('build')).toBeInTheDocument();
   });
 
+  it('strips raw ${{ … }} templates from displayed check names + the plan aria-label', async () => {
+    const templated: DerivedModelLike = {
+      ...MODEL,
+      checks: ['shards / test: unit (${{ matrix.shard }}/8) (1/8)', 'build'],
+      cells: [{ check: 'build', tierId: 'queue', intent: { runs: true, gates: true, conditional: false }, observed: null, state: 'gate' }],
+      checkMeta: [{ check: 'build', isRequiredMergeGate: true, provenance: [{ file: 'ci.yml', jobId: 'build' }] }],
+    };
+    const api = fakeApi({ getPipeline: vi.fn(async () => ({ repo: 'o/r', sourceSha: 's', model: templated })) });
+    render(<OptimizeView repo="o/r" api={api} />);
+    // visible name + aria-label are clean; nothing on screen leaks the template
+    expect(await screen.findByText('shards / test: unit (1/8)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Add shards / test: unit (1/8) to plan')).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('${{');
+  });
+
   it('simulating a legal demote shows the saving + offers a draft-PR preview', async () => {
     const api = fakeApi();
     render(<OptimizeView repo="o/r" api={api} />);
