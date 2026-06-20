@@ -75,6 +75,15 @@
 
 /* ---- Health: fleet roll-up ---- */
 .fleet-rollup ul, .fleet-leaderboard ol, .diagnose-pr-list, .optimize-checks { list-style: none; margin: 0; padding: 0; }
+/* #186: Diagnose master-detail. A CONTAINER query (not a media query) — the
+   embed's column width, not the viewport, decides the split. Stacked when narrow;
+   two columns (PR list | sticky detail) once the content box is wide enough. */
+.diagnose-view { container-type: inline-size; }
+.diagnose-split { display: grid; grid-template-columns: 1fr; }
+@container (min-width: 700px) {
+  .diagnose-split { grid-template-columns: 280px 1fr; gap: 16px; align-items: start; }
+  .diagnose-detail { position: sticky; top: 16px; }
+}
 .fleet-row {
   display: flex; align-items: center; gap: 10px; padding: 11px 12px; cursor: pointer;
   border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; background: var(--bg);
