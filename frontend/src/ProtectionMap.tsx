@@ -3,98 +3,17 @@ import { useApiBase } from './embed/ApiBaseContext';
 import { simulateMove, legalFromTiers, legalToTargets } from './protectionSimulate';
 import { buildClaudePrompt } from './protectionPrompt';
 import { useFocusTrap } from './hooks/useFocusTrap';
-
-// ---- DerivedModel mirror (server/pipeline-model/derived) --------------------
-
-interface TierDef { id: string; label: string; event: string }
-interface ObservedCell {
-  ran: boolean; runs: number; realFailures: number;
-  failRatePct: number; flakeRatePct: number; minutes: number;
-}
-type CellState = 'gate' | 'advisory' | 'conditional' | 'absent';
-interface Cell {
-  check: string; tierId: string;
-  intent: { runs: boolean; gates: boolean; conditional: boolean };
-  observed: ObservedCell | null;
-  drift: boolean;
-  state: CellState;
-}
-export interface CheckMeta {
-  check: string;
-  triggers: string[];
-  provenance: { file: string; jobId: string }[];
-  confidence: 'high' | 'low';
-  isRequiredMergeGate: boolean;
-}
-export interface DerivedModel { tiers: TierDef[]; checks: string[]; cells: Cell[]; checkMeta?: CheckMeta[] }
-
-// gate (mandatory) ▸ conditional (runs-when-touched) ▸ advisory ▸ absent
-const STATE_RANK: Record<CellState, number> = { gate: 3, conditional: 2, advisory: 1, absent: 0 };
-const ABSENT_META = { role: 'absent' as CellState, drift: false, minutes: 0, gateTiers: [] as string[] };
-const STATE_GLYPH: Record<CellState, string> = { gate: '●', conditional: '◐', advisory: '○', absent: '·' };
-const STATE_WORD: Record<CellState, string> = { gate: 'gate', conditional: 'conditional', advisory: 'advisory', absent: 'absent' };
-
-// ---- Findings (re-homed recommendations, anchored to checks) -----------------
-
-type Goal = 'drift' | 'cost' | 'quality';
-const GOALS: Goal[] = ['drift', 'cost', 'quality']; // urgency order: wrong-now → risk → waste
-const GOAL_ICON: Record<Goal, string> = { cost: '💰', quality: '🛡', drift: '⚠' };
-const GOAL_LABEL: Record<Goal, string> = { cost: 'Cost', quality: 'Quality', drift: 'Drift' };
-
-export interface Finding { goal: Goal; check: string; detail: string; weight: number }
-
-interface MetricsSlice {
-  demotionCandidates?: { repo: string; candidates: { name: string; currentTier: string; suggestedTier: string; minutesInWindow: number }[] }[];
-  promotionCandidates?: { repo: string; candidates: { name: string; suggestedTier: string; realFailures: number }[] }[];
-}
-
-function buildFindings(repo: string, model: DerivedModel | null, metrics: MetricsSlice | null): Finding[] {
-  const out: Finding[] = [];
-  for (const cell of model?.cells ?? []) {
-    if (cell.drift) out.push({ goal: 'drift', check: cell.check, detail: `${cell.tierId}: configured ≠ observed`, weight: 1 });
-  }
-  const demo = metrics?.demotionCandidates?.find((d) => d.repo === repo)?.candidates ?? [];
-  for (const c of demo) out.push({ goal: 'cost', check: c.name, detail: `${c.currentTier} → ${c.suggestedTier} · ~${c.minutesInWindow.toLocaleString()} min/wk`, weight: c.minutesInWindow });
-  const promo = metrics?.promotionCandidates?.find((p) => p.repo === repo)?.candidates ?? [];
-  for (const c of promo) out.push({ goal: 'quality', check: c.name, detail: `shift left → ${c.suggestedTier} · ${c.realFailures} real fails caught late`, weight: c.realFailures });
-  return out;
-}
-
-// ---- helpers ----------------------------------------------------------------
-
-function cellKey(check: string, tierId: string): string { return `${check} ${tierId}`; }
-function groupOf(check: string): string { const i = check.indexOf(' / '); return i === -1 ? 'other' : check.slice(0, i); }
-function leafOf(check: string): string { const i = check.indexOf(' / '); return i === -1 ? check : check.slice(i + 3); }
-/** Display label for a check leaf: drop the raw `(${{ matrix.x }}/N)` template
- *  (the `(i/N)` shard suffix already carries the readable index). */
-function displayName(check: string): string {
-  return leafOf(check).replace(/\(\$\{\{[^}]*\}\}[^)]*\)/g, '').replace(/\s{2,}/g, ' ').trim();
-}
-function fmtMin(m: number): string { return m >= 60 ? `${(m / 60).toFixed(m >= 600 ? 0 : 1)}h` : `${m}m`; }
-
-type Overlay = 'none' | 'cost' | 'quality';
-const OVERLAYS: { id: Overlay; label: string }[] = [
-  { id: 'none', label: 'States' }, { id: 'cost', label: 'Cost' }, { id: 'quality', label: 'Quality' },
-];
-function cellHeat(c: Cell | undefined, overlay: Overlay, max: { minutes: number; fail: number }): string | undefined {
-  if (overlay === 'none' || !c?.observed) return undefined;
-  if (overlay === 'cost') {
-    const pct = max.minutes ? Math.round((c.observed.minutes / max.minutes) * 80) : 0;
-    return `color-mix(in srgb, var(--amber) ${pct}%, transparent)`;
-  }
-  const pct = max.fail ? Math.round((c.observed.failRatePct / max.fail) * 80) : 0;
-  return `color-mix(in srgb, var(--fail) ${pct}%, transparent)`;
-}
-function cellTitle(c: Cell): string {
-  const parts = [`${c.check} — ${c.tierId}: ${STATE_WORD[c.state]}`];
-  if (c.observed) {
-    parts.push(`${c.observed.runs} runs · ${c.observed.minutes.toLocaleString()} min`);
-    if (c.observed.realFailures > 0) parts.push(`${c.observed.realFailures} real fails (${c.observed.failRatePct}%)`);
-    if (c.observed.flakeRatePct > 0) parts.push(`flake ${c.observed.flakeRatePct}%`);
-  }
-  if (c.drift) parts.push('⚠ drift: configured/observed disagree');
-  return parts.join(' · ');
-}
+// Pure model logic (types, goal vocabulary, cell/format helpers) lives in
+// protectionModel.ts (#183) so this file holds only the React component.
+import {
+  type Cell, type CellState, type DerivedModel, type Goal, type Overlay,
+  type Finding, type MetricsSlice,
+  STATE_RANK, ABSENT_META, STATE_GLYPH, STATE_WORD, GOALS, GOAL_ICON, GOAL_LABEL, OVERLAYS,
+  buildFindings, cellKey, groupOf, leafOf, displayName, fmtMin, cellHeat, cellTitle,
+} from './protectionModel';
+// Re-exported for back-compat: protectionSimulate / protectionPrompt and the
+// ProtectionMap tests import these types from here.
+export type { CheckMeta, DerivedModel, Finding } from './protectionModel';
 
 // ---- component --------------------------------------------------------------
 

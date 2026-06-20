@@ -2,7 +2,7 @@
 // turns the finding + the check's provenance + the simulated cost/coverage delta
 // into a precise instruction an engineer can paste into their own CC session.
 // Drift is investigate-only (the tool can't know if config or the check is wrong).
-import type { DerivedModel, CheckMeta } from './ProtectionMap';
+import type { DerivedModel, CheckMeta } from './protectionModel';
 import { simulateMove } from './protectionSimulate';
 
 export type Goal = 'drift' | 'cost' | 'quality';

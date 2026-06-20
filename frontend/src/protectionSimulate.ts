@@ -9,7 +9,7 @@
 //   • you can only move it INTO a tier whose GHA event its workflow declares;
 //   • you can NEVER move/remove a required merge-queue gate (breaks branch
 //     protection) — the non-negotiable safety invariant.
-import type { DerivedModel, CheckMeta } from './ProtectionMap';
+import type { DerivedModel, CheckMeta } from './protectionModel';
 
 type Cell = DerivedModel['cells'][number];
 interface TierDef { id: string; label: string; event: string }
