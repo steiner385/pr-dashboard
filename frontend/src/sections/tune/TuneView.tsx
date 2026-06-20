@@ -5,6 +5,7 @@
 // a void (roadmap 1.1). API injected.
 import { useEffect, useState, type ReactNode } from 'react';
 import type { WorkspaceApi, BudgetsDto, PolicyDto, OutcomesDto, ChangelogDto } from '../../shell/workspaceApi';
+import { stripCheckTemplate } from '../../protectionModel';
 
 type Loadable<T> = { status: 'loading' } | { status: 'error' } | { status: 'ok'; data: T };
 
@@ -72,7 +73,7 @@ export function TuneView({ repo, api }: { repo: string | null; api: WorkspaceApi
         <>
           <Panel label="Policy" title="Policy" value={policy}
             isEmpty={(d) => d.violations.length === 0} empty="No policy violations ✓">
-            {(d) => <ul role="list">{d.violations.map((v, i) => <li key={i}><strong>{v.check}</strong>: {v.detail}</li>)}</ul>}
+            {(d) => <ul role="list">{d.violations.map((v, i) => <li key={i}><strong>{stripCheckTemplate(v.check)}</strong>: {v.detail}</li>)}</ul>}
           </Panel>
 
           <Panel label="Outcomes" title="Applied-change outcomes" value={outcomes}
@@ -83,7 +84,7 @@ export function TuneView({ repo, api }: { repo: string | null; api: WorkspaceApi
                 <ul role="list">
                   {d.outcomes.map((o) => (
                     <li key={o.prNumber} className={`outcome conf-${o.confidence}`}>
-                      #{o.prNumber} {o.check}: {Math.round(o.costAccuracy * 100)}% accurate {o.directionCorrect ? '✓' : '✗ wrong direction'} <em>[{o.confidence}]</em>
+                      #{o.prNumber} {stripCheckTemplate(o.check)}: {Math.round(o.costAccuracy * 100)}% accurate {o.directionCorrect ? '✓' : '✗ wrong direction'} <em>[{o.confidence}]</em>
                     </li>
                   ))}
                 </ul>

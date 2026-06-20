@@ -5,6 +5,10 @@
 // node inspector, and `needs:` edges are the next sub-steps.
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { Lane, LaneNode } from './laneLayout';
+// Strip raw `${{ … }}` GitHub-expression templates from the displayed node name +
+// aria-label (shared with ModelView/Optimize) — display only; node.check stays the
+// key for refs, test ids, and onSelect.
+import { stripCheckTemplate } from '../../protectionModel';
 
 function gatingWord(n: LaneNode): string {
   if (n.gates) return 'gate';
@@ -24,8 +28,9 @@ function CanvasNode({ tierId, node, onSelect, selected, isDep, nodeRef }: NodePr
   // the relationship is named in the accessible label, not signalled by colour alone.
   const depCls = isDep ? ' dep-highlight' : '';
   const depLabel = isDep ? ' — dependency of the selected check' : '';
+  const display = stripCheckTemplate(node.check);
   const inner = (<>
-    <span className="canvas-node-name">{node.check}</span>
+    <span className="canvas-node-name">{display}</span>
     <span className="canvas-node-gate" aria-hidden="true">{word}</span>
   </>);
   // Keyboard-operable button is the accessible baseline (drag is a later enhancement).
@@ -35,13 +40,13 @@ function CanvasNode({ tierId, node, onSelect, selected, isDep, nodeRef }: NodePr
         <button type="button" ref={(el) => nodeRef?.(node.check, el)}
           className={`canvas-node n-${cls}${selected ? ' selected' : ''}${depCls}`}
           data-testid={`node-${tierId}-${node.check}`} aria-pressed={!!selected}
-          aria-label={`${node.check} — ${word}${depLabel}`} onClick={() => onSelect(node.check)}>{inner}</button>
+          aria-label={`${display} — ${word}${depLabel}`} onClick={() => onSelect(node.check)}>{inner}</button>
       </li>
     );
   }
   return (
     <li ref={(el) => nodeRef?.(node.check, el)} className={`canvas-node n-${cls}${depCls}`}
-      data-testid={`node-${tierId}-${node.check}`} aria-label={`${node.check} — ${word}${depLabel}`}>{inner}</li>
+      data-testid={`node-${tierId}-${node.check}`} aria-label={`${display} — ${word}${depLabel}`}>{inner}</li>
   );
 }
 

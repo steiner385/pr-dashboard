@@ -28,6 +28,19 @@ describe('PipelineCanvas (read-only DAG lanes)', () => {
     expect(within(pr).getByText('e2e')).toBeInTheDocument();
   });
 
+  it('strips the raw ${{ … }} template from the node name + aria-label, keeping the testid raw', () => {
+    const lanes: Lane[] = [{ tierId: 'pr', label: 'PR', event: 'pull_request', nodes: [
+      { check: 'static / test: unit (${{ matrix.shard }}/8) (1/8)', gates: true, conditional: false },
+    ] }];
+    render(<PipelineCanvas lanes={lanes} onSelect={vi.fn()} />);
+    // visible name + aria-label are clean…
+    expect(screen.getByText('static / test: unit (1/8)')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /static \/ test: unit \(1\/8\) — gate/ })).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('${{');
+    // …but the test id (and onSelect key) keep the raw check name
+    expect(screen.getByTestId('node-pr-static / test: unit (${{ matrix.shard }}/8) (1/8)')).toBeInTheDocument();
+  });
+
   it('labels gating color-independently (the word "gate" is in the accessible name, not just a color)', () => {
     render(<PipelineCanvas lanes={LANES} />);
     const e2e = screen.getByTestId('node-pr-e2e');
