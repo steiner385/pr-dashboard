@@ -100,6 +100,9 @@ export function DiagnoseView({ state, focusedRepo, api }: DiagnoseViewProps) {
           </ul>
         </section>
       )}
+      {/* #186: master (PR list) + detail (blocker + Gantt). Stacked when narrow;
+          two-column at ≥700px container width (see .diagnose-split @container). */}
+      <div className="diagnose-split">
       <ul className="diagnose-pr-list" role="list" aria-label="Open pull requests">
         {prs.map((p) => (
           <li key={key(p)} className={selected && key(p) === key(selected) ? 'diagnose-pr active' : 'diagnose-pr'}>
@@ -131,6 +134,7 @@ export function DiagnoseView({ state, focusedRepo, api }: DiagnoseViewProps) {
           <CheckGantt checks={selected.checks} stage={selected.stage.stage} showLegend />
         </section>
       )}
+      </div>
     </div>
   );
 }

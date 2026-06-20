@@ -61,6 +61,14 @@ describe('DiagnoseView', () => {
     pr('o/b', 20, [check('build')]),
   ]);
 
+  it('wraps the PR list + detail in a master-detail split (#186)', () => {
+    const { container } = render(<DiagnoseView state={s} />);
+    const split = container.querySelector('.diagnose-split');
+    expect(split).not.toBeNull();
+    expect(split!.querySelector('.diagnose-pr-list')).not.toBeNull();   // master
+    expect(split!.querySelector('.diagnose-detail')).not.toBeNull();    // detail (first PR selected)
+  });
+
   it('shows the blocker for the selected PR and lets you switch PRs', () => {
     render(<DiagnoseView state={s} />);
     // first PR selected by default → its failed build is the blocker
