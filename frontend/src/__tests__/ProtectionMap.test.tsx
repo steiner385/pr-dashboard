@@ -182,6 +182,18 @@ describe('ProtectionMap', () => {
     });
   });
 
+  it('clicking the backdrop dismisses the drawer (#182)', async () => {
+    mockFetch(MODEL);
+    render(<ProtectionMap />);
+    const rail = await screen.findByTestId('pm-findings');
+    fireEvent.click(within(rail).getAllByText('build: production')[0]);
+    await screen.findByTestId('pm-drawer');
+    fireEvent.click(screen.getByTestId('pm-drawer-backdrop')); // click-outside the panel
+    await waitFor(() => {
+      expect(screen.queryByTestId('pm-drawer')).not.toBeInTheDocument();
+    });
+  });
+
   it('a11y: focus returns to the trigger button when drawer closes', async () => {
     mockFetch(MODEL);
     render(<ProtectionMap />);

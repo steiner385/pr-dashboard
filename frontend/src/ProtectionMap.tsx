@@ -473,6 +473,11 @@ export function ProtectionMap() {
               setCopied(true); window.setTimeout(() => setCopied(false), 1500);
             };
             return (
+              <>
+              {/* #182: pm-drawer previously had no backdrop (unlike settings-overlay);
+                  add one so click-outside dismisses + content behind is dimmed. */}
+              <div className="pm-drawer-backdrop" data-testid="pm-drawer-backdrop"
+                onClick={() => setDrilled(null)} aria-hidden="true" />
               <aside
                 className="pm-drawer"
                 data-testid="pm-drawer"
@@ -539,6 +544,7 @@ export function ProtectionMap() {
                   </button>
                 </div>
               </aside>
+              </>
             );
           })()}
         </>

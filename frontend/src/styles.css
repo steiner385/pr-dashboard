@@ -1026,6 +1026,7 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
   background: none; border: none; padding: 2px 4px; cursor: pointer; border-radius: 5px; font: inherit; }
 .pm-finding-btn:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 
+.pm-drawer-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.32); z-index: var(--z-overlay); }
 .pm-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 92vw); z-index: var(--z-drawer);
   background: var(--surface); border-left: 1px solid var(--border); box-shadow: -8px 0 24px rgba(0,0,0,0.18);
   padding: 16px 18px; overflow-y: auto; }
