@@ -48,6 +48,11 @@ export function HealthHeader({ state, onJumpToLane }: {
             >
               <span className={`spine-glyph s-${l.status}`} aria-hidden="true">{LANE_GLYPH[l.status]}</span>
               <span className="health-lane-title">{l.title}</span>
+              {/* #189: surface the already-computed lane summary inline on
+                  non-green chips (was hover-only); the full text stays in aria-label. */}
+              {l.status !== 'green' && l.summary && (
+                <span className="health-lane-summary" aria-hidden="true">{l.summary}</span>
+              )}
             </button>
           </li>
         ))}

@@ -70,4 +70,16 @@ describe('HealthHeader', () => {
     expect(screen.getByTestId('health-lane-pr-ci'))
       .toHaveAttribute('aria-label', expect.stringContaining('PR CI'));
   });
+
+  it('surfaces the lane summary inline on a non-green chip (#189)', () => {
+    render(<HealthHeader state={redState()} onJumpToLane={vi.fn()} />);
+    const summary = screen.getByTestId('health-lane-pr-ci').querySelector('.health-lane-summary');
+    expect(summary).not.toBeNull();
+    expect(summary!.textContent!.length).toBeGreaterThan(0);
+  });
+
+  it('hides the inline summary on a green lane (#189)', () => {
+    render(<HealthHeader state={greenState()} onJumpToLane={vi.fn()} />);
+    expect(screen.getByTestId('health-lane-main').querySelector('.health-lane-summary')).toBeNull();
+  });
 });

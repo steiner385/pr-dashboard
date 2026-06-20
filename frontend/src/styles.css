@@ -860,6 +860,9 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
   border-color: var(--border); }
 .health-lane.not-wired { opacity: 0.5; }
 .health-lane-title { font-size: 13px; }
+/* #189: compact inline lane summary on non-green chips (full text in aria-label). */
+.health-lane-summary { font-size: 11px; color: var(--muted); max-width: 12rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ============================================================================
    Responsive layout (phones, ≤560px). The app is desktop-first; these rules
