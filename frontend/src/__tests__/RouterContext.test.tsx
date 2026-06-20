@@ -19,6 +19,17 @@ it('path mode pushes state and never touches the hash', () => {
   expect(result.current.active).toBe('diagnose');
 });
 
+it('exposes isPending (idle false) and still navigates under the transition (#181)', () => {
+  const wrapper = ({ children }: { children: React.ReactNode }) =>
+    <RouterProvider mode="hash">{children}</RouterProvider>;
+  const { result } = renderHook(() => useSectionRoute(), { wrapper });
+  expect(typeof result.current.isPending).toBe('boolean');
+  expect(result.current.isPending).toBe(false);    // idle
+  act(() => result.current.go('diagnose'));
+  expect(result.current.active).toBe('diagnose');   // transition flushed by act()
+  expect(result.current.isPending).toBe(false);     // settled
+});
+
 it('hash mode reads + writes the hash (standalone behavior)', () => {
   location.hash = '#pipeline';
   const wrapper = ({ children }: { children: React.ReactNode }) =>

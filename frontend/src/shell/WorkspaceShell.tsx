@@ -11,7 +11,7 @@ export interface WorkspaceShellProps {
 }
 
 export function WorkspaceShell({ header, children }: WorkspaceShellProps) {
-  const { active, go } = useSectionRoute();
+  const { active, go, isPending } = useSectionRoute();
   return (
     <div className="workspace-shell">
       <header className="workspace-header" role="banner">{header}</header>
@@ -33,7 +33,7 @@ export function WorkspaceShell({ header, children }: WorkspaceShellProps) {
             ))}
           </ul>
         </nav>
-        <main className="workspace-content" role="main">{children}</main>
+        <main className="workspace-content" role="main" aria-busy={isPending || undefined}>{children}</main>
       </div>
     </div>
   );
