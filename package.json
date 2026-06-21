@@ -31,6 +31,7 @@
     "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite\"",
     "build": "vite build",
     "build:embed": "vite build --config vite.embed.config.ts",
+    "embed:harness": "pnpm build:embed && vite --config embed-harness/vite.config.ts",
     "prepare": "pnpm build:embed && pnpm build:server",
     "start": "NODE_ENV=production tsx server/index.ts",
     "app:setup": "tsx scripts/app-setup.ts",

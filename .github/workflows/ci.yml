@@ -62,5 +62,10 @@ jobs:
       - name: Gate — embed CSS is scoped, embed JS has no React root
         run: |
           grep -nE '^\s*(body|html)\s*\{' dist/embed/style.css && { echo "Unscoped body/html in embed CSS"; exit 1; } || true
+          # The :root design tokens must be remapped onto .prdash-root; a stray :root
+          # leaks the whole token system onto the host document.
+          grep -nE ':root\b' dist/embed/style.css && { echo "Unscoped :root in embed CSS — the :root→.prdash-root token remap broke (tokens would leak to the host)"; exit 1; } || true
+          # Sanity: scoping actually happened (prefixer not silently disabled).
+          grep -q '\.prdash-root' dist/embed/style.css || { echo "Embed CSS is not scoped to .prdash-root at all"; exit 1; }
           grep -q 'react-dom/client' dist/embed/index.js && { echo "Embed bundles a React root"; exit 1; } || true
           echo "embed bundle gates passed"

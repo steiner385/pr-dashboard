@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Embed Harness — host page</title>
+    <style>
+      /* Deliberately opinionated HOST styles. The embed CSS is scoped to
+         .prdash-root, so NONE of this should change inside the embed, and the
+         embed's tokens/resets must NOT bleed onto these host elements. */
+      :root { --host-accent: #b5179e; }
+      html, body { margin: 0; }
+      body { font-family: Georgia, serif; background: #fdf6ff; color: #2a0a3a; }
+      .host-chrome { padding: 16px 24px; border-bottom: 3px solid var(--host-accent); }
+      .host-chrome h1 { color: var(--host-accent); font-size: 22px; margin: 0 0 8px; }
+      .host-chrome button { font: inherit; background: var(--host-accent); color: #fff; border: 0; padding: 6px 14px; border-radius: 4px; }
+      .host-chrome p { margin: 8px 0 0; font-style: italic; }
+      /* The mount gets a fixed height so we can scroll the embed independently. */
+      #embed-mount { height: calc(100vh - 110px); }
+    </style>
+  </head>
+  <body>
+    <header class="host-chrome">
+      <h1>admin.kindash.com (host)</h1>
+      <button type="button">Host button</button>
+      <p>Host paragraph in Georgia — embed styles must not touch me.</p>
+    </header>
+    <main id="embed-mount"></main>
+    <script type="module" src="/main.tsx"></script>
+  </body>
+</html>
