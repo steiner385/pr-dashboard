@@ -1067,7 +1067,7 @@ export function MetricsView({ now, focusCostNonce }: {
                                 onClick={() => draftDemotionPr(d.repo, c)}>
                                 {st?.loading ? 'opening…' : 'Draft PR'}
                               </button>}
-                        <PromptButton getText={() => demotionPrompt(d.repo, c)} label="Copy prompt"
+                        <PromptButton getText={() => demotionPrompt(d.repo, c)}
                           showPrompt={false} testId={`demotion-prompt-${c.name}/${c.event}`} />
                       </div>
                     </td>
@@ -1123,7 +1123,7 @@ export function MetricsView({ now, focusCostNonce }: {
                                 onClick={() => draftPromotionPr(p.repo, c)}>
                                 {st?.loading ? 'opening…' : 'Draft PR'}
                               </button>}
-                        <PromptButton getText={() => promotionPrompt(p.repo, c)} label="Copy prompt"
+                        <PromptButton getText={() => promotionPrompt(p.repo, c)}
                           showPrompt={false} testId={`promotion-prompt-${c.name}/${c.event}`} />
                       </div>
                     </td>

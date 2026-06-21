@@ -123,9 +123,10 @@ describe('ProtectionMap', () => {
     const rail = await screen.findByTestId('pm-findings');
     fireEvent.click(within(rail).getAllByText('build: production')[0]);
     const copy = await screen.findByTestId('pm-copy-prompt');
-    expect(copy.textContent).toMatch(/Copy Claude Code prompt/);
+    expect(copy.textContent).toMatch(/Copy AI prompt/);
     fireEvent.click(copy);
-    expect(copy.textContent).toMatch(/Copied/);
+    // truthful confirmation lands after the (async) clipboard write resolves
+    await waitFor(() => expect(copy.textContent).toMatch(/Copied/));
   });
 
   it('shows an error when the map cannot be derived', async () => {

@@ -1130,14 +1130,22 @@ section h2 { font-size: 14px; margin: 18px 0 8px; color: var(--muted); }
   background: var(--accent-strong); border: none; border-radius: 6px; padding: 7px 14px; }
 .pm-action-primary:hover { filter: brightness(1.08); }
 
-/* Shared "draft a Claude Code prompt" affordance (PromptButton) — used next to
-   every Draft-PR button. Secondary styling so it reads as the lighter-weight
-   sibling of the primary Draft-PR action. */
+/* Shared "copy an AI prompt" affordance (PromptButton) — used next to every
+   Draft-PR button. Secondary styling so it reads as the lighter-weight sibling of
+   the primary Draft-PR action. The ✨ marks it as an AI hand-off. */
 .cc-prompt-btn { font: inherit; font-size: 12px; cursor: pointer; color: var(--accent-strong, #4f46e5);
-  background: transparent; border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; }
+  background: transparent; border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px;
+  white-space: nowrap; }
+.cc-prompt-btn::before { content: '✨ '; }
 .cc-prompt-btn:hover:not(:disabled) { background: var(--bg, #f6f6f8); }
 .cc-prompt-btn:disabled { opacity: 0.6; cursor: default; }
+.cc-prompt-btn.is-copied { color: var(--done, #1a7f37); border-color: var(--done, #1a7f37); font-weight: 600; }
+.cc-prompt-btn[data-status="failed"]::before { content: '⚠ '; }
+.cc-prompt-btn[data-status="failed"] { color: var(--amber, #b35900); border-color: var(--amber, #b35900); }
+/* revealed-prompt panel (always for roomy surfaces; on copy-failure everywhere) */
+.cc-prompt-panel { margin-top: 8px; }
+.cc-prompt-caption { margin: 0 0 4px; font-size: 11px; color: var(--muted, #6b7280); }
 .cc-prompt { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--border);
-  border-radius: 8px; padding: 10px; font-size: 12px; margin-top: 8px; overflow-x: auto; }
+  border-radius: 8px; padding: 10px; font-size: 12px; overflow-x: auto; user-select: all; }
 /* table action cells (demotion/promotion) stack the Draft-PR control + prompt button */
 .metric-action-cell { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }

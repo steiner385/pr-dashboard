@@ -1443,7 +1443,7 @@ describe('MetricsView sub-tabs (page cleanup)', () => {
     const btn = await screen.findByTestId('demotion-prompt-lint: eslint/pull_request');
     fireEvent.click(btn);
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining('demote the CI check "lint: eslint"'));
-    expect(btn.textContent).toMatch(/Copied/);
+    await waitFor(() => expect(btn.textContent).toMatch(/Copied/));
   });
 
   it('each promotion row also offers a Claude Code prompt (shift-left instruction)', async () => {
