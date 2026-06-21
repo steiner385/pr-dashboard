@@ -135,6 +135,41 @@
 .protection-matrix th, .protection-matrix td { border: 1px solid var(--border); padding: 6px 9px; text-align: left; }
 .protection-matrix thead th { background: var(--bg); position: sticky; top: 0; }
 .protection-matrix th[scope=row] { font-weight: 500; white-space: nowrap; }
+/* Check name is a drill trigger — looks like clickable text, opens the drawer. */
+.protection-matrix .check-drill { font: inherit; color: inherit; background: none; border: none; padding: 0;
+  cursor: pointer; text-align: left; }
+.protection-matrix .check-drill:hover { text-decoration: underline; color: var(--accent); }
+
+/* ---- Model: drill-down drawer (Inspect → evidence + inline what-if) ---- */
+.model-drawer-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.32); z-index: var(--z-overlay); }
+.model-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 92vw); z-index: var(--z-drawer);
+  background: var(--surface); border-left: 1px solid var(--border); box-shadow: -8px 0 24px rgba(0,0,0,0.18);
+  padding: 16px 18px; overflow-y: auto; }
+.model-drawer-head { display: flex; align-items: center; gap: 10px; }
+.model-drawer-check { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: var(--text);
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-drawer-gate { font-size: 11px; font-weight: 700; color: var(--done); }
+.model-drawer-x { background: none; border: none; cursor: pointer; color: var(--muted); font-size: 16px; }
+.model-drawer-x:hover { color: var(--text); }
+.model-drawer-prov { font-size: 11px; color: var(--muted); margin: 8px 0 2px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.model-drawer-needs { font-size: 11px; color: var(--muted); margin: 0 0 10px; }
+.model-evidence { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 14px; }
+.model-evidence th { text-align: left; color: var(--muted); font-weight: 600; padding: 3px 6px; border-bottom: 1px solid var(--border); }
+.model-evidence td { padding: 3px 6px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.model-evidence td.state-gate { color: var(--done); } .model-evidence td.state-conditional { color: var(--accent); }
+.model-evidence td.state-advisory { color: var(--muted); }
+.model-evidence tr.ev-drift td { background: color-mix(in srgb, var(--fail) 8%, transparent); }
+.model-drawer-sim { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; }
+.model-sim-label { font-size: 11px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+.model-sim-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.model-sim-controls label { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
+.model-sim-controls select { font: inherit; font-size: 11px; max-width: 150px; }
+.model-sim-result { font-size: 12px; font-weight: 600; margin: 8px 0 0; color: var(--muted); }
+.model-sim-result.good { color: var(--done); } .model-sim-result.bad { color: var(--amber); }
+.model-action-primary { font: inherit; font-size: 12px; padding: 6px 12px; border-radius: 6px;
+  border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text); cursor: pointer; }
+.model-prompt { margin-top: 12px; padding: 8px; font-size: 11px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 6px; white-space: pre-wrap; overflow-x: auto; }
 /* Heat-overlay segmented toggle (Cost / Quality) above the matrix. */
 .matrix-overlay { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; }
 .matrix-overlay .overlay-btn { font: inherit; font-size: 12px; padding: 2px 10px; border-radius: 999px;

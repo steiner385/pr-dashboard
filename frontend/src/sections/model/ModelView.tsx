@@ -3,10 +3,11 @@
 // cell-state glyphs, and drift — so "what gates a merge, and where is it drifting?"
 // is answerable at a glance (SC-005). Reads the SHA-pinned model via the same
 // /api/workspace client; API injected for tests.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { WorkspaceApi, SecurityFindingDto, RulesetDto } from '../../shell/workspaceApi';
 import type { DerivedModelLike, CellLike } from '../optimize/types';
 import { groupShards } from './groupShards';
+import { ModelCellDrawer } from './ModelCellDrawer';
 // Shared protection vocabulary (#183/convergence): the canonical state glyphs and the
 // raw-template stripper, so this matrix and the legacy ProtectionMap can't drift in
 // iconography or leak `${{ … }}` GitHub expressions into check names.
@@ -57,6 +58,10 @@ export function ModelView({ repo, api }: ModelViewProps) {
   const [driftOnly, setDriftOnly] = useState(false);
   const [overlay, setOverlay] = useState<Overlay>('none');
   const [openShards, setOpenShards] = useState<Set<string>>(new Set());
+  // Drill-down: click a check name → a drawer with its per-tier evidence + an inline
+  // what-if simulator (the consolidation of Inspect's read with Optimize's act).
+  const [drill, setDrill] = useState<string | null>(null);
+  const drillTriggerRef = useRef<HTMLElement | null>(null);
   const required = useMemo(() => (model ? requiredGates(model) : []), [model]);
   const drift = useMemo(() => (model ? driftCells(model) : []), [model]);
   const driftChecks = useMemo(() => new Set(drift.map((c) => c.check)), [drift]);
@@ -99,7 +104,13 @@ export function ModelView({ repo, api }: ModelViewProps) {
   });
   const checkRow = (check: string, shardMember = false) => (
     <tr key={check} className={shardMember ? 'shard-member' : undefined}>
-      <th scope="row">{stripCheckTemplate(check)}{required.includes(check) && <span title="required merge gate"> 🔒</span>}</th>
+      <th scope="row">
+        <button type="button" className="check-drill" data-testid={`drill-${check}`}
+          onClick={(e) => { drillTriggerRef.current = e.currentTarget; setDrill(check); }}>
+          {stripCheckTemplate(check)}
+        </button>
+        {required.includes(check) && <span title="required merge gate"> 🔒</span>}
+      </th>
       {cellTds(check)}
     </tr>
   );
@@ -198,6 +209,11 @@ export function ModelView({ repo, api }: ModelViewProps) {
             ))}
           </ul>
         </section>
+      )}
+
+      {drill && (
+        <ModelCellDrawer check={drill} model={model} repo={repo} api={api}
+          onClose={() => setDrill(null)} returnFocusRef={drillTriggerRef} />
       )}
     </div>
   );

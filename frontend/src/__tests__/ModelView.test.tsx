@@ -137,6 +137,18 @@ describe('ModelView (US3)', () => {
     render(<ModelView repo="o/r" api={api({ getPipeline: vi.fn(async () => { throw new Error('no derivable model'); }) })} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('no derivable model');
   });
+
+  it('clicking a check name opens the drill-down drawer for that check', async () => {
+    render(<ModelView repo="o/r" api={api()} />);
+    await screen.findByLabelText('Protection matrix');
+    expect(screen.queryByTestId('model-drawer')).toBeNull();
+    fireEvent.click(screen.getByTestId('drill-build'));
+    const drawer = screen.getByTestId('model-drawer');
+    expect(drawer).toHaveAttribute('role', 'dialog');
+    expect(drawer).toHaveAttribute('aria-label', expect.stringContaining('build'));
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByTestId('model-drawer')).toBeNull();
+  });
 });
 
 describe('ModelView — Cost/Quality heat overlays', () => {
