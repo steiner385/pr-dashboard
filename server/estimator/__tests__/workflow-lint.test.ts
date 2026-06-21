@@ -1,9 +1,20 @@
 import { describe, it, expect } from 'vitest';
 import {
-  lintTimeouts, lintFastGatingJobs, lintWaitDominated, sortFindings,
+  lintTimeouts, lintFastGatingJobs, lintWaitDominated, sortFindings, cleanJobName,
   GITHUB_DEFAULT_TIMEOUT_MINUTES, FAST_GATING_MAX_P50_SECS, WAIT_DOMINATED_MIN_SAMPLES,
   type TimeoutLintInput, type FastGatingInput, type WaitDominatedInput, type LintFinding,
 } from '../workflow-lint';
+
+describe('cleanJobName', () => {
+  it('drops a trailing slash from a reusable-workflow node key', () => {
+    expect(cleanJobName('static-checks / ')).toBe('static-checks');
+    expect(cleanJobName('fast-checks /')).toBe('fast-checks');
+  });
+  it('leaves a normal (leaf) job name untouched', () => {
+    expect(cleanJobName('build')).toBe('build');
+    expect(cleanJobName('static-checks / test: server')).toBe('static-checks / test: server');
+  });
+});
 
 const job = (jobName: string, timeoutMinutes: number | null, p99Secs: number): TimeoutLintInput =>
   ({ job: jobName, timeoutMinutes, p99Secs });
@@ -108,6 +119,12 @@ describe('lintFastGatingJobs', () => {
     });
     expect(out[0]!.message).toBe(
       'p50 12s gates build, unit-tests; consider merging into dependents');
+  });
+
+  it('cleans trailing slashes from reusable-workflow dependents in the message', () => {
+    const out = lintFastGatingJobs([fast('prepare', 12, ['static-checks / ', 'fast-checks /', 'ci'])]);
+    expect(out[0]!.message).toBe(
+      'p50 12s gates static-checks, fast-checks, ci; consider merging into dependents');
   });
 
   it('no finding at exactly 30s (strict less-than)', () => {

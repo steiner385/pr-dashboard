@@ -5,6 +5,8 @@
  * derivation over already-computed payload sections — no new measurement.
  */
 
+import { cleanJobName } from './workflow-lint';
+
 export type RecPriority = 'high' | 'medium' | 'low';
 
 export interface Recommendation {
@@ -132,7 +134,7 @@ export function deriveRecommendations(inp: RecommendationInputs): Recommendation
     for (const f of l.findings) {
       recs.push({ repo: l.repo, kind: `lint:${f.rule}`,
         priority: f.severity === 'warn' ? 'medium' : 'low',
-        title: f.message, detail: `job: ${f.job}` });
+        title: f.message, detail: `job: ${cleanJobName(f.job)}` });
     }
   }
 

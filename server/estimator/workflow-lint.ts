@@ -89,6 +89,13 @@ function fmtSecs(secs: number): string {
   return `${secs >= 1 ? Math.round(secs) : Math.round(secs * 10) / 10}s`;
 }
 
+/** Human-readable job name. A reusable-workflow node's key is its prefix —
+ *  "static-checks / " — which reads as a dangling slash ("job: static-checks /")
+ *  in a recommendation. Drop a trailing " / " so it renders as "static-checks". */
+export function cleanJobName(job: string): string {
+  return job.replace(/\s*\/\s*$/, '');
+}
+
 /** Cross-rule ordering: warn-first, then by job name, then by rule id —
  *  stable however many rules contributed. */
 export function sortFindings(findings: LintFinding[]): LintFinding[] {
@@ -148,7 +155,7 @@ export function lintFastGatingJobs(inputs: FastGatingInput[]): LintFinding[] {
     if (!onCriticalPath || dependents.length === 0) continue;
     out.push({
       rule: 'fast-gating-job', severity: 'info', job,
-      message: `p50 ${fmtSecs(p50Secs)} gates ${dependents.join(', ')}; `
+      message: `p50 ${fmtSecs(p50Secs)} gates ${dependents.map(cleanJobName).join(', ')}; `
         + 'consider merging into dependents',
       observed: p50Secs, configured: null,
     });
