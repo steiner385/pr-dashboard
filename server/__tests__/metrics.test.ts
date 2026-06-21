@@ -729,8 +729,9 @@ describe('computeMetrics: critical path (issue #42)', () => {
     ])]]);
     const m = computeMetrics(h, '3d', 'hour', NOW, [], () => 1, graphs);
     const pr = m.criticalPath.find((c) => c.event === 'pull_request')!;
-    // node duration = the slowest inner check (they run in parallel inside the call)
-    expect(pr.path.map((s) => s.name)).toEqual(['static-checks /', 'ci']);
+    // node duration = the slowest inner check (they run in parallel inside the call).
+    // the reusable-workflow node key is cleaned for display ("static-checks / " → "static-checks")
+    expect(pr.path.map((s) => s.name)).toEqual(['static-checks', 'ci']);
     expect(pr.path[0]!.durationP50).toBe(500);
     expect(pr.endToEndP50Secs).toBe(510);
   });

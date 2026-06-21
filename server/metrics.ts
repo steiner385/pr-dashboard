@@ -9,7 +9,7 @@ import { ejectProbability } from './estimator/queue';
 import { modelBatchSizes } from './estimator/batch-advisor';
 import { deriveRecommendations, type Recommendation } from './estimator/recommendations';
 import {
-  lintTimeouts, lintFastGatingJobs, lintWaitDominated, sortFindings,
+  lintTimeouts, lintFastGatingJobs, lintWaitDominated, sortFindings, cleanJobName,
   type LintFinding, type TimeoutLintInput, type FastGatingInput, type WaitDominatedInput,
 } from './estimator/workflow-lint';
 import { computeDemotionCandidates, type DemotionCandidate } from './estimator/demotion-candidates';
@@ -1033,8 +1033,14 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
       if (!sawDuration) continue;
       const result = computeCriticalPath(inputs);
       if (result == null) continue; // empty/cyclic (corrupt persisted graph)
+      // Clean reusable-workflow node keys ("static-checks / " → "static-checks") for
+      // DISPLAY only. All internal matching below (cpNames/slackByName, onCriticalPath)
+      // stays on the raw keys; we clean just the names emitted to the payload — and,
+      // in needsGraph, the `needs` refs too, with the SAME function, so edges still
+      // match (the prefix is unique, so cleaning can't collide two nodes).
       criticalPath.push({ repo, event, endToEndP50Secs: result.endToEndP50Secs,
-        path: result.path, offPath: result.offPath.slice(0, OFF_PATH_CAP) });
+        path: result.path.map((s) => ({ ...s, name: cleanJobName(s.name) })),
+        offPath: result.offPath.slice(0, OFF_PATH_CAP).map((o) => ({ ...o, name: cleanJobName(o.name) })) });
 
       // Interactive needs-graph (issue #74): emit EVERY active node — not just
       // the path — with its edges (restricted to active nodes, mirroring CPM's
@@ -1046,8 +1052,10 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
       needsGraph.push({
         repo, event, endToEndP50Secs: result.endToEndP50Secs,
         nodes: inputs.map((inp) => ({
-          name: inp.name,
-          needs: inp.needs.filter((n) => activeKeySet.has(n)),
+          // display name + needs refs cleaned together (raw keys still drive the
+          // onCriticalPath/slack lookups against cpNames/slackByName below)
+          name: cleanJobName(inp.name),
+          needs: inp.needs.filter((n) => activeKeySet.has(n)).map(cleanJobName),
           durationP50: inp.durationP50,
           waitP50: inp.waitP50,
           onCriticalPath: cpNames.has(inp.name),
@@ -1090,7 +1098,10 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
       ...lintTimeouts([...lintInputs.values()]),
       ...lintFastGatingJobs([...fastInputs.values()]),
       ...lintWaitDominated([...waitInputs.values()]),
-    ]);
+    // clean the reusable-workflow node key for display ("static-checks / " →
+    // "static-checks"); the message's dependents were already cleaned in the lint
+    // rules. Done after sort (order keys off the raw job, which is fine).
+    ]).map((f) => ({ ...f, job: cleanJobName(f.job) }));
     if (findings.length > 0) lint.push({ repo, findings });
   }
 
