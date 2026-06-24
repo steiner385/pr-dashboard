@@ -38,3 +38,29 @@ export function computeTrend(value: number | null, baseline: number | null, opts
   }
   return { deltaPct, direction, polarity, significant };
 }
+
+/** Green-rate of a half-series: ok ÷ non-null; null when too few non-null samples. */
+function greenRate(half: { ok: boolean | null }[], minSamples: number): number | null {
+  const nonNull = half.filter((p) => p.ok != null);
+  if (nonNull.length < minSamples) return null;
+  return nonNull.filter((p) => p.ok).length / nonNull.length;
+}
+
+/**
+ * "Degrading green" trend (#258) for a main-lane series: split by position into
+ * older and recent halves, compare green-rate (recent vs older, higher = good).
+ * Returns the neutral/flat trend (no arrow) for short, blind, or stable series.
+ */
+export function greenRateTrend(
+  series: { ok: boolean | null }[] | undefined,
+  opts: { minSamplesPerHalf?: number } = {},
+): Trend {
+  const { minSamplesPerHalf = 3 } = opts;
+  if (!series || series.length < minSamplesPerHalf * 2) {
+    return { deltaPct: null, direction: 'flat', polarity: 'neutral', significant: false };
+  }
+  const mid = Math.floor(series.length / 2);
+  const olderRate = greenRate(series.slice(0, mid), minSamplesPerHalf);
+  const recentRate = greenRate(series.slice(mid), minSamplesPerHalf);
+  return computeTrend(recentRate, olderRate, { lowerIsBetter: false });
+}

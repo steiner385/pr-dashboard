@@ -1,5 +1,28 @@
 import { describe, it, expect } from 'vitest';
-import { computeTrend } from '../trend';
+import { computeTrend, greenRateTrend } from '../trend';
+
+describe('greenRateTrend', () => {
+  it('degrading green-rate → down, bad, significant', () => {
+    // older half all green (1.0), recent half half-green (0.5) → -50%
+    const t = greenRateTrend([{ ok: true }, { ok: true }, { ok: true }, { ok: true }, { ok: true }, { ok: false }, { ok: true }, { ok: false }]);
+    expect(t).toMatchObject({ direction: 'down', polarity: 'bad', significant: true });
+  });
+  it('improving green-rate → up, good', () => {
+    const t = greenRateTrend([{ ok: true }, { ok: false }, { ok: true }, { ok: false }, { ok: true }, { ok: true }, { ok: true }, { ok: true }]);
+    expect(t).toMatchObject({ direction: 'up', polarity: 'good', significant: true });
+  });
+  it('insufficient non-null samples per half → neutral (no arrow)', () => {
+    expect(greenRateTrend([{ ok: true }, { ok: true }, { ok: false }, { ok: false }])).toMatchObject({ direction: 'flat', polarity: 'neutral' });
+    expect(greenRateTrend([{ ok: true }, { ok: null }, { ok: null }, { ok: null }, { ok: null }, { ok: true }])).toMatchObject({ polarity: 'neutral' });
+  });
+  it('stable all-green → flat, neutral', () => {
+    expect(greenRateTrend([{ ok: true }, { ok: true }, { ok: true }, { ok: true }, { ok: true }, { ok: true }])).toMatchObject({ direction: 'flat', significant: false });
+  });
+  it('undefined / empty → neutral', () => {
+    expect(greenRateTrend(undefined)).toMatchObject({ deltaPct: null, polarity: 'neutral' });
+    expect(greenRateTrend([])).toMatchObject({ deltaPct: null, polarity: 'neutral' });
+  });
+});
 
 describe('computeTrend', () => {
   it('null/zero baseline → flat, neutral, null deltaPct', () => {
