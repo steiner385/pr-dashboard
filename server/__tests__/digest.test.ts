@@ -107,9 +107,9 @@ describe('gatherDigestInput', () => {
 
   it('counts merges per repo over the 24h window', () => {
     const mergedSince = vi.fn(() => [
-      { repo: 'r/a', mergedAt: '2026-06-12T01:00:00Z', createdAt: null, qaLiveAt: null, mergedBy: null, enqueuedAt: null },
-      { repo: 'r/a', mergedAt: '2026-06-12T02:00:00Z', createdAt: null, qaLiveAt: null, mergedBy: null, enqueuedAt: null },
-      { repo: 'r/b', mergedAt: '2026-06-12T03:00:00Z', createdAt: null, qaLiveAt: null, mergedBy: null, enqueuedAt: null },
+      { repo: 'r/a', number: 1, mergedAt: '2026-06-12T01:00:00Z', createdAt: null, qaLiveAt: null, mergedBy: null, enqueuedAt: null, envLive: {} },
+      { repo: 'r/a', number: 2, mergedAt: '2026-06-12T02:00:00Z', createdAt: null, qaLiveAt: null, mergedBy: null, enqueuedAt: null, envLive: {} },
+      { repo: 'r/b', number: 3, mergedAt: '2026-06-12T03:00:00Z', createdAt: null, qaLiveAt: null, mergedBy: null, enqueuedAt: null, envLive: {} },
     ]);
     const out = gatherDigestInput(sources({ history: history({ mergedSince }) }));
     expect(mergedSince).toHaveBeenCalledWith('2026-06-11T12:00:00.000Z');
@@ -160,7 +160,7 @@ describe('gatherDigestInput', () => {
     const out = gatherDigestInput(sources({
       exclude: ['r/noisy'],
       history: history({ mergedSince: () => [
-        { repo: 'r/noisy', mergedAt: '2026-06-12T01:00:00Z', createdAt: null, qaLiveAt: null, mergedBy: null, enqueuedAt: null }] }),
+        { repo: 'r/noisy', number: 1, mergedAt: '2026-06-12T01:00:00Z', createdAt: null, qaLiveAt: null, mergedBy: null, enqueuedAt: null, envLive: {} }] }),
       queueHealth: [{ repo: 'r/noisy', state: 'healthy', detail: 'fine' }],
     }));
     expect(out.repos).toEqual([]);

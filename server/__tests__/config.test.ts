@@ -445,6 +445,7 @@ deploy:
 
   it('instance-override deploy entries are exempt (the operator wrote them)', () => {
     const instanceDc = { cloneUrl: 'https://anywhere.example/repo.git', defaultBranch: 'main',
+      order: ['qa'],
       environments: [{ name: 'qa' as const, healthUrl: 'https://qa.anywhere.example/health',
         auto: true, shaKey: 'commitSha' }] };
     const cfg: AppConfig = { ...withAllowlist(['github.com']), deploy: { 'acme/gizmos': instanceDc } };

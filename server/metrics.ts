@@ -598,16 +598,20 @@ export function computeMetrics(history: HistoryStore, window: MetricsWindow,
    * repo has no deploy mapping (preserves behavior for qa/prod repos and
    * deploy-less repos, keeping all existing tests green).
    */
-  const normalizeEnvLive = <T extends { repo: string; qaLiveAt: string | null; prodLiveAt: string | null; envLive: Record<string, string> }>(
+  // Constraint requires only the fields BOTH row sources carry (mergedSince has
+  // qaLiveAt but no prodLiveAt; leadTimeRowsSince has both). prodLiveAt is
+  // re-derived only when the row actually has it.
+  const normalizeEnvLive = <T extends { repo: string; qaLiveAt: string | null; envLive: Record<string, string> }>(
     row: T,
   ): T => {
     const m = firstTerminalFor(row.repo);
     if (!m) return row;
-    return {
-      ...row,
-      qaLiveAt: (m.firstEnv ? row.envLive[m.firstEnv] ?? null : null),
-      prodLiveAt: (m.terminalEnv ? row.envLive[m.terminalEnv] ?? null : null),
-    };
+    const next: T = { ...row, qaLiveAt: m.firstEnv ? row.envLive[m.firstEnv] ?? null : null };
+    if ('prodLiveAt' in row) {
+      (next as Record<string, unknown>).prodLiveAt =
+        m.terminalEnv ? row.envLive[m.terminalEnv] ?? null : null;
+    }
+    return next;
   };
 
   // 1. Runner-wait health: per (repo, event) buckets with p50/p90 + headline p50.

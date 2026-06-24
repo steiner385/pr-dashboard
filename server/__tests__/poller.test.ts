@@ -24,6 +24,7 @@ const CONFIG: AppConfig = {
     'acme/widgets': {
       cloneUrl: 'https://github.com/acme/widgets.git',
       defaultBranch: 'main',
+      order: ['qa', 'prod'],
       environments: [
         { name: 'qa', healthUrl: 'https://qa.widgets.example.com/health', auto: true, shaKey: 'commitSha' },
         { name: 'prod', healthUrl: 'https://widgets.example.com/health', auto: false, shaKey: 'commitSha' },
