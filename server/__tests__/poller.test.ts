@@ -5939,3 +5939,115 @@ describe('per-repo deploy status on DashboardState (Deploy lane, Spec 2)', () =>
     expect(repo?.deploy).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 7 review: env-order generalization guards (non-qa/prod names + single-env)
+// ---------------------------------------------------------------------------
+
+describe('Poller env-order generalization (non-qa/prod names + single-env)', () => {
+  const ALL_EVENTS_ON: NotificationsConfig = {
+    enabled: false, command: [], digest: { enabled: false, hourLocal: 8 },
+    events: { 'ci-failed': true, 'group-failed': true, 'queue-blocked': true,
+      ready: true, overdue: true, 'prod-live': true, 'queue-stalled': true,
+      'duration-regression': true, 'runner-starvation': true, 'budget-breach': true },
+  };
+
+  // Reuse the standard merged-PR sweep fixture (PR 8951, mergeCommit squash8951).
+  // The health URL and sha names are intentionally non-qa/prod so any re-hardcoding
+  // would break these tests.
+
+  it('(a) multi-env non-qa/prod: prodLive fires on terminal env (production), NOT on first env (staging)', async () => {
+    // Repo configured with order: ['staging', 'production'] — names chosen to
+    // prove the notifier gates on terminalEnv, not on the literal string 'prod'.
+    const config: AppConfig = {
+      ...CONFIG,
+      deploy: {
+        'acme/widgets': {
+          cloneUrl: 'https://github.com/acme/widgets.git',
+          defaultBranch: 'main',
+          order: ['staging', 'production'],
+          environments: [
+            { name: 'staging', healthUrl: 'https://staging.widgets.example.com/health', auto: true, shaKey: 'commitSha' },
+            { name: 'production', healthUrl: 'https://production.widgets.example.com/health', auto: false, shaKey: 'commitSha' },
+          ],
+        },
+      },
+    };
+    const notifier = new Notifier({ config: () => ALL_EVENTS_ON });
+    const prodLiveSpy = vi.spyOn(notifier, 'prodLive');
+
+    // Phase 1: staging live, production not yet.
+    const shasPhase1 = {
+      'https://staging.widgets.example.com/health': 'squash8951',
+      'https://production.widgets.example.com/health': 'oldSha-prod',
+    };
+    // Mutable clock: phase 2 must advance past ANCESTRY_THROTTLE_MS (60s) — the
+    // same SHA flows staging→production, so production's (mergeSha, deployedSha)
+    // ancestry pair is identical to the one staging already checked in phase 1.
+    // With a frozen clock that pair would be throttled and production would never
+    // be marked live until a later cycle.
+    let clock = NOW;
+    const deploy = fakeDeploy(shasPhase1, { 'squash8951': 'yes', 'oldSha-prod': 'no' });
+    const p = new Poller({ router: asRouter(fakeClient()), history, deploy,
+      config, now: () => clock, notifier });
+    await p.sweepOnce();   // ingests merged #8951 (mergeCommitSha squash8951)
+    await p.deployOnce();
+
+    // staging is live: PR is 'awaiting-prod'; prodLive must NOT have fired yet
+    const prAfterStaging = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!
+      .prs.find((x) => x.number === 8951)!;
+    expect(prAfterStaging.stage.stage).toBe('awaiting-prod');
+    expect(prodLiveSpy).not.toHaveBeenCalled();
+
+    // Phase 2: production also goes live (clock advanced past the throttle).
+    shasPhase1['https://production.widgets.example.com/health'] = 'squash8951';
+    clock = new Date(NOW.getTime() + 120_000);
+    // ancestry already 'yes' for squash8951, so production will be marked live too.
+    await p.deployOnce();
+
+    // prodLive must fire exactly once, for the terminal env 'production'.
+    expect(prodLiveSpy).toHaveBeenCalledTimes(1);
+    expect(prodLiveSpy).toHaveBeenCalledWith('acme/widgets', 8951, 'feat: allowance');
+    // The PR leaves the board (terminalLive → null from viewForMergedPr).
+    const prAfterProd = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!
+      .prs.find((x) => x.number === 8951);
+    expect(prAfterProd).toBeUndefined();
+  });
+
+  it('(b) single-env: PR leaves board and prodLive fires when the sole env goes live', async () => {
+    // A repo with order: ['production'] — firstEnv === terminalEnv.  Proves that
+    // the single-env path (no intermediate envs) treats the one env as both first
+    // and terminal, so the PR exits the board and the notifier fires in one step.
+    const config: AppConfig = {
+      ...CONFIG,
+      deploy: {
+        'acme/widgets': {
+          cloneUrl: 'https://github.com/acme/widgets.git',
+          defaultBranch: 'main',
+          order: ['production'],
+          environments: [
+            { name: 'production', healthUrl: 'https://production.widgets.example.com/health', auto: true, shaKey: 'commitSha' },
+          ],
+        },
+      },
+    };
+    const notifier = new Notifier({ config: () => ALL_EVENTS_ON });
+    const prodLiveSpy = vi.spyOn(notifier, 'prodLive');
+
+    const deploy = fakeDeploy(
+      { 'https://production.widgets.example.com/health': 'squash8951' },
+      { 'squash8951': 'yes' },
+    );
+    const p = new Poller({ router: asRouter(fakeClient()), history, deploy,
+      config, now: () => NOW, notifier });
+    await p.sweepOnce();
+    await p.deployOnce();
+
+    // PR is off the board — single env is terminal, so terminalLive=true → viewForMergedPr returns null.
+    const prs = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!.prs;
+    expect(prs.find((x) => x.number === 8951)).toBeUndefined();
+    // prodLive fired exactly once for the sole env.
+    expect(prodLiveSpy).toHaveBeenCalledTimes(1);
+    expect(prodLiveSpy).toHaveBeenCalledWith('acme/widgets', 8951, 'feat: allowance');
+  });
+});

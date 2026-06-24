@@ -657,6 +657,14 @@ export class Poller extends EventEmitter {
    * instead of nothing. Live fetches overwrite these on success; restoring
    * never arms the refresh throttles, so the first cycle still fetches fresh.
    */
+  /** Env promotion order for a deploy config. Falls back to declaration order
+   *  with names lowercased (mirrors normalizeDeployConfig). Production dc.order
+   *  is always set after normalization; this fallback only affects test fixtures
+   *  that skip the normalization path. */
+  private envOrder(dc: DeployConfig): string[] {
+    return dc.order ?? dc.environments.map((e) => e.name.toLowerCase());
+  }
+
   private restorePersisted(): void {
     try {
       const raw = this.deps.history.getMeta('discoveredRepos');
@@ -1297,7 +1305,7 @@ export class Poller extends EventEmitter {
     for (const [repo, dc] of Object.entries(this.effectiveDeploy())) {
       // clones exist only in clone mode — api mode never creates one (issue #18)
       if (config.ancestrySource === 'clone') await deploy.ensureClone(repo, dc.cloneUrl).catch(() => {});
-      const envOrder = dc.order ?? dc.environments.map((e) => e.name);
+      const envOrder = this.envOrder(dc);
       const firstEnv = envOrder[0] ?? null;
       const terminalEnv = envOrder.at(-1) ?? null;
       for (const env of dc.environments) {
@@ -2209,7 +2217,7 @@ export class Poller extends EventEmitter {
     const newestProdMergedAt = new Map<string, string>();
     for (const rec of trackedMerged) {
       const dc = deployMap[rec.repo];
-      const te = dc ? (dc.order ?? dc.environments.map((e) => e.name)).at(-1) ?? null : null;
+      const te = dc ? this.envOrder(dc).at(-1) ?? null : null;
       const terminalLive = !!(te && rec.envLive[te]);
       if (!terminalLive) continue;
       const cur = newestProdMergedAt.get(rec.repo);
@@ -2219,7 +2227,7 @@ export class Poller extends EventEmitter {
       if (config.exclude.includes(rec.repo)) continue; // exclude applies on reconfigure too
       const np = newestProdMergedAt.get(rec.repo);
       const dc = deployMap[rec.repo];
-      const te = dc ? (dc.order ?? dc.environments.map((e) => e.name)).at(-1) ?? null : null;
+      const te = dc ? this.envOrder(dc).at(-1) ?? null : null;
       const terminalLive = !!(te && rec.envLive[te]);
       const superseded = !terminalLive && np != null && rec.mergedAt < np;
       const view = this.viewForMergedPr(rec, now, superseded);
@@ -2701,7 +2709,7 @@ export class Poller extends EventEmitter {
   private viewForMergedPr(rec: MergedPrRecord, now: Date, superseded = false): PrView | null {
     const { history, config } = this.deps;
     const dc = this.effectiveDeploy()[rec.repo];
-    const dcOrder = dc ? (dc.order ?? dc.environments.map((e) => e.name)) : null;
+    const dcOrder = dc ? this.envOrder(dc) : null;
     const firstEnv = dcOrder?.[0] ?? null;
     const terminalEnv = dcOrder?.at(-1) ?? null;
     const firstSha = firstEnv ? this.envShas.get(`${rec.repo}/${firstEnv}`) : undefined;
