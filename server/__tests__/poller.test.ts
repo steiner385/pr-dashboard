@@ -5956,7 +5956,7 @@ describe('Poller env-order generalization (non-qa/prod names + single-env)', () 
   // The health URL and sha names are intentionally non-qa/prod so any re-hardcoding
   // would break these tests.
 
-  it('(a) multi-env non-qa/prod: prodLive fires on terminal env (production), NOT on first env (staging)', async () => {
+  it('(a) multi-env non-qa/prod: terminalLive fires on terminal env (production), NOT on first env (staging)', async () => {
     // Repo configured with order: ['staging', 'production'] — names chosen to
     // prove the notifier gates on terminalEnv, not on the literal string 'prod'.
     const config: AppConfig = {
@@ -5974,7 +5974,7 @@ describe('Poller env-order generalization (non-qa/prod names + single-env)', () 
       },
     };
     const notifier = new Notifier({ config: () => ALL_EVENTS_ON });
-    const prodLiveSpy = vi.spyOn(notifier, 'prodLive');
+    const terminalLiveSpy = vi.spyOn(notifier, 'terminalLive');
 
     // Phase 1: staging live, production not yet.
     const shasPhase1 = {
@@ -5993,11 +5993,11 @@ describe('Poller env-order generalization (non-qa/prod names + single-env)', () 
     await p.sweepOnce();   // ingests merged #8951 (mergeCommitSha squash8951)
     await p.deployOnce();
 
-    // staging is live: PR is 'awaiting-prod'; prodLive must NOT have fired yet
+    // staging is live: PR is 'awaiting-prod'; terminalLive must NOT have fired yet
     const prAfterStaging = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!
       .prs.find((x) => x.number === 8951)!;
     expect(prAfterStaging.stage.stage).toBe('awaiting-prod');
-    expect(prodLiveSpy).not.toHaveBeenCalled();
+    expect(terminalLiveSpy).not.toHaveBeenCalled();
 
     // Phase 2: production also goes live (clock advanced past the throttle).
     shasPhase1['https://production.widgets.example.com/health'] = 'squash8951';
@@ -6005,16 +6005,16 @@ describe('Poller env-order generalization (non-qa/prod names + single-env)', () 
     // ancestry already 'yes' for squash8951, so production will be marked live too.
     await p.deployOnce();
 
-    // prodLive must fire exactly once, for the terminal env 'production'.
-    expect(prodLiveSpy).toHaveBeenCalledTimes(1);
-    expect(prodLiveSpy).toHaveBeenCalledWith('acme/widgets', 8951, 'feat: allowance');
+    // terminalLive must fire exactly once, for the terminal env 'production'.
+    expect(terminalLiveSpy).toHaveBeenCalledTimes(1);
+    expect(terminalLiveSpy).toHaveBeenCalledWith('acme/widgets', 8951, 'feat: allowance', 'production');
     // The PR leaves the board (terminalLive → null from viewForMergedPr).
     const prAfterProd = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!
       .prs.find((x) => x.number === 8951);
     expect(prAfterProd).toBeUndefined();
   });
 
-  it('(b) single-env: PR leaves board and prodLive fires when the sole env goes live', async () => {
+  it('(b) single-env: PR leaves board and terminalLive fires when the sole env goes live', async () => {
     // A repo with order: ['production'] — firstEnv === terminalEnv.  Proves that
     // the single-env path (no intermediate envs) treats the one env as both first
     // and terminal, so the PR exits the board and the notifier fires in one step.
@@ -6032,7 +6032,7 @@ describe('Poller env-order generalization (non-qa/prod names + single-env)', () 
       },
     };
     const notifier = new Notifier({ config: () => ALL_EVENTS_ON });
-    const prodLiveSpy = vi.spyOn(notifier, 'prodLive');
+    const terminalLiveSpy = vi.spyOn(notifier, 'terminalLive');
 
     const deploy = fakeDeploy(
       { 'https://production.widgets.example.com/health': 'squash8951' },
@@ -6046,8 +6046,8 @@ describe('Poller env-order generalization (non-qa/prod names + single-env)', () 
     // PR is off the board — single env is terminal, so terminalLive=true → viewForMergedPr returns null.
     const prs = p.buildState().repos.find((r) => r.repo === 'acme/widgets')!.prs;
     expect(prs.find((x) => x.number === 8951)).toBeUndefined();
-    // prodLive fired exactly once for the sole env.
-    expect(prodLiveSpy).toHaveBeenCalledTimes(1);
-    expect(prodLiveSpy).toHaveBeenCalledWith('acme/widgets', 8951, 'feat: allowance');
+    // terminalLive fired exactly once for the sole env, passing the env name.
+    expect(terminalLiveSpy).toHaveBeenCalledTimes(1);
+    expect(terminalLiveSpy).toHaveBeenCalledWith('acme/widgets', 8951, 'feat: allowance', 'production');
   });
 });

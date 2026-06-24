@@ -11,7 +11,7 @@ export type { NotificationEventType, NotificationKind };
 /**
  * Notifier — the single detection source for alert-worthy PR transitions
  * (issue #19). The poller feeds it every classify result (`observe`) plus the
- * prod-ancestry "shipped" signal (`prodLive`); it derives notification events,
+ * prod-ancestry "shipped" signal (`terminalLive`); it derives notification events,
  * debounces them, and fans out to two sinks:
  *
  *   - bus: `emit('notification', ev)` — re-emitted by the poller onto the SSE
@@ -95,6 +95,9 @@ export interface NotificationEvent {
   title: string;
   type: NotificationKind;
   detail: string;
+  /** The deploy environment name for 'prod-live' events (terminalLive). Absent on
+   *  other event types. */
+  env?: string;
   /** Server-rendered display strings (renderNotification), attached when the event
    *  is fired so EVERY display sink — host command and the browser bell over SSE —
    *  shows the identical text. The single source of truth for notification display;
@@ -315,12 +318,12 @@ export class Notifier extends EventEmitter {
     this.fire({ repo, prNumber: 0, title: pool, type: 'runner-starvation', detail });
   }
 
-  /** The "shipped" signal: a merged PR's commit just became prod ancestry. */
-  prodLive(repo: string, prNumber: number, title: string): void {
+  /** The "shipped" signal: a merged PR's commit just became live on the terminal deploy env. */
+  terminalLive(repo: string, prNumber: number, title: string, envName: string): void {
     const key = `${repo}#${prNumber}|prod-live`;
     if (this.active.has(key)) return; // can't clear — once per PR per process
     this.active.add(key);
-    this.fire({ repo, prNumber, title, type: 'prod-live', detail: 'deployed to production' });
+    this.fire({ repo, prNumber, title, type: 'prod-live', detail: `deployed to ${envName}`, env: envName });
   }
 
   /** Drop debounce state for PRs no longer tracked (keys are `repo#number`).

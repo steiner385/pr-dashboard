@@ -1334,7 +1334,7 @@ export class Poller extends EventEmitter {
             history.markEnvLive(repo, rec.number, env.name, now.toISOString());
             // "shipped" signal (issue #19): the merge commit just became terminal-env
             // ancestry — markEnvLive's liveAt guard makes this a true edge.
-            if (env.name === terminalEnv) this.deps.notifier?.prodLive(repo, rec.number, rec.title);
+            if (env.name === terminalEnv) this.deps.notifier?.terminalLive(repo, rec.number, rec.title, env.name);
             // Record a deploy-gap sample only when THIS instance previously observed the
             // PR not-live on this env. A PR found already live at first observation has
             // an unknowable merged→live wall-clock gap (e.g. process started hours after

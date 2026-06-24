@@ -128,10 +128,20 @@ describe('Notifier transition matrix', () => {
     expect(h.events.map((e) => e.type)).toEqual(['overdue']);
   });
 
-  it('prod-live fires via prodLive()', () => {
+  it('prod-live fires via terminalLive() with type prod-live and env field', () => {
     const h = harness();
-    h.notifier.prodLive('acme/widgets', 7, 'fix: the thing');
+    h.notifier.terminalLive('acme/widgets', 7, 'fix: the thing', 'prod');
     expect(h.events.map((e) => e.type)).toEqual(['prod-live']);
+    expect(h.events[0]!.detail).toBe('deployed to prod');
+    expect(h.events[0]!.env).toBe('prod');
+  });
+
+  it('terminalLive with non-prod env name produces correct detail and env field', () => {
+    const h = harness();
+    h.notifier.terminalLive('acme/widgets', 7, 'fix: the thing', 'production');
+    expect(h.events[0]!.type).toBe('prod-live');
+    expect(h.events[0]!.detail).toBe('deployed to production');
+    expect(h.events[0]!.env).toBe('production');
   });
 });
 
@@ -163,9 +173,9 @@ describe('Notifier debounce + re-entry', () => {
 
   it('prod-live fires once per PR per process lifetime', () => {
     const h = harness();
-    h.notifier.prodLive('acme/widgets', 7, 't');
-    h.notifier.prodLive('acme/widgets', 7, 't');
-    h.notifier.prodLive('acme/widgets', 8, 't');
+    h.notifier.terminalLive('acme/widgets', 7, 't', 'prod');
+    h.notifier.terminalLive('acme/widgets', 7, 't', 'prod');
+    h.notifier.terminalLive('acme/widgets', 8, 't', 'prod');
     expect(h.events.filter((e) => e.type === 'prod-live').map((e) => e.prNumber)).toEqual([7, 8]);
   });
 
@@ -274,7 +284,7 @@ describe('Notifier command sink', () => {
   it('command failures are logged once and never throw', () => {
     const h = harness();
     h.observe(stage('ci'), stage('parked', 'ci-failed'));
-    h.notifier.prodLive('r/a', 1, 't');
+    h.notifier.terminalLive('r/a', 1, 't', 'prod');
     expect(h.execCalls).toHaveLength(2);
     h.execCalls[0]!.cb(new Error('notify-send: not found'));
     h.execCalls[1]!.cb(new Error('notify-send: not found'));
@@ -292,7 +302,7 @@ describe('Notifier command sink', () => {
     expect(() => {
       notifier.observe({ repo: 'r/a', prNumber: 1, title: 't',
         prev: stage('ci'), next: stage('parked', 'ci-failed') });
-      notifier.prodLive('r/a', 2, 't');
+      notifier.terminalLive('r/a', 2, 't', 'prod');
     }).not.toThrow();
     expect(logs.filter((l) => l.includes('EACCES'))).toHaveLength(1);
   });
@@ -628,11 +638,11 @@ describe('Notifier webhook sink (issue #51)', () => {
     h.observe(stage('ci'), stage('parked', 'ci-failed'));
     await vi.waitFor(() => expect(h.logs).toHaveLength(1));
     nowMs += 30 * 60_000; // +30min — still throttled
-    h.notifier.prodLive('r/a', 1, 't');
+    h.notifier.terminalLive('r/a', 1, 't', 'prod');
     await new Promise((r) => setTimeout(r, 0));
     expect(h.logs).toHaveLength(1);
     nowMs += 31 * 60_000; // past the hour — logs again
-    h.notifier.prodLive('r/a', 2, 't');
+    h.notifier.terminalLive('r/a', 2, 't', 'prod');
     await vi.waitFor(() => expect(h.logs).toHaveLength(2));
   });
 
@@ -644,7 +654,7 @@ describe('Notifier webhook sink (issue #51)', () => {
       fetchFn: () => { throw new Error('bad signal'); },
       log: (m) => logs.push(m),
     });
-    expect(() => notifier.prodLive('r/a', 1, 't')).not.toThrow();
+    expect(() => notifier.terminalLive('r/a', 1, 't', 'prod')).not.toThrow();
     expect(logs.some((l) => l.includes('bad signal'))).toBe(true);
   });
 });
